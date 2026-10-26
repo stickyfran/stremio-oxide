@@ -45,6 +45,49 @@ function Find-CrtDirectory {
         } } -Descending |
         Select-Object -First 1
 
+    if ($null -eq $selected -and $Arch -ieq "arm64") {
+        Write-Host "Attempting fallback to download and extract official Microsoft ARM64 CRT redistributables..."
+        $fallbackDir = Join-Path $env:TEMP "msvc_arm64_crt"
+        if (-not (Test-Path $fallbackDir)) {
+            New-Item -ItemType Directory -Force -Path $fallbackDir | Out-Null
+        }
+        $existingDlls = Get-ChildItem -LiteralPath $fallbackDir -File -Filter "*.dll"
+        if ($existingDlls.Count -ge 5) {
+            return $fallbackDir
+        }
+
+        $dark = Get-Command dark.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+        if (-not $dark) {
+            $wixCandidates = @(
+                "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin\dark.exe",
+                "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\dark.exe",
+                "${env:ProgramFiles}\WiX Toolset v3.11\bin\dark.exe"
+            )
+            foreach ($c in $wixCandidates) {
+                if (Test-Path $c) { $dark = $c; break }
+            }
+        }
+
+        $tempDir = Join-Path $env:TEMP "vc_redist_arm64_unpack"
+        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+        $exePath = Join-Path $tempDir "vc_redist.arm64.exe"
+        if (-not (Test-Path $exePath)) {
+            Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.arm64.exe" -OutFile $exePath
+        }
+
+        if ($dark) {
+            $darkOut = Join-Path $tempDir "dark_out"
+            & $dark -x $darkOut $exePath | Out-Null
+            $cabs = Get-ChildItem -Path $darkOut -Recurse -Filter "*.cab"
+            foreach ($cab in $cabs) {
+                expand.exe $cab.FullName -F:*.dll $fallbackDir | Out-Null
+            }
+            if ((Get-ChildItem -LiteralPath $fallbackDir -File -Filter "*.dll").Count -gt 0) {
+                return $fallbackDir
+            }
+        }
+    }
+
     if ($null -eq $selected) {
         throw "Could not locate an $Arch Microsoft.VC143.CRT redistributable directory. Install the Visual Studio 2022 C++ redistributables."
     }
