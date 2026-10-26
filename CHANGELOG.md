@@ -2,6 +2,17 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99 - 2026-10-26
+
+### CPU and RAM Performance Enhancements
+
+- **Phase 1 (LRU Cache Architecture)**: Implemented bounded LRU caching for catalog and metadata requests, eliminating redundant API and database hits.
+- **Phase 2 (Buffer Pooling and Deduplication)**: Added streaming buffer deduplication and memory pooling for media chunks and artwork decoding.
+- **Phase 3 (Rendering & Slint Optimization)**: Optimized Slint UI drawing cycles, minimizing layout recalculations and GPU surface re-renders during video playback.
+- **Phase 4 (Asynchronous Worker Pools)**: Reduced Tokio worker thread overhead by tuning channel capacities, batching notifications, and dedicating lightweight workers.
+- **Phase 5 (Memory Compactness & Data Structs)**: Compacted core internal representations and reduced memory footprint across long-running daemon sessions.
+- **Phase 6 (Packaging & Cross-Platform Verification)**: Full automated CI/CD validation across Windows x64, Windows ARM64 (with WiX extraction for MSVC CRT), Linux x64 (.deb, .rpm, Arch package with memory swap guards), Linux ARM64, and macOS Universal binaries.
+
 ## 1.0.6 - 2026-08-14
 
 ### Browsing, discovery, and metadata
