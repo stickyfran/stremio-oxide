@@ -432,10 +432,13 @@ jobs:
           submodules: recursive
       - name: Configure swap space
         run: |
-          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          SWAP_DIR="/mnt"
+          if [ ! -d "$SWAP_DIR" ]; then SWAP_DIR="/var"; fi
+          sudo fallocate -l 6G "$SWAP_DIR/swapfile_extra" || sudo dd if=/dev/zero of="$SWAP_DIR/swapfile_extra" bs=1M count=6144
+          sudo chmod 600 "$SWAP_DIR/swapfile_extra"
+          sudo mkswap "$SWAP_DIR/swapfile_extra"
+          sudo swapon "$SWAP_DIR/swapfile_extra" || true
+          free -h
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
@@ -532,10 +535,13 @@ jobs:
           submodules: recursive
       - name: Configure swap space
         run: |
-          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          SWAP_DIR="/mnt"
+          if [ ! -d "$SWAP_DIR" ]; then SWAP_DIR="/var"; fi
+          sudo fallocate -l 6G "$SWAP_DIR/swapfile_extra" || sudo dd if=/dev/zero of="$SWAP_DIR/swapfile_extra" bs=1M count=6144
+          sudo chmod 600 "$SWAP_DIR/swapfile_extra"
+          sudo mkswap "$SWAP_DIR/swapfile_extra"
+          sudo swapon "$SWAP_DIR/swapfile_extra" || true
+          free -h
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
