@@ -56,16 +56,30 @@ function Find-CrtDirectory {
             return $fallbackDir
         }
 
-        $dark = Get-Command dark.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
-        if (-not $dark) {
+        $findDark = {
+            $cmd = Get-Command dark.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd }
             $wixCandidates = @(
+                "C:\ProgramData\chocolatey\bin\dark.exe",
                 "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin\dark.exe",
                 "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin\dark.exe",
                 "${env:ProgramFiles}\WiX Toolset v3.11\bin\dark.exe"
             )
             foreach ($c in $wixCandidates) {
-                if (Test-Path $c) { $dark = $c; break }
+                if (Test-Path $c) { return $c }
             }
+            return $null
+        }
+
+        $dark = & $findDark
+        if (-not $dark) {
+            Write-Host "dark.exe not found. Installing WiX Toolset via choco..."
+            try {
+                & choco install wixtoolset --no-progress --yes
+            } catch {
+                Write-Host "Warning: choco install wixtoolset threw: $_"
+            }
+            $dark = & $findDark
         }
 
         $tempDir = Join-Path $env:TEMP "vc_redist_arm64_unpack"
@@ -76,15 +90,35 @@ function Find-CrtDirectory {
         }
 
         if ($dark) {
+            Write-Host "Using WiX dark.exe at $dark to unpack $exePath..."
             $darkOut = Join-Path $tempDir "dark_out"
+            New-Item -ItemType Directory -Force -Path $darkOut | Out-Null
             & $dark -x $darkOut $exePath | Out-Null
-            $cabs = Get-ChildItem -Path $darkOut -Recurse -Filter "*.cab"
+
+            # Extract files from nested MSIs using administrative installation
+            $msis = Get-ChildItem -Path $darkOut -Recurse -Filter "*.msi" -ErrorAction SilentlyContinue
+            foreach ($msi in $msis) {
+                $adminDir = Join-Path $tempDir "admin_$($msi.BaseName)"
+                Write-Host "Extracting $($msi.Name) with msiexec /a to $adminDir..."
+                $proc = Start-Process msiexec.exe -ArgumentList "/a `"$($msi.FullName)`" /qn TARGETDIR=`"$adminDir`"" -Wait -PassThru
+                Get-ChildItem -Path $adminDir -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+                    Copy-Item -LiteralPath $_.FullName -Destination $fallbackDir -Force
+                }
+            }
+
+            # Also check for any standalone CAB archives
+            $cabs = Get-ChildItem -Path $darkOut -Recurse -Filter "*.cab" -ErrorAction SilentlyContinue
             foreach ($cab in $cabs) {
                 expand.exe $cab.FullName -F:*.dll $fallbackDir | Out-Null
             }
-            if ((Get-ChildItem -LiteralPath $fallbackDir -File -Filter "*.dll").Count -gt 0) {
+
+            $extractedDlls = Get-ChildItem -LiteralPath $fallbackDir -File -Filter "*.dll"
+            Write-Host "ARM64 fallback extracted $($extractedDlls.Count) DLLs to $fallbackDir"
+            if ($extractedDlls.Count -gt 0) {
                 return $fallbackDir
             }
+        } else {
+            Write-Host "Warning: dark.exe could not be located to unpack $exePath"
         }
     }
 

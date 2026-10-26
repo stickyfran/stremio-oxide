@@ -368,6 +368,9 @@ jobs:
           $licDst = "$dst\licenses\mpv"
           New-Item -ItemType Directory -Force $licDst | Out-Null
           if (Test-Path "licenses/mpv") { Copy-Item "licenses/mpv\*" -Destination $licDst -Recurse -Force }
+      - name: Provide WiX Toolset for runtime extraction
+        shell: pwsh
+        run: choco install wixtoolset --no-progress --yes
       - name: Stage app-local MSVC runtime
         shell: pwsh
         run: ./scripts/stage_windows_msvc_runtime.ps1 -BuildRoot ./target/release -Architecture arm64
@@ -422,10 +425,17 @@ jobs:
       VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
       PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-linux-v3-static-release/lib/pkgconfig
       LIBTORRENT_STATIC: "1"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      - name: Configure swap space
+        run: |
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
@@ -515,10 +525,17 @@ jobs:
       VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
       PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/arm64-linux-static-release/lib/pkgconfig
       LIBTORRENT_STATIC: "1"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      - name: Configure swap space
+        run: |
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31

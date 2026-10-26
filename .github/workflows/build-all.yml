@@ -25,10 +25,17 @@ jobs:
       VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
       PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-linux-v3-static-release/lib/pkgconfig
       LIBTORRENT_STATIC: "1"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      - name: Configure swap space
+        run: |
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
@@ -115,10 +122,17 @@ jobs:
       VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
       PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/arm64-linux-static-release/lib/pkgconfig
       LIBTORRENT_STATIC: "1"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      - name: Configure swap space
+        run: |
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
@@ -133,8 +147,8 @@ jobs:
           key: linux-arm64-apt-deps-v2
       - name: Install native dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libegl1-mesa-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libegl1-mesa-dev
       - name: Save apt cache
         if: steps.apt-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -501,6 +515,9 @@ jobs:
           $licDst = "$dst\licenses\mpv"
           New-Item -ItemType Directory -Force $licDst | Out-Null
           if (Test-Path "licenses/mpv") { Copy-Item "licenses/mpv\*" -Destination $licDst -Recurse -Force }
+      - name: Provide WiX Toolset for runtime extraction
+        shell: pwsh
+        run: choco install wixtoolset --no-progress --yes
       - name: Stage app-local MSVC runtime
         shell: pwsh
         run: ./scripts/stage_windows_msvc_runtime.ps1 -BuildRoot ./target/release -Architecture arm64
