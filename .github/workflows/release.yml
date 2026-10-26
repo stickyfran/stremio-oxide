@@ -416,11 +416,28 @@ jobs:
           key: Linux-vcpkg-x64-linux-v3-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
           restore-keys: |
             Linux-vcpkg-x64-linux-v3-static-release-v1-
+      - name: Prepare vcpkg with retries
+        run: |
+          dir="$GITHUB_WORKSPACE/vcpkg"
+          commit="84bab45d415d22042bd0b9081aea57f362da3f35"
+          if [ ! -d "$dir/.git" ]; then
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            for i in {1..5}; do
+              if git clone https://github.com/microsoft/vcpkg.git -n "$dir"; then break; fi
+              sleep $((5 * i))
+            done
+          fi
+          git -C "$dir" checkout --force "$commit"
+          if [ ! -f "$dir/vcpkg" ]; then
+            "$dir/bootstrap-vcpkg.sh"
+          fi
       - name: Install static libtorrent 2.1.1
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: "84bab45d415d22042bd0b9081aea57f362da3f35"
           vcpkgDirectory: "${{ github.workspace }}/vcpkg"
+          doNotUpdateVcpkg: true
           vcpkgJsonGlob: "vcpkg.json"
           runVcpkgInstall: true
       - name: Save libtorrent cache
@@ -494,11 +511,28 @@ jobs:
           key: Linux-vcpkg-arm64-linux-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
           restore-keys: |
             Linux-vcpkg-arm64-linux-static-release-v1-
+      - name: Prepare vcpkg with retries
+        run: |
+          dir="$GITHUB_WORKSPACE/vcpkg"
+          commit="84bab45d415d22042bd0b9081aea57f362da3f35"
+          if [ ! -d "$dir/.git" ]; then
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            for i in {1..5}; do
+              if git clone https://github.com/microsoft/vcpkg.git -n "$dir"; then break; fi
+              sleep $((5 * i))
+            done
+          fi
+          git -C "$dir" checkout --force "$commit"
+          if [ ! -f "$dir/vcpkg" ]; then
+            "$dir/bootstrap-vcpkg.sh"
+          fi
       - name: Install static libtorrent 2.1.1
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgGitCommitId: "84bab45d415d22042bd0b9081aea57f362da3f35"
           vcpkgDirectory: "${{ github.workspace }}/vcpkg"
+          doNotUpdateVcpkg: true
           vcpkgJsonGlob: "vcpkg.json"
           runVcpkgInstall: true
       - name: Save libtorrent cache
