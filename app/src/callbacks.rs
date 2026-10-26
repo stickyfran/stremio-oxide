@@ -535,6 +535,7 @@ fn show_download_error(ui_weak: &slint::Weak<MainWindow>, message: String) {
     });
 }
 
+#[allow(dead_code)]
 fn download_filename(title: &str, link: &str) -> String {
     let extension = url::Url::parse(link)
         .ok()

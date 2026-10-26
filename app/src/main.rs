@@ -97,7 +97,8 @@ pub use discord::DiscordRpc;
 pub use navigation::{DetailsPresentation, NavigationController, NavigationIntent, Tab};
 
 fn main() -> anyhow::Result<()> {
-    // Configure mimalloc for minimal memory footprint and immediate page decommit
+    // SAFETY: Called at the very beginning of `main()` before spawning any threads,
+    // tasks, or runtime executors. No concurrent environment access can occur.
     if std::env::var_os("MIMALLOC_ARENA_EAGER_COMMIT").is_none() {
         unsafe { std::env::set_var("MIMALLOC_ARENA_EAGER_COMMIT", "0"); }
     }
@@ -1621,7 +1622,13 @@ fn install_customization_callbacks(ui: &MainWindow, ui_weak: slint::Weak<MainWin
                 let result = async {
                     let profile = profiles::active_profile_id().await?;
                     let managed = paths::get().root().join("themes").join(profile.as_str());
-                    let manifest = customization::import_theme_manifest(&path, &managed)?;
+                    let path_for_task = path.clone();
+                    let managed_for_task = managed.clone();
+                    let manifest = tokio::task::spawn_blocking(move || {
+                        customization::import_theme_manifest(&path_for_task, &managed_for_task)
+                    })
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Theme import task failed"))??;
                     profiles::set_setting(
                         &profile,
                         "theme-manifest-v1",
@@ -1665,7 +1672,13 @@ fn install_customization_callbacks(ui: &MainWindow, ui_weak: slint::Weak<MainWin
                         .await?
                         .and_then(|value| serde_json::from_str(&value).ok())
                         .unwrap_or_else(|| customization::default_theme(layout_preset(&preset)));
-                    customization::export_theme_manifest(&path, &manifest)?;
+                    let path_for_task = path.clone();
+                    let manifest_for_task = manifest.clone();
+                    tokio::task::spawn_blocking(move || {
+                        customization::export_theme_manifest(&path_for_task, &manifest_for_task)
+                    })
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Theme export task failed"))??;
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
@@ -1686,7 +1699,12 @@ fn install_customization_callbacks(ui: &MainWindow, ui_weak: slint::Weak<MainWin
             tokio::spawn(async move {
                 let result = async {
                     let profile = profiles::active_profile_id().await?;
-                    let layout = customization::import_player_layout(&path)?;
+                    let path_for_task = path.clone();
+                    let layout = tokio::task::spawn_blocking(move || {
+                        customization::import_player_layout(&path_for_task)
+                    })
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Player layout import failed"))??;
                     profiles::set_setting(
                         &profile,
                         "player-layout-v1",
@@ -1717,7 +1735,13 @@ fn install_customization_callbacks(ui: &MainWindow, ui_weak: slint::Weak<MainWin
                         .await?
                         .and_then(|value| serde_json::from_str(&value).ok())
                         .unwrap_or_else(customization::default_player_layout);
-                    customization::export_player_layout(&path, &layout)?;
+                    let path_for_task = path.clone();
+                    let layout_for_task = layout.clone();
+                    tokio::task::spawn_blocking(move || {
+                        customization::export_player_layout(&path_for_task, &layout_for_task)
+                    })
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Player layout export failed"))??;
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;

@@ -7,7 +7,10 @@
 //! drawer of the next item.
 
 use std::{
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -38,6 +41,8 @@ pub struct PreviewPlayer {
     controller: Arc<Mutex<Option<PreviewController>>>,
     ui: slint::Weak<MainWindow>,
     last_seek: Arc<Mutex<Instant>>,
+    latest_frame: Arc<Mutex<Option<PreviewFrame>>>,
+    pending_frame: Arc<AtomicBool>,
 }
 
 impl PreviewPlayer {
@@ -47,6 +52,8 @@ impl PreviewPlayer {
             controller: Arc::new(Mutex::new(None)),
             ui,
             last_seek: Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1))),
+            latest_frame: Arc::new(Mutex::new(None)),
+            pending_frame: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -401,9 +408,19 @@ impl PreviewPlayer {
             state.duration = frame.duration;
             (frame.position, frame.duration)
         };
+        *self.latest_frame.lock().unwrap() = Some(frame);
+        if self.pending_frame.swap(true, Ordering::AcqRel) {
+            return;
+        }
         let ui = self.ui.clone();
         let state = self.state.clone();
+        let latest_frame = self.latest_frame.clone();
+        let pending_frame = self.pending_frame.clone();
         let _ = slint::invoke_from_event_loop(move || {
+            pending_frame.store(false, Ordering::Release);
+            let Some(frame) = latest_frame.lock().unwrap().take() else {
+                return;
+            };
             if lock_state(&state).generation != frame.generation {
                 return;
             }

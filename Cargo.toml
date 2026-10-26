@@ -82,7 +82,7 @@ rustix = { path = "vendor/rustix" }
 
 [profile.release]
 opt-level = 3
-lto = false
+lto = "thin"
 codegen-units = 2
 panic = "abort"
 strip = true

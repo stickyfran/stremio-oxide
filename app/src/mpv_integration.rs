@@ -4734,6 +4734,9 @@ fn install_renderer(
                                 texture,
                                 frame_ready,
                             }) => {
+                                // SAFETY: The texture ID returned by `context.render()` belongs
+                                // to the shared OpenGL context hosted by Slint's NativeOpenGL
+                                // renderer and remains allocated until context teardown or resize.
                                 let image = unsafe {
                                     BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
                                         texture.texture_id(),
@@ -5131,6 +5134,15 @@ fn show_player_error(ui: &slint::Weak<MainWindow>, message: String) {
     });
 }
 
+/// SYNCHRONIZATION HIERARCHY INVARIANT:
+/// When a function or callback requires synchronization across both `SharedPlaybackState`
+/// (`RwLock<Arc<PlaybackState>>`) and `SessionState` (`Mutex<SessionState>`), the lock
+/// acquisition order MUST STRICTLY be:
+///   1. `read_state(&state)` or `state.write()` (acquire PlaybackState lock first)
+///   2. `lock_session(&session)` (acquire SessionState lock second)
+///
+/// Under no circumstances should `read_state` or `state.write()` be attempted while holding
+/// a lock on `session`. Reversing this lock acquisition order risks lock-order inversion deadlocks.
 fn lock_session(session: &Mutex<SessionState>) -> std::sync::MutexGuard<'_, SessionState> {
     session
         .lock()

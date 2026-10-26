@@ -435,30 +435,16 @@ pub fn sync(
     pagination_gate().observe(PaginationScope::Discover, pagination_identity);
     ui.set_discover_has_next_page(pagination_identity.is_some());
 
-    // Calculate items count first to compute indices
-    let estimated_count = {
+    // Collect ready items in a single pass
+    let raw_items: Vec<&MetaItemPreview> = {
         let _span = tracing::info_span!("compute_discover_metrics").entered();
         discover
             .catalog
             .iter()
-            .filter_map(|page| {
-                if let Some(Loadable::Ready(items)) = &page.content {
-                    Some(items.len())
-                } else {
-                    None
-                }
-            })
-            .sum::<usize>()
+            .filter_map(|page| page.content.as_ref().and_then(Loadable::ready))
+            .flatten()
+            .collect()
     };
-
-    let mut raw_items = Vec::with_capacity(estimated_count);
-    for page in &discover.catalog {
-        if let Some(Loadable::Ready(items)) = &page.content {
-            for item in items {
-                raw_items.push(item);
-            }
-        }
-    }
 
     let metrics = crate::models::media_grid_metrics(ui);
     // The official Discover route reserves a fixed 29rem metadata preview on

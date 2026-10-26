@@ -333,13 +333,22 @@ pub(crate) fn project_catalog_section(
     };
 
     let mut cards = Vec::with_capacity(CATALOG_PREVIEW_SIZE);
+    let mut poster_shape = "poster";
     if project_items {
-        for item in catalog
+        for (i, item) in catalog
             .iter()
             .filter_map(|page| page.content.as_ref().and_then(Loadable::ready))
             .flatten()
             .take(CATALOG_PREVIEW_SIZE)
+            .enumerate()
         {
+            if i == 0 {
+                poster_shape = match item.poster_shape {
+                    stremio_core::types::resource::PosterShape::Landscape => "landscape",
+                    stremio_core::types::resource::PosterShape::Square => "square",
+                    _ => "poster",
+                };
+            }
             cards.push(catalog_media_card(item));
         }
     }
@@ -348,18 +357,6 @@ pub(crate) fn project_catalog_section(
     if let Some(first) = media_type.get_mut(0..1) {
         first.make_ascii_uppercase();
     }
-
-    let poster_shape = catalog
-        .iter()
-        .filter_map(|page| page.content.as_ref().and_then(Loadable::ready))
-        .flatten()
-        .next()
-        .map(|item| match item.poster_shape {
-            stremio_core::types::resource::PosterShape::Landscape => "landscape",
-            stremio_core::types::resource::PosterShape::Square => "square",
-            _ => "poster",
-        })
-        .unwrap_or("poster");
 
     Some(BoardSection {
         title: format!("{catalog_name} – {media_type}").into(),

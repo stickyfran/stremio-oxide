@@ -483,7 +483,10 @@ impl KeyframeThumbnailer {
     }
 
     fn extract_frame(&mut self, timestamp_secs: f64) -> Result<Vec<u8>, ffmpeg_next::Error> {
-        let stream = self.input_ctx.stream(self.stream_index).unwrap();
+        let stream = self
+            .input_ctx
+            .stream(self.stream_index)
+            .ok_or(ffmpeg_next::Error::StreamNotFound)?;
         let time_base = stream.time_base();
         let target_pts = (timestamp_secs / f64::from(time_base)) as i64;
 

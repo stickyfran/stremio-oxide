@@ -1055,6 +1055,8 @@ pub fn sync(
         ui.set_library_preview_cast(slint::ModelRc::new(cast_model));
 
         let directors = projected_links(meta_item, &["director", "directors"]);
+        let directors_model = slint::VecModel::from(directors);
+        ui.set_library_preview_directors(slint::ModelRc::new(directors_model));
         let stream_url = meta_item
             .preview
             .trailer_streams

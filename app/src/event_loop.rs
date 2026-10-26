@@ -1158,8 +1158,9 @@ fn handle_core_event(event: Event, ui_weak: &slint::Weak<MainWindow>) {
 }
 
 pub fn trim_process_memory() {
+    // SAFETY: `mi_collect` is thread-safe in mimalloc and forces reclaiming empty memory
+    // arenas back to the operating system immediately.
     unsafe {
-        // Forzar purga de arenas de memoria vacías al sistema operativo vía C FFI de mimalloc
         libmimalloc_sys::mi_collect(true);
     }
 }

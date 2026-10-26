@@ -282,6 +282,7 @@ pub fn setup_ui_callbacks(
     let _ = playback;
 }
 
+#[allow(dead_code)]
 fn enqueue_player_source(
     manager: Arc<DownloadManager>,
     ui_weak: slint::Weak<crate::MainWindow>,

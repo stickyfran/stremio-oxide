@@ -445,13 +445,23 @@ fn save_current_kwin_pip_position() {
 }
 
 #[cfg(target_os = "linux")]
+static KWIN_PIP_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(target_os = "linux")]
 fn activate_kwin_main_window() {
+    let my_gen = KWIN_PIP_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     std::thread::Builder::new()
         .name("kwin-activate-main".into())
-        .spawn(|| {
+        .spawn(move || {
             for delay in [0u64, 150u64] {
+                if KWIN_PIP_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                    return;
+                }
                 if delay > 0 {
                     std::thread::sleep(std::time::Duration::from_millis(delay));
+                }
+                if KWIN_PIP_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                    return;
                 }
                 let js = r#"
 const clients = workspace.windowList();
@@ -498,6 +508,9 @@ for (let i = 0; i < clients.length; i++) {
                     }
                 }
             }
+            if KWIN_PIP_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                return;
+            }
             if std::path::Path::new("/usr/bin/wmctrl").exists() {
                 let _ = std::process::Command::new("/usr/bin/wmctrl")
                     .args(["-x", "-a", "stremio"])
@@ -509,9 +522,13 @@ for (let i = 0; i < clients.length; i++) {
 
 #[cfg(target_os = "linux")]
 fn enforce_kwin_pip_keep_above(saved_pos: Option<(f32, f32)>, saved_size: Option<(f32, f32)>) {
+    let my_gen = KWIN_PIP_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     std::thread::Builder::new()
         .name("kwin-pip-top".into())
         .spawn(move || {
+            if KWIN_PIP_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                return;
+            }
             ensure_kwin_pip_rule();
 
             let (target_x_str, target_y_str) = match saved_pos {
@@ -524,7 +541,13 @@ fn enforce_kwin_pip_keep_above(saved_pos: Option<(f32, f32)>, saved_size: Option
             };
 
             for (i, delay_ms) in [60u64, 250u64, 500u64].iter().enumerate() {
+                if KWIN_PIP_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                    return;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(*delay_ms));
+                if KWIN_PIP_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != my_gen {
+                    return;
+                }
                 let apply_position = i == 0;
                 let js = format!(r#"
 const clients = workspace.windowList();

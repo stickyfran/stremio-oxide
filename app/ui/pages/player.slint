@@ -670,7 +670,7 @@ export component PlayerPage inherits Rectangle {
 
     buffering-pulse-timer := Timer {
         interval: 1s;
-        running: loading && !has-video-frame;
+        running: root.visible && loading && !has-video-frame;
         triggered => { buffer-pulse = !buffer-pulse; }
     }
 

@@ -103,6 +103,7 @@ impl AppPaths {
         &self.updates
     }
 
+    #[allow(dead_code)]
     pub(crate) fn downloads(&self) -> &Path {
         &self.downloads
     }
