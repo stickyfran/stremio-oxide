@@ -42,7 +42,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libgl1-mesa-dev libegl1-mesa-dev
+          sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libegl1-mesa-dev
       - name: Save apt cache
         if: steps.apt-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -57,6 +57,22 @@ jobs:
           key: Linux-vcpkg-x64-linux-v3-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
           restore-keys: |
             Linux-vcpkg-x64-linux-v3-static-release-v1-
+      - name: Prepare vcpkg with retries
+        run: |
+          dir="$GITHUB_WORKSPACE/vcpkg"
+          commit="84bab45d415d22042bd0b9081aea57f362da3f35"
+          if [ ! -d "$dir/.git" ]; then
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            for i in {1..5}; do
+              if git clone https://github.com/microsoft/vcpkg.git -n "$dir"; then break; fi
+              sleep $((5 * i))
+            done
+          fi
+          git -C "$dir" checkout --force "$commit"
+          if [ ! -f "$dir/vcpkg" ]; then
+            "$dir/bootstrap-vcpkg.sh"
+          fi
       - name: Install static libtorrent 2.1.1
         uses: lukka/run-vcpkg@v11
         with:
@@ -133,6 +149,22 @@ jobs:
           key: Linux-vcpkg-arm64-linux-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
           restore-keys: |
             Linux-vcpkg-arm64-linux-static-release-v1-
+      - name: Prepare vcpkg with retries
+        run: |
+          dir="$GITHUB_WORKSPACE/vcpkg"
+          commit="84bab45d415d22042bd0b9081aea57f362da3f35"
+          if [ ! -d "$dir/.git" ]; then
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            for i in {1..5}; do
+              if git clone https://github.com/microsoft/vcpkg.git -n "$dir"; then break; fi
+              sleep $((5 * i))
+            done
+          fi
+          git -C "$dir" checkout --force "$commit"
+          if [ ! -f "$dir/vcpkg" ]; then
+            "$dir/bootstrap-vcpkg.sh"
+          fi
       - name: Install static libtorrent 2.1.1
         uses: lukka/run-vcpkg@v11
         with:

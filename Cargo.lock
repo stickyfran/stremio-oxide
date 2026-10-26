@@ -7024,7 +7024,6 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "playback-mpv"
 version = "0.1.0"
 dependencies = [
- "ffmpeg-next",
  "glow 0.18.0",
  "libloading",
  "pkg-config",
