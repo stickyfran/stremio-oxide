@@ -28,9 +28,9 @@ use souvlaki::{
 
 use crate::MainWindow;
 
-const DISPLAY_NAME: &str = "Stremio Native";
-const DBUS_NAME: &str = "stremio_native";
-const WAKE_REVERSE_DOMAIN: &str = "com.stremio.native";
+const DISPLAY_NAME: &str = "Stremio Oxide";
+const DBUS_NAME: &str = "stremio_oxide";
+const WAKE_REVERSE_DOMAIN: &str = "com.stremio.oxide";
 
 /// Handler invoked for every media-key / OS-control event. Runs on the media
 /// backend's own thread, so it must be `Send`.

@@ -1,0 +1,563 @@
+import { Theme } from "../theme.slint";
+import { ButtonSurface, IconAction, PillButton } from "button.slint";
+import { MetaStringLinks } from "meta_preview.slint";
+import { ScrollView } from "std-widgets.slint";
+
+component DrawerIconButton inherits ButtonSurface {
+    in property <length> unit: Theme.root-font-size;
+    in property <image> icon-source;
+    in property <length> size: 2.4 * root.unit;
+    in property <length> icon-size: 1.25 * root.unit;
+    in property <brush> surface-color: Theme.background.with-alpha(0.65);
+    in property <brush> icon-color: Theme.primary-foreground;
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    background: self.has-hover ? Theme.overlay-hover : root.surface-color;
+
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.icon-size;
+        height: root.icon-size;
+        source: root.icon-source;
+        colorize: root.icon-color;
+        image-fit: contain;
+    }
+}
+
+export component MediaPreviewDrawer inherits Rectangle {
+    in property <length> unit: Theme.root-font-size;
+    in property <length> drawer-width: 29 * root.unit;
+    in property <bool> is-open: true;
+
+    // Metadatos
+    in property <string> title: "";
+    in property <image> logo;
+    in property <image> poster;
+    in property <string> year: "";
+    in property <string> runtime: "";
+    in property <string> description: "";
+    in property <[string]> genres: [];
+    in property <[string]> cast: [];
+    in property <[string]> directors: [];
+
+    // Calificaciones (The Big 3)
+    in property <string> rating-imdb: "";
+    in property <string> rating-rt: "";
+    in property <string> rating-metacritic: "";
+    in property <bool> ratings-loading: false;
+
+    // Estado del trailer y video
+    in property <image> video-frame;
+    in property <bool> has-video-frame: false;
+    in property <bool> video-loading: false;
+    in property <bool> video-playing: false;
+    in property <bool> video-muted: true;
+    in property <bool> has-trailer: false;
+    in property <bool> autoplay-enabled: false;
+    in-out property <float> video-progress: 0.0; // 0.0 a 1.0
+    in property <string> video-time-label: "";   // ej. "0:34 / 2:15"
+
+    // Estado en Library
+    in property <bool> in-library: false;
+    in property <bool> is-watched: false;
+
+    // Callbacks
+    callback play-full-details();
+    callback toggle-library();
+    callback toggle-watched();
+    callback close-drawer();
+    callback toggle-trailer-playback();
+    callback toggle-video-muted();
+    callback toggle-autoplay();
+    callback maximize-trailer();
+    callback seek-video-relative(float);
+    callback seek-video-progress(float);
+    callback metadata-filter-selected(string);
+
+    // Dimensiones fijas anti-layout shift (Zero CLS)
+    property <length> video-height: root.drawer-width * 0.5625; // 16:9 exacto
+    property <length> header-height: 5 * root.unit;
+    property <length> meta-row-height: 1.4 * root.unit;
+    property <length> ratings-height: 2.8 * root.unit;
+    property <length> actions-height: 5.5 * root.unit;
+
+    // Conmutación inmediata de width para no recalcular columnas 12 veces seguidas
+    width: root.is-open ? root.drawer-width : 0px;
+    visible: root.width > 0px;
+    clip: true;
+    background: Theme.modal-background;
+    border-radius: Theme.border-radius;
+
+    drawer-content := VerticalLayout {
+        width: root.drawer-width;
+        height: parent.height;
+        spacing: 0px;
+        opacity: root.is-open ? 1.0 : 0.0;
+        animate opacity { duration: 120ms; easing: ease-out; }
+
+        // =====================================================================
+        // 1. ZONA SUPERIOR: REPRODUCTOR DE TRAILER (16:9 FIJO)
+        // =====================================================================
+        video-container := Rectangle {
+            height: root.video-height;
+            background: Theme.background;
+            clip: true;
+
+            // Backdrop / Póster base
+            if (root.poster.width > 0) : Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.poster;
+                image-fit: cover;
+                opacity: root.has-video-frame ? 0 : 0.45;
+                animate opacity { duration: 150ms; }
+            }
+
+            // Frame decodificado por MPV
+            if (root.has-video-frame) : Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.video-frame;
+                image-fit: contain;
+            }
+
+            // Área interactiva de control: Click = Toggle Play/Pause, Scroll = Seek
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => {
+                    if (root.has-trailer) {
+                        root.toggle-trailer-playback();
+                    }
+                }
+                double-clicked => {
+                    if (root.has-trailer) {
+                        root.maximize-trailer();
+                    }
+                }
+                scroll-event(event) => {
+                    if (event.delta-y > 0px) {
+                        root.seek-video-relative(5.0);
+                    } else if (event.delta-y < 0px) {
+                        root.seek-video-relative(-5.0);
+                    }
+                    accept
+                }
+            }
+
+            // Botón central de Play cuando está detenido o pausado
+            if (!root.video-playing && root.has-trailer) : ButtonSurface {
+                width: 4.5 * root.unit;
+                height: 4.5 * root.unit;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: self.width / 2;
+                background: self.has-hover ? Theme.accent.with-alpha(0.85) : Theme.background.with-alpha(0.7);
+                border-width: 1px;
+                border-color: Theme.accent;
+                clicked => { root.toggle-trailer-playback(); }
+
+                Image {
+                    width: 2 * root.unit;
+                    height: 2 * root.unit;
+                    x: (parent.width - self.width) / 2 + 0.15 * root.unit;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("../assets/images/icons/play.svg");
+                    colorize: Theme.primary-foreground;
+                }
+            }
+
+            // Indicador de carga / buffering
+            if (root.video-loading && !root.has-video-frame) : Rectangle {
+                width: parent.width;
+                height: parent.height;
+                background: Theme.background.with-alpha(0.5);
+
+                Text {
+                    text: @tr("Loading trailer...");
+                    color: Theme.text-primary;
+                    font-size: 0.9 * root.unit;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            // Barra superior de controles sobre el video
+            HorizontalLayout {
+                y: 0.75 * root.unit;
+                x: 0.75 * root.unit;
+                width: parent.width - 1.5 * root.unit;
+                height: 2.5 * root.unit;
+                alignment: space-between;
+
+                // Toggle Autoplay
+                ButtonSurface {
+                    height: 2.4 * root.unit;
+                    border-radius: 1.2 * root.unit;
+                    background: root.autoplay-enabled ? Theme.accent : Theme.background.with-alpha(0.65);
+                    clicked => { root.toggle-autoplay(); }
+
+                    HorizontalLayout {
+                        padding-left: 0.75 * root.unit;
+                        padding-right: 0.75 * root.unit;
+                        alignment: center;
+                        Text {
+                            text: root.autoplay-enabled ? "Auto: ON" : "Auto: OFF";
+                            color: Theme.primary-foreground;
+                            font-size: 0.75 * root.unit;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 0.5 * root.unit;
+                    alignment: center;
+
+                    // Mute / Unmute
+                    if (root.video-playing) : DrawerIconButton {
+                        unit: root.unit;
+                        icon-source: root.video-muted
+                            ? @image-url("../assets/images/icons/volume-off.svg")
+                            : @image-url("../assets/images/icons/volume-high.svg");
+                        accessible-name: root.video-muted ? @tr("Unmute trailer") : @tr("Mute trailer");
+                        clicked => { root.toggle-video-muted(); }
+                    }
+
+                    // Maximizar / Ver trailer en reproductor completo
+                    if (root.has-trailer) : DrawerIconButton {
+                        unit: root.unit;
+                        icon-source: @image-url("../assets/images/icons/maximize.svg");
+                        accessible-name: @tr("Watch trailer in full player");
+                        clicked => { root.maximize-trailer(); }
+                    }
+
+                    // Cerrar Drawer
+                    DrawerIconButton {
+                        unit: root.unit;
+                        icon-source: @image-url("../assets/images/icons/close.svg");
+                        accessible-name: @tr("Close preview");
+                        clicked => { root.close-drawer(); }
+                    }
+                }
+            }
+
+            // Barra inferior con Scrubber interactivo y tiempo
+            if (root.video-playing || root.video-progress > 0.0) : Rectangle {
+                y: parent.height - 2.2 * root.unit;
+                x: 0px;
+                width: parent.width;
+                height: 2.2 * root.unit;
+                background: @linear-gradient(180deg, Theme.background.with-alpha(0) 0%, Theme.background.with-alpha(0.85) 100%);
+
+                HorizontalLayout {
+                    padding-left: 0.75 * root.unit;
+                    padding-right: 0.75 * root.unit;
+                    spacing: 0.75 * root.unit;
+                    alignment: center;
+
+                    // Scrubber Bar
+                    scrubber-box := Rectangle {
+                        horizontal-stretch: 1;
+                        height: 0.4 * root.unit;
+                        y: (parent.height - self.height) / 2; // Centrado vertical respecto al texto de tiempo
+                        background: Theme.divider;
+                        border-radius: self.height / 2;
+
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress));
+                            height: parent.height;
+                            background: Theme.accent;
+                            border-radius: self.height / 2;
+                        }
+
+                        // Manija circular del scrubber
+                        Rectangle {
+                            x: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress)) - self.width / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 0.9 * root.unit;
+                            height: 0.9 * root.unit;
+                            border-radius: self.width / 2;
+                            background: Theme.primary-foreground;
+                        }
+
+                        TouchArea {
+                            width: parent.width;
+                            height: 1.5 * root.unit;
+                            y: (parent.height - self.height) / 2;
+                            clicked => {
+                                if (scrubber-box.width > 0px) {
+                                    root.seek-video-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
+                                }
+                            }
+                        }
+                    }
+
+                    // Etiqueta de tiempo (ej. "0:34 / 2:15")
+                    if (root.video-time-label != "") : Text {
+                        text: root.video-time-label;
+                        color: Theme.primary-foreground;
+                        font-size: 0.75 * root.unit;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // =====================================================================
+        // 2. CONTENIDO DESPLAZABLE INTERNO (Cero Saltos Estructurales)
+        // =====================================================================
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-width: root.drawer-width;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+
+            VerticalLayout {
+                padding-left: 2 * root.unit;
+                padding-right: 2 * root.unit;
+                padding-top: 1.5 * root.unit;
+                padding-bottom: 1.5 * root.unit;
+                spacing: 1.2 * root.unit;
+
+                // Título o Logo (Altura fija para 0 CLS)
+                Rectangle {
+                    height: root.header-height;
+                    background: transparent;
+
+                    if (root.logo.width > 0) : Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: root.logo;
+                        image-fit: contain;
+                        horizontal-alignment: left;
+                    }
+
+                    if (root.logo.width == 0) : Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: root.title;
+                        color: Theme.text-primary;
+                        font-size: 1.6 * root.unit;
+                        font-weight: 700;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Fila de Metadatos Básicos (Runtime / Año) con altura fija obligatoria
+                meta-row := Rectangle {
+                    height: root.meta-row-height;
+                    background: transparent;
+
+                    HorizontalLayout {
+                        spacing: 1.5 * root.unit;
+                        alignment: start;
+                        if (root.runtime != "") : Text {
+                            text: root.runtime;
+                            color: Theme.text-primary;
+                            font-size: 0.95 * root.unit;
+                            font-weight: 600;
+                            opacity: 0.85;
+                        }
+                        if (root.year != "") : Text {
+                            text: root.year;
+                            color: Theme.text-secondary;
+                            font-size: 0.95 * root.unit;
+                        }
+                    }
+                }
+
+                // =============================================================
+                // 3. TRÍADA DE CALIFICACIONES (IMDb, Rotten Tomatoes, Metacritic)
+                // =============================================================
+                ratings-container := Rectangle {
+                    height: root.ratings-height;
+                    background: transparent;
+
+                    HorizontalLayout {
+                        spacing: 1.2 * root.unit;
+                        alignment: start;
+
+                        // IMDb
+                        if (root.rating-imdb != "") : HorizontalLayout {
+                            spacing: 0.4 * root.unit;
+                            Image {
+                                width: 2.2 * root.unit;
+                                height: 1.2 * root.unit;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("../assets/images/icons/imdb.svg");
+                                colorize: Theme.imdb;
+                                image-fit: contain;
+                            }
+                            Text {
+                                text: root.rating-imdb;
+                                color: Theme.text-primary;
+                                font-size: 0.95 * root.unit;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Rotten Tomatoes (con Skeleton mientras carga)
+                        if (root.rating-rt != "") : HorizontalLayout {
+                            spacing: 0.4 * root.unit;
+                            Image {
+                                width: 1.2 * root.unit;
+                                height: 1.2 * root.unit;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("../assets/images/icons/rotten-tomatoes.svg");
+                                image-fit: contain;
+                            }
+                            Text {
+                                text: root.rating-rt;
+                                color: Theme.text-primary;
+                                font-size: 0.95 * root.unit;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if (root.ratings-loading && root.rating-rt == "") : HorizontalLayout {
+                            spacing: 0.4 * root.unit;
+                            Rectangle {
+                                width: 1.2 * root.unit;
+                                height: 1.2 * root.unit;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 0.2 * root.unit;
+                                background: Theme.card-border;
+                            }
+                            Rectangle {
+                                width: 2.2 * root.unit;
+                                height: 0.8 * root.unit;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 0.2 * root.unit;
+                                background: Theme.card-border;
+                            }
+                        }
+
+                        // Metacritic ("M") (con Skeleton mientras carga)
+                        if (root.rating-metacritic != "") : HorizontalLayout {
+                            spacing: 0.4 * root.unit;
+                            Image {
+                                width: 1.2 * root.unit;
+                                height: 1.2 * root.unit;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("../assets/images/icons/metacritic.svg");
+                                colorize: Theme.metacritic;
+                                image-fit: contain;
+                            }
+                            Text {
+                                text: root.rating-metacritic;
+                                color: Theme.text-primary;
+                                font-size: 0.95 * root.unit;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if (root.ratings-loading && root.rating-metacritic == "") : HorizontalLayout {
+                            spacing: 0.4 * root.unit;
+                            Rectangle {
+                                width: 1.2 * root.unit;
+                                height: 1.2 * root.unit;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 0.2 * root.unit;
+                                background: Theme.card-border;
+                            }
+                            Rectangle {
+                                width: 1.8 * root.unit;
+                                height: 0.8 * root.unit;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 0.2 * root.unit;
+                                background: Theme.card-border;
+                            }
+                        }
+                    }
+                }
+
+                // Sinopsis
+                Text {
+                    text: root.description;
+                    color: Theme.text-muted;
+                    font-size: 0.9 * root.unit;
+                    wrap: word-wrap;
+                }
+
+                // Géneros
+                if (root.genres.length > 0) : MetaStringLinks {
+                    unit: root.unit;
+                    label: @tr("LINKS_GENRES" => "Genres");
+                    values: root.genres;
+                    link-selected(value) => { root.metadata-filter-selected(value); }
+                }
+
+                // Cast y Directores
+                if (root.cast.length > 0) : MetaStringLinks {
+                    unit: root.unit;
+                    label: @tr("CAST" => "Cast");
+                    values: root.cast;
+                    link-selected(value) => { root.metadata-filter-selected(value); }
+                }
+            }
+        }
+
+        // =====================================================================
+        // 4. BARRA INFERIOR DE ACCIONES FIJAS
+        // =====================================================================
+        Rectangle {
+            height: root.actions-height;
+            background: Theme.modal-background;
+
+            HorizontalLayout {
+                padding: 1 * root.unit;
+                spacing: 0.75 * root.unit;
+                alignment: center;
+
+                // Añadir / Quitar de Biblioteca
+                IconAction {
+                    width: 3.5 * root.unit;
+                    height: 3.5 * root.unit;
+                    unit: root.unit;
+                    icon-size: 1.5 * root.unit;
+                    surface-color: Theme.overlay;
+                    active: root.in-library;
+                    active-color: Theme.accent;
+                    icon-source: root.in-library
+                        ? @image-url("../assets/images/icons/checkmark.svg")
+                        : @image-url("../assets/images/icons/add-to-library.svg");
+                    clicked => { root.toggle-library(); }
+                }
+
+                // Marcar Visto / No Visto
+                IconAction {
+                    width: 3.5 * root.unit;
+                    height: 3.5 * root.unit;
+                    unit: root.unit;
+                    icon-size: 1.5 * root.unit;
+                    surface-color: Theme.overlay;
+                    active: root.is-watched;
+                    active-color: Theme.accent;
+                    icon-source: root.is-watched
+                        ? @image-url("../assets/images/icons/eye-off.svg")
+                        : @image-url("../assets/images/icons/eye.svg");
+                    clicked => { root.toggle-watched(); }
+                }
+
+                // Botón SHOW / Ver Completo (Navega a Details)
+                PillButton {
+                    horizontal-stretch: 1;
+                    height: 3.5 * root.unit;
+                    unit: root.unit;
+                    label: @tr("SHOW" => "Show");
+                    primary: true;
+                    clicked => { root.play-full-details(); }
+                }
+            }
+        }
+    }
+}

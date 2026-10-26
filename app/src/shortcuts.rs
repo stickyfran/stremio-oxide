@@ -543,6 +543,8 @@ fn invoke_action(ui: &MainWindow, action: HotkeyAction, last_subtitle_index: &mu
         HotkeyAction::CloseOverlayOrPlayer => {
             if ui.get_player_menu_open() {
                 ui.invoke_close_player_menus();
+            } else if ui.get_player_pip_active() {
+                ui.invoke_player_toggle_pip();
             } else {
                 ui.invoke_player_close();
             }

@@ -98,6 +98,11 @@ impl TrayActions {
             }),
             quit: Box::new(|| {
                 tracing::info!("quit requested from the system tray");
+                let _ = slint::invoke_from_event_loop(|| {
+                    if let Err(error) = slint::quit_event_loop() {
+                        tracing::warn!(%error, "failed to request UI event-loop shutdown from event loop");
+                    }
+                });
                 if let Err(error) = slint::quit_event_loop() {
                     tracing::warn!(%error, "failed to request UI event-loop shutdown");
                 }
@@ -109,12 +114,13 @@ impl TrayActions {
 fn install_close_handler(ui: &MainWindow) {
     let ui_weak = ui.as_weak();
     ui.window().on_close_requested(move || {
-        if let Some(ui) = ui_weak.upgrade()
-            && ui.get_player_pip_active()
-        {
-            tracing::info!("close requested while picture-in-picture is active; restoring window");
-            ui.invoke_player_toggle_pip();
-            return CloseRequestResponse::KeepWindowShown;
+        if let Some(ui) = ui_weak.upgrade() {
+            if ui.get_player_pip_active() {
+                tracing::info!("close requested while picture-in-picture is active; restoring window");
+                ui.invoke_player_toggle_pip();
+                return CloseRequestResponse::KeepWindowShown;
+            }
+            crate::window_events::persist_window_geometry(ui.window());
         }
         let quit_on_close = ui_weak
             .upgrade()
@@ -161,12 +167,35 @@ fn queue_update_action(ui: Weak<MainWindow>, navigation: NavigationController, i
 }
 
 pub(crate) fn show_window(ui: &MainWindow) {
+    let config = crate::config::load_config();
+    let is_minimized = ui
+        .window()
+        .with_winit_window(|w| w.is_minimized().unwrap_or(false))
+        .unwrap_or(false);
+    if is_minimized {
+        let _ = ui.hide();
+    }
+    if config.window_width >= 800 && config.window_height >= 600 {
+        ui.window().set_size(slint::PhysicalSize::new(
+            config.window_width,
+            config.window_height,
+        ));
+    }
+    if config.window_maximized {
+        ui.window().set_maximized(true);
+    }
     if let Err(error) = ui.show() {
         tracing::error!(%error, "failed to show the main window from the tray");
         return;
     }
-    ui.window().with_winit_window(|window| {
-        window.set_minimized(false);
-        window.focus_window();
-    });
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ui.window().with_winit_window(|window| {
+            window.set_minimized(false);
+            if config.window_maximized {
+                window.set_maximized(true);
+            }
+            window.focus_window();
+            crate::window_style::apply(window);
+        });
+    }));
 }

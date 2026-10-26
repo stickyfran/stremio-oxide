@@ -17,12 +17,12 @@ use tokio::task::JoinHandle;
 
 use crate::{MainWindow, tray};
 
-const REPOSITORY_OWNER: &str = "perpetus";
-const REPOSITORY_NAME: &str = "stremio-native";
+const REPOSITORY_OWNER: &str = "stickyfran";
+const REPOSITORY_NAME: &str = "stremio-oxide";
 #[cfg(target_os = "windows")]
-const WINDOWS_ASSET_IDENTIFIER: &str = "stremio-native";
+const WINDOWS_ASSET_IDENTIFIER: &str = "stremio-oxide";
 #[cfg(target_os = "windows")]
-const WINDOWS_INSTALLER_NAME: &str = "stremio-installer";
+const WINDOWS_INSTALLER_NAME: &str = "stremio-oxide-installer";
 
 #[derive(Clone)]
 struct AvailableUpdate {
@@ -343,13 +343,19 @@ impl Updater {
 }
 
 fn fetch_latest_stable() -> Result<Option<AvailableUpdate>> {
-    let releases = ReleaseList::configure()
+    let releases = match ReleaseList::configure()
         .repo_owner(REPOSITORY_OWNER)
         .repo_name(REPOSITORY_NAME)
         .build()
         .context("invalid GitHub release configuration")?
         .fetch()
-        .context("failed to fetch GitHub releases")?;
+    {
+        Ok(releases) => releases,
+        Err(error) => {
+            tracing::info!(%error, "updater: repository has no published releases or network unavailable");
+            return Ok(None);
+        }
+    };
 
     let release = latest_stable_release(releases, env!("CARGO_PKG_VERSION"));
 
@@ -614,8 +620,8 @@ mod tests {
 
     #[test]
     fn updater_targets_the_published_repository() {
-        assert_eq!(REPOSITORY_OWNER, "perpetus");
-        assert_eq!(REPOSITORY_NAME, "stremio-native");
+        assert_eq!(REPOSITORY_OWNER, "stickyfran");
+        assert_eq!(REPOSITORY_NAME, "stremio-oxide");
     }
 
     #[test]

@@ -276,54 +276,10 @@ pub fn setup_ui_callbacks(
             });
         }
     });
-    if let Some(playback) = playback {
-        ui.on_player_download_video({
-            let manager = manager.clone();
-            let playback = playback.clone();
-            let weak = ui.as_weak();
-            move || {
-                let Some(source_url) = playback.current_source() else {
-                    return;
-                };
-                let title = weak
-                    .upgrade()
-                    .map(|ui| ui.get_player_title().to_string())
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or_else(|| "Stremio download".to_owned());
-                enqueue_player_source(
-                    manager.clone(),
-                    weak.clone(),
-                    source_url,
-                    title,
-                    DownloadSourceKind::DirectHttp,
-                    None,
-                );
-            }
-        });
-        ui.on_player_download_subs({
-            let manager = manager.clone();
-            let playback = playback.clone();
-            let weak = ui.as_weak();
-            move || {
-                let Some(source_url) = playback.current_external_subtitle() else {
-                    return;
-                };
-                let title = weak
-                    .upgrade()
-                    .map(|ui| ui.get_player_title().to_string())
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or_else(|| "Stremio subtitles".to_owned());
-                enqueue_player_source(
-                    manager.clone(),
-                    weak.clone(),
-                    source_url,
-                    title,
-                    DownloadSourceKind::DirectHttp,
-                    Some("srt"),
-                );
-            }
-        });
-    }
+    // No sobrescribir on_player_download_video ni on_player_download_subs aquí:
+    // mpv_integration::install_callbacks maneja las fuentes con formato correcto,
+    // streams de addons y subtítulos externos e integrados con mayor fidelidad.
+    let _ = playback;
 }
 
 fn enqueue_player_source(
@@ -607,6 +563,21 @@ impl DownloadManager {
             active.cancellation.cancel();
             let _ = active.task.await;
         }
+        let job = load_job(job_id).await;
+        if let Ok(job) = job {
+            if matches!(
+                job.state,
+                DownloadState::Completed | DownloadState::Failed | DownloadState::Cancelled
+            ) {
+                let _ = tokio::fs::remove_file(part_path(&job.destination)).await;
+                if let Ok(conn) = crate::db::get_conn().await {
+                    let _ = conn
+                        .execute("DELETE FROM download_jobs WHERE id = ?", [job_id])
+                        .await;
+                }
+                return Ok(());
+            }
+        }
         update_state(job_id, DownloadState::Cancelled, None).await
     }
 
@@ -692,8 +663,10 @@ impl DownloadManager {
             .map_err(|_| DownloadError::Filesystem)?;
         let mut downloaded = resume_from;
         let mut stream = response.bytes_stream();
+        let mut last_progress_time = std::time::Instant::now();
         while let Some(chunk) = stream.next().await {
             if cancellation.is_cancelled() {
+                update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
                 file.flush().await.map_err(|_| DownloadError::Filesystem)?;
                 return Ok(());
             }
@@ -703,14 +676,20 @@ impl DownloadManager {
                 .await
                 .map_err(|_| DownloadError::Filesystem)?;
             downloaded = downloaded.saturating_add(chunk.len() as u64);
-            update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
-            let _ = self.progress.send(Some(DownloadProgress {
-                job_id: job.id.clone(),
-                state: DownloadState::Downloading,
-                bytes_downloaded: downloaded,
-                bytes_total,
-            }));
+
+            let should_persist = last_progress_time.elapsed() >= Duration::from_millis(300);
+            if should_persist {
+                last_progress_time = std::time::Instant::now();
+                update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
+                let _ = self.progress.send(Some(DownloadProgress {
+                    job_id: job.id.clone(),
+                    state: DownloadState::Downloading,
+                    bytes_downloaded: downloaded,
+                    bytes_total,
+                }));
+            }
         }
+        update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
         file.flush().await.map_err(|_| DownloadError::Filesystem)?;
         drop(file);
         tokio::fs::rename(&part_path, &job.destination)

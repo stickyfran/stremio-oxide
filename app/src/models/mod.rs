@@ -483,6 +483,46 @@ pub fn chunk_vector_owned<T>(items: Vec<T>, chunk_size: usize) -> Vec<Vec<T>> {
     rows
 }
 
+/// Updates an existing row's `MediaCardItem` model in-place when column count matches,
+/// preserving already-decoded `poster` images and skipping `set_row_data` for unchanged cards.
+/// Returns `true` if updated in-place, or `false` if the row's `cols` model must be replaced.
+pub(crate) fn update_media_card_cols_in_place(
+    existing_cols: &ModelRc<MediaCardItem>,
+    new_cards: &[MediaCardItem],
+) -> bool {
+    if existing_cols.row_count() != new_cards.len() {
+        return false;
+    }
+    for (col_idx, new_card) in new_cards.iter().enumerate() {
+        let Some(existing_card) = existing_cols.row_data(col_idx) else {
+            return false;
+        };
+        let mut merged = new_card.clone();
+        if merged.poster.size().width == 0
+            && existing_card.poster.size().width > 0
+            && existing_card.poster_url == merged.poster_url
+        {
+            merged.poster = existing_card.poster.clone();
+        }
+        let unchanged = existing_card.id == merged.id
+            && existing_card.media_type == merged.media_type
+            && existing_card.video_id == merged.video_id
+            && existing_card.title == merged.title
+            && existing_card.poster_url == merged.poster_url
+            && existing_card.description == merged.description
+            && existing_card.show_checkmark == merged.show_checkmark
+            && existing_card.show_progress == merged.show_progress
+            && (existing_card.progress_value - merged.progress_value).abs() < f32::EPSILON
+            && existing_card.new_videos == merged.new_videos
+            && existing_card.can_play == merged.can_play
+            && (existing_card.poster.size().width > 0) == (merged.poster.size().width > 0);
+        if !unchanged {
+            existing_cols.set_row_data(col_idx, merged);
+        }
+    }
+    true
+}
+
 /// Updates only the cards whose async image requests just completed. Keeping
 /// the existing `ModelRc`s alive avoids rebuilding every catalog row when a
 /// poster becomes available.
@@ -528,39 +568,39 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
     updated += patch_episode_items(&ui.get_player_episodes(), &images);
 
     let mut addon_details = ui.get_addon_details_addon();
-    if let Some(logo) = images.get(addon_details.logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&images, addon_details.logo_url.as_str()) {
         addon_details.logo = logo.clone();
         ui.set_addon_details_addon(addon_details);
         updated += 1;
     }
 
     let detail_poster_url = ui.get_detail_poster_url();
-    if let Some(poster) = images.get(detail_poster_url.as_str()) {
+    if let Some(poster) = lookup_image(&images, detail_poster_url.as_str()) {
         ui.set_detail_poster(poster.clone());
         updated += 1;
     }
     let detail_logo_url = ui.get_detail_logo_url();
-    if let Some(logo) = images.get(detail_logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&images, detail_logo_url.as_str()) {
         ui.set_detail_logo(logo.clone());
         updated += 1;
     }
     let detail_background_url = ui.get_detail_background_url();
-    if let Some(background) = images.get(detail_background_url.as_str()) {
+    if let Some(background) = lookup_image(&images, detail_background_url.as_str()) {
         ui.set_detail_background(background.clone());
         updated += 1;
     }
     let discover_preview_poster_url = ui.get_discover_preview_poster_url();
-    if let Some(poster) = images.get(discover_preview_poster_url.as_str()) {
+    if let Some(poster) = lookup_image(&images, discover_preview_poster_url.as_str()) {
         ui.set_discover_preview_poster(poster.clone());
         updated += 1;
     }
     let discover_preview_logo_url = ui.get_discover_preview_logo_url();
-    if let Some(logo) = images.get(discover_preview_logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&images, discover_preview_logo_url.as_str()) {
         ui.set_discover_preview_logo(logo.clone());
         updated += 1;
     }
     let player_series_logo_url = ui.get_player_series_logo_url();
-    if let Some(logo) = images.get(player_series_logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&images, player_series_logo_url.as_str()) {
         ui.set_player_series_logo(logo.clone());
         updated += 1;
     }
@@ -586,13 +626,27 @@ fn cached_image(url: &str) -> Option<slint::Image> {
     (image.size().width > 0).then_some(image)
 }
 
+fn lookup_image<'a>(
+    images: &'a HashMap<&str, slint::Image>,
+    raw_url: &str,
+) -> Option<&'a slint::Image> {
+    if raw_url.is_empty() {
+        return None;
+    }
+    if let Some(img) = images.get(raw_url) {
+        return Some(img);
+    }
+    let optimized = crate::image_cache::optimize_poster_url(raw_url);
+    images.get(optimized.as_str())
+}
+
 fn patch_cards(model: &ModelRc<MediaCardItem>, images: &HashMap<&str, slint::Image>) -> usize {
     let mut updated = 0;
     for index in 0..model.row_count() {
         let Some(mut card) = model.row_data(index) else {
             continue;
         };
-        let Some(poster) = images.get(card.poster_url.as_str()) else {
+        let Some(poster) = lookup_image(images, card.poster_url.as_str()) else {
             continue;
         };
         card.poster = poster.clone();
@@ -611,7 +665,7 @@ fn patch_search_suggestions(
         let Some(mut suggestion) = model.row_data(index) else {
             continue;
         };
-        let Some(poster) = images.get(suggestion.poster_url.as_str()) else {
+        let Some(poster) = lookup_image(images, suggestion.poster_url.as_str()) else {
             continue;
         };
         suggestion.poster = poster.clone();
@@ -627,7 +681,7 @@ fn patch_addons(model: &ModelRc<AddonItem>, images: &HashMap<&str, slint::Image>
         let Some(mut addon) = model.row_data(index) else {
             continue;
         };
-        let Some(logo) = images.get(addon.logo_url.as_str()) else {
+        let Some(logo) = lookup_image(images, addon.logo_url.as_str()) else {
             continue;
         };
         addon.logo = logo.clone();
@@ -646,7 +700,7 @@ fn patch_calendar_items(
         let Some(mut item) = model.row_data(index) else {
             continue;
         };
-        let Some(poster) = images.get(item.poster_url.as_str()) else {
+        let Some(poster) = lookup_image(images, item.poster_url.as_str()) else {
             continue;
         };
         item.poster = poster.clone();
@@ -665,7 +719,7 @@ fn patch_episode_items(
         let Some(mut episode) = model.row_data(index) else {
             continue;
         };
-        let Some(thumbnail) = images.get(episode.thumbnail_url.as_str()) else {
+        let Some(thumbnail) = lookup_image(images, episode.thumbnail_url.as_str()) else {
             continue;
         };
         episode.thumbnail = thumbnail.clone();

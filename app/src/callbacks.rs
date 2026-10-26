@@ -17,11 +17,19 @@ use stremio_core::{
         installed_addons_with_filters::InstalledAddonsRequest,
         library_with_filters::LibraryRequest, library_with_filters::Sort,
     },
+    models::player::Selected,
     runtime::{
         Runtime, RuntimeAction,
         msg::{Action, ActionLoad},
     },
 };
+
+static PENDING_TORRENT_FALLBACK: std::sync::LazyLock<std::sync::Mutex<Option<Selected>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
+pub fn clear_pending_torrent_fallback() {
+    *PENDING_TORRENT_FALLBACK.lock().unwrap() = None;
+}
 
 pub fn setup_ui_callbacks(
     ui: &MainWindow,
@@ -30,7 +38,7 @@ pub fn setup_ui_callbacks(
     native_playback_bridge: &Option<NativePlaybackBridge>,
     config: &AppConfig,
     navigation: NavigationController,
-    download_manager: Arc<crate::downloads::DownloadManager>,
+    _download_manager: Arc<crate::downloads::DownloadManager>,
 ) {
     let ui_weak = ui.as_weak();
     // Hook up submodel setup functions
@@ -105,83 +113,158 @@ pub fn setup_ui_callbacks(
                 bridge.prepare_stream_switch();
             }
 
+            if let Some(ui) = ui_weak.upgrade() {
+                let detail_title = ui.get_detail_title().to_string();
+                let is_series = ui.get_detail_is_series();
+                let player_title = if is_series {
+                    let active_ep = ui.get_detail_active_episode_idx();
+                    let episodes = ui.get_detail_episodes();
+                    if let Some(ep) = episodes.iter().nth(active_ep as usize) {
+                        let ep_title = ep.title.to_string();
+                        let season = ui.get_detail_active_season();
+                        let ep_num = ep.episode_num;
+                        if !ep_title.is_empty() && ep_title != detail_title {
+                            if ep_num > 0 && season > 0 {
+                                format!("{detail_title} - {ep_title} ({season}x{ep_num})")
+                            } else {
+                                format!("{detail_title} - {ep_title}")
+                            }
+                        } else if ep_num > 0 && season > 0 {
+                            format!("{detail_title} ({season}x{ep_num})")
+                        } else {
+                            detail_title.clone()
+                        }
+                    } else {
+                        detail_title.clone()
+                    }
+                } else {
+                    detail_title.clone()
+                };
+
+                ui.set_player_title(player_title.into());
+                ui.set_player_stream_name(stream_name.clone().into());
+                ui.set_player_poster_image(ui.get_detail_poster());
+                ui.set_player_video_frame(slint::Image::default());
+                ui.set_player_has_video_frame(false);
+                ui.set_player_error("".into());
+                ui.set_player_loading(true);
+                ui.set_player_debrid_uncached(false);
+                clear_pending_torrent_fallback();
+                ui.set_player_loading_stalled(false);
+                ui.set_player_loading_stage_title("Iniciando reproducción…".into());
+                ui.set_player_loading_stage_detail("Resolviendo enlace del stream…".into());
+                ui.set_player_buffering(false);
+                ui.set_player_buffering_percent(0.0);
+                ui.set_player_controls_visible(true);
+                ui.set_player_is_series(is_series);
+                if is_series {
+                    ui.set_player_seasons(ui.get_detail_seasons());
+                    ui.set_player_active_season(ui.get_detail_active_season());
+                    ui.set_player_episodes(ui.get_detail_episodes());
+                    ui.set_player_active_episode_idx(ui.get_detail_active_episode_idx());
+                    ui.set_player_active_video_id(
+                        selected
+                            .stream_request
+                            .as_ref()
+                            .map(|request| request.path.id.as_str())
+                            .unwrap_or_default()
+                            .into(),
+                    );
+                } else {
+                    ui.set_player_seasons(Default::default());
+                    ui.set_player_episodes(Default::default());
+                    ui.set_player_active_video_id("".into());
+                    ui.set_player_active_episode_idx(0);
+                }
+                ui.set_player_has_next_episode(false);
+                ui.invoke_close_player_menus();
+                ui.invoke_focus_app_shortcuts();
+                navigation.dispatch_and_project(&ui, NavigationIntent::OpenPlayer);
+            }
+
             let ui_weak = ui_weak.clone();
             let runtime = runtime.clone();
-            let navigation = navigation.clone();
             tokio::spawn(async move {
                 // Debrid unrestriction only happens after this explicit click.
                 // Any provider failure leaves the original source untouched.
-                let selected = crate::integrations::resolve_explicit_selection(selected).await;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let detail_title = ui.get_detail_title().to_string();
-                        let is_series = ui.get_detail_is_series();
-                        let player_title = if is_series {
-                            let active_ep = ui.get_detail_active_episode_idx();
-                            let episodes = ui.get_detail_episodes();
-                            if let Some(ep) = episodes.iter().nth(active_ep as usize) {
-                                let ep_title = ep.title.to_string();
-                                let season = ui.get_detail_active_season();
-                                let ep_num = ep.episode_num;
-                                if !ep_title.is_empty() && ep_title != detail_title {
-                                    if ep_num > 0 && season > 0 {
-                                        format!("{detail_title} - {ep_title} ({season}x{ep_num})")
-                                    } else {
-                                        format!("{detail_title} - {ep_title}")
-                                    }
-                                } else if ep_num > 0 && season > 0 {
-                                    format!("{detail_title} ({season}x{ep_num})")
-                                } else {
-                                    detail_title.clone()
-                                }
-                            } else {
-                                detail_title.clone()
+                let resolution = crate::integrations::resolve_explicit_selection(selected).await;
+                match resolution {
+                    crate::integrations::DebridResolution::Resolved(selected) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_player_debrid_uncached(false);
+                                ui.set_player_loading_stage_title("Conectando al servidor Debrid…".into());
+                                ui.set_player_loading_stage_detail("Obteniendo stream optimizado de alta velocidad…".into());
                             }
-                        } else {
-                            detail_title.clone()
-                        };
-
-                        ui.set_player_title(player_title.into());
-                        ui.set_player_stream_name(stream_name.into());
-                        ui.set_player_poster_image(ui.get_detail_poster());
-                        ui.set_player_video_frame(slint::Image::default());
-                        ui.set_player_has_video_frame(false);
-                        ui.set_player_error("".into());
-                        ui.set_player_loading(true);
-                        ui.set_player_buffering(false);
-                        ui.set_player_buffering_percent(0.0);
-                        ui.set_player_controls_visible(true);
-                        ui.set_player_is_series(is_series);
-                        if is_series {
-                            ui.set_player_seasons(ui.get_detail_seasons());
-                            ui.set_player_active_season(ui.get_detail_active_season());
-                            ui.set_player_episodes(ui.get_detail_episodes());
-                            ui.set_player_active_episode_idx(ui.get_detail_active_episode_idx());
-                            ui.set_player_active_video_id(
-                                selected
-                                    .stream_request
-                                    .as_ref()
-                                    .map(|request| request.path.id.as_str())
-                                    .unwrap_or_default()
-                                    .into(),
-                            );
-                        } else {
-                            ui.set_player_seasons(Default::default());
-                            ui.set_player_episodes(Default::default());
-                            ui.set_player_active_video_id("".into());
-                            ui.set_player_active_episode_idx(0);
-                        }
-                        ui.set_player_has_next_episode(false);
-                        ui.invoke_close_player_menus();
-                        ui.invoke_focus_app_shortcuts();
-                        navigation.dispatch_and_project(&ui, NavigationIntent::OpenPlayer);
+                            runtime.dispatch(RuntimeAction {
+                                field: None,
+                                action: Action::Load(ActionLoad::Player(Box::new(selected))),
+                            });
+                        });
                     }
-                    runtime.dispatch(RuntimeAction {
-                        field: None,
-                        action: Action::Load(ActionLoad::Player(Box::new(selected))),
-                    });
-                });
+                    crate::integrations::DebridResolution::Uncached { provider_name, selected } => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            *PENDING_TORRENT_FALLBACK.lock().unwrap() = Some(selected);
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_player_debrid_uncached(true);
+                                ui.set_player_loading_stage_title(
+                                    format!("No disponible en caché de {provider_name}").into(),
+                                );
+                                ui.set_player_loading_stage_detail(
+                                    "Este stream no está en la nube de Debrid. Puedes reproducirlo vía Torrent P2P o volver y elegir otro stream.".into(),
+                                );
+                            }
+                        });
+                    }
+                    crate::integrations::DebridResolution::Fallback(selected) => {
+                        let is_torrent = matches!(
+                            &selected.stream.source,
+                            stremio_core::types::resource::StreamSource::Torrent { .. }
+                        );
+                        let (stage_title, stage_detail) = if is_torrent {
+                            (
+                                "Conectando con enjambre…",
+                                "Buscando pares e intercambiando metadatos…",
+                            )
+                        } else {
+                            (
+                                "Conectando al servidor…",
+                                "Preparando buffer del stream…",
+                            )
+                        };
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_player_debrid_uncached(false);
+                                ui.set_player_loading_stage_title(stage_title.into());
+                                ui.set_player_loading_stage_detail(stage_detail.into());
+                            }
+                            runtime.dispatch(RuntimeAction {
+                                field: None,
+                                action: Action::Load(ActionLoad::Player(Box::new(selected))),
+                            });
+                        });
+                    }
+                }
             });
+        }
+    });
+
+    ui.on_player_continue_as_torrent({
+        let ui_weak = ui.as_weak();
+        let runtime = runtime.clone();
+        move || {
+            let maybe_selected = PENDING_TORRENT_FALLBACK.lock().unwrap().take();
+            if let Some(selected) = maybe_selected {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_player_debrid_uncached(false);
+                    ui.set_player_loading_stage_title("Conectando con enjambre…".into());
+                    ui.set_player_loading_stage_detail("Buscando pares e intercambiando metadatos…".into());
+                }
+                runtime.dispatch(RuntimeAction {
+                    field: None,
+                    action: Action::Load(ActionLoad::Player(Box::new(selected))),
+                });
+            }
         }
     });
 
@@ -325,64 +408,33 @@ pub fn setup_ui_callbacks(
     ui.on_details_copy_download_link({
         let runtime = runtime.clone();
         let playback_selections = playback_selections.clone();
-        let download_manager = download_manager.clone();
         let ui_weak = ui_weak.clone();
         move |selection_id| {
             let rt = runtime.clone();
             let playback_selections = playback_selections.clone();
-            let download_manager = download_manager.clone();
             let ui_weak = ui_weak.clone();
             let selection_id = selection_id.to_string();
             tokio::spawn(async move {
-                let (settings, streaming_server_url, title) = {
+                let (settings, streaming_server_url) = {
                     let model = rt.model().expect("model read failed");
                     (
                         model.ctx.profile.settings.clone(),
                         model.streaming_server.base_url.clone(),
-                        model
-                            .meta_details
-                            .selected
-                            .as_ref()
-                            .map(|selected| selected.meta_path.id.clone())
-                            .unwrap_or_else(|| "Stremio download".to_owned()),
                     )
                 };
 
-                if let Some((selected, stream_name)) = playback_selections.resolve(&selection_id) {
+                if let Some((selected, _stream_name)) = playback_selections.resolve(&selection_id) {
                     let sdl = stremio_core::deep_links::StreamDeepLinks::from((
                         &selected.stream,
                         streaming_server_url.as_ref(),
                         &settings,
                     ));
                     if let Some(link) = sdl.external_player.download {
-                        let profile_id = match crate::profiles::active_profile_id().await {
-                            Ok(profile_id) => profile_id,
-                            Err(error) => {
-                                show_download_error(&ui_weak, error.to_string());
-                                return;
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                let _ = clipboard.set_text(link.to_string());
                             }
-                        };
-                        let filename = download_filename(&title, &link);
-                        let source = crate::downloads::DownloadSource {
-                            url: link,
-                            headers: Vec::new(),
-                            kind: crate::downloads::DownloadSourceKind::DirectHttp,
-                        };
-                        match download_manager
-                            .enqueue(
-                                profile_id.as_str(),
-                                &stream_name,
-                                &filename,
-                                crate::paths::get().downloads(),
-                                source,
-                            )
-                            .await
-                        {
-                            Ok(_) => {
-                                crate::downloads::project_active_profile(ui_weak.clone()).await;
-                            }
-                            Err(error) => show_download_error(&ui_weak, error.to_string()),
-                        }
+                        });
                     } else {
                         show_download_error(
                             &ui_weak,

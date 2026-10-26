@@ -39,6 +39,21 @@ pub struct AppConfig {
     pub download_bandwidth_limit_bps: u64,
     pub region: String,
     pub home_row_order: Vec<String>,
+    pub window_width: u32,
+    pub window_height: u32,
+    pub window_maximized: bool,
+    #[serde(default)]
+    pub pip_position: Option<(f32, f32)>,
+    #[serde(default)]
+    pub pip_size: Option<(f32, f32)>,
+    #[serde(default = "default_true")]
+    pub library_preview_enabled: bool,
+    #[serde(default)]
+    pub trailer_autoplay: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_font_family() -> String {
@@ -171,6 +186,13 @@ impl Default for AppConfig {
             download_bandwidth_limit_bps: 0,
             region: "US".to_owned(),
             home_row_order: Vec::new(),
+            window_width: 1280,
+            window_height: 800,
+            window_maximized: true,
+            pip_position: None,
+            pip_size: None,
+            library_preview_enabled: true,
+            trailer_autoplay: false,
         }
     }
 }

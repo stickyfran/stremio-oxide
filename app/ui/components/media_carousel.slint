@@ -38,10 +38,13 @@ export component MediaCatalogRow inherits MetaRow {
     content-width: max(root.width, (root.loading ? 8 : root.items.length) * root.card-width);
     content-height: root.card-height;
 
-    if (root.loading) : HorizontalLayout {
+    HorizontalLayout {
         x: 0px;
         y: 0px;
         spacing: 0.5 * root.unit;
+        opacity: root.loading ? 1.0 : 0.0;
+        visible: self.opacity > 0.01;
+        animate opacity { duration: 180ms; easing: ease-out; }
 
         for _idx in 8 : Rectangle {
             width: root.card-width;
@@ -71,11 +74,13 @@ export component MediaCatalogRow inherits MetaRow {
     }
 
     for card-item[index] in root.items : MediaCard {
-        visible: !root.loading;
         x: index * root.card-width;
-        y: 0px;
+        y: root.loading ? 0.4 * root.unit : 0px;
         width: root.card-width;
         height: root.card-height;
+        opacity: root.loading ? 0.0 : 1.0;
+        visible: self.opacity > 0.01;
+        animate opacity, y { duration: 240ms; easing: cubic-bezier(0.22, 1.0, 0.36, 1.0); }
         unit: root.unit;
         poster-shape: root.poster-shape;
         item: card-item;
@@ -136,11 +141,29 @@ export component MediaCardGridRow inherits Rectangle {
     height: root.card-height;
     background: transparent;
 
+    private property <bool> entered: false;
+
+    init => {
+        enter-timer.start();
+    }
+
+    enter-timer := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.entered = true;
+        }
+    }
+
     for card-item[index] in root.items : MediaCard {
         x: index * (root.card-width + root.spacing);
-        y: 0px;
+        y: root.entered ? 0px : 0.4 * root.unit;
         width: root.card-width;
         height: root.card-height;
+        opacity: root.entered ? 1.0 : 0.0;
+        visible: self.opacity > 0.01;
+        animate opacity, y { duration: 220ms; easing: cubic-bezier(0.22, 1.0, 0.36, 1.0); }
         unit: root.unit;
         item: card-item;
         enable-lazy-loading: root.enable-lazy-loading;

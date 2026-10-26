@@ -418,6 +418,7 @@ struct SessionState {
     last_capture_path: Option<PathBuf>,
     stream_switch_position: Option<f64>,
     pending_pause_restore: Option<bool>,
+    load_watchdog_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SessionState {
@@ -1060,8 +1061,10 @@ impl NativePlayback {
         };
         let previews = crate::preview_player::PreviewPlayer::new(
             app_config.hover_trailer_previews_enabled,
+            app_config.trailer_autoplay,
             ui.as_weak(),
         );
+        crate::preview_player::set_global(previews.clone());
         let preview_events = previews.clone();
         let preview_runtime = match PreviewRuntime::start(
             PreviewConfig {
@@ -1418,6 +1421,11 @@ impl NativePlaybackBridge {
             let expected_video_id = selected_player_video_id(player);
             let session = self.session.clone();
             let ui_weak = ui.clone();
+            let meta_item_preview = player
+                .meta_item
+                .as_ref()
+                .and_then(|resource| resource.content.as_ref().and_then(Loadable::ready))
+                .map(|item| item.preview.clone());
             let _ = slint::invoke_from_event_loop(move || {
                 let selector_is_current = {
                     let session = lock_session(&session);
@@ -1428,6 +1436,28 @@ impl NativePlaybackBridge {
                 };
                 if selector_is_current && let Some(ui) = ui_weak.upgrade() {
                     clear_player_episode_selector(&ui);
+                    if let Some(preview) = meta_item_preview {
+                        let name = preview.name;
+                        let runtime = preview.runtime.unwrap_or_default();
+                        let year = preview
+                            .released
+                            .map(|released| released.format("%Y").to_string())
+                            .unwrap_or_default();
+                        let description = preview.description.unwrap_or_default();
+                        let logo_url = preview
+                            .logo
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_default();
+                        let parsed_logo = url::Url::parse(&logo_url).ok();
+                        let series_logo = crate::image_cache::get_poster_image(&parsed_logo, &ui_weak);
+                        ui.set_player_series_name(name.into());
+                        ui.set_player_series_runtime(runtime.into());
+                        ui.set_player_series_release_year(year.into());
+                        ui.set_player_series_description(description.into());
+                        ui.set_player_series_logo_url(logo_url.into());
+                        ui.set_player_series_logo(series_logo);
+                    }
                 }
             });
             return;
@@ -1619,12 +1649,73 @@ impl NativePlaybackBridge {
                     ui.set_player_video_frame(slint::Image::default());
                     ui.set_player_has_video_frame(false);
                     ui.set_player_loading(true);
+                    ui.set_player_loading_stalled(false);
+                    ui.set_player_loading_stage_title("Cargando stream…".into());
+                    ui.set_player_loading_stage_detail("Iniciando decodificadores y búfer de MPV…".into());
                     ui.set_player_buffering(false);
                     ui.set_player_buffering_percent(0.0);
                     ui.set_player_ab_loop_a(-1.0);
                     ui.set_player_ab_loop_b(-1.0);
                 }
             });
+
+            let ui_watchdog = ui.clone();
+            let session_watchdog = self.session.clone();
+            let watchdog_task = self.runtime_handle.spawn(async move {
+                let start_time = Instant::now();
+                let mut stalled_notified = false;
+                loop {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let current_gen = lock_session(&session_watchdog).playback_generation;
+                    if current_gen != generation {
+                        break;
+                    }
+                    let (has_frame, loading, peers) = {
+                        if let Some(ui_instance) = ui_watchdog.upgrade() {
+                            (
+                                ui_instance.get_player_has_video_frame(),
+                                ui_instance.get_player_loading(),
+                                ui_instance.get_player_peer_count(),
+                            )
+                        } else {
+                            break;
+                        }
+                    };
+                    if has_frame || !loading {
+                        break;
+                    }
+                    let elapsed = start_time.elapsed();
+                    if elapsed >= Duration::from_secs(12) && !stalled_notified {
+                        stalled_notified = true;
+                        let ui = ui_watchdog.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui.upgrade() {
+                                ui.set_player_loading_stalled(true);
+                                ui.set_player_loading_stage_title("El stream está tardando más de lo habitual…".into());
+                            }
+                        });
+                    }
+                    if elapsed >= Duration::from_secs(25) && peers == 0 {
+                        show_player_error(
+                            &ui_watchdog,
+                            "No se encontraron pares para este torrent (0 semillas disponibles). Elija otro stream con más semillas.".into(),
+                        );
+                        break;
+                    }
+                    if elapsed >= Duration::from_secs(45) {
+                        show_player_error(
+                            &ui_watchdog,
+                            "Tiempo de espera agotado al conectar con el stream. Elija otra fuente o intente de nuevo.".into(),
+                        );
+                        break;
+                    }
+                }
+            });
+            let mut session = lock_session(&self.session);
+            if let Some(old) = session.load_watchdog_task.take() {
+                old.abort();
+            }
+            session.load_watchdog_task = Some(watchdog_task);
         }
         self.sync_episode_selector(player, streams, ui);
         if !navigation.is_player_visible() {
@@ -2045,17 +2136,218 @@ impl NativePlaybackBridge {
         ui.on_player_toggle_pip({
             let weak = ui.as_weak();
             let pip_controller = pip_controller.clone();
+            let autohide_task = self.autohide_task.clone();
+            let runtime_handle = self.runtime_handle.clone();
             move || {
                 let Some(ui) = weak.upgrade() else {
                     return;
                 };
+                let is_active = pip_controller.borrow().is_active();
+                let will_enter = !is_active;
+
+                if will_enter {
+                    ui.set_player_pip_active(true);
+                    ui.set_is_fullscreen(false);
+                }
+
                 let active = ui
                     .window()
                     .with_winit_window(|window| pip_controller.borrow_mut().toggle(window))
                     .unwrap_or(false);
-                ui.set_player_pip_active(active);
-                ui.set_is_fullscreen(false);
+
+                if !will_enter {
+                    ui.set_player_pip_active(false);
+                } else {
+                    ui.set_player_pip_active(active);
+                }
+
+                let is_fs = ui
+                    .window()
+                    .with_winit_window(|window| window.fullscreen().is_some())
+                    .unwrap_or(false);
+                ui.set_is_fullscreen(is_fs);
                 ui.invoke_close_player_menus();
+                ui.set_player_controls_visible(true);
+                ui.invoke_focus_app_shortcuts();
+                reset_autohide_timer(&ui, &autohide_task, &runtime_handle);
+            }
+        });
+
+        let last_sub_track: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        ui.on_player_toggle_subtitles({
+            let controller = self.controller.clone();
+            let state = self.state.clone();
+            let last_sub_track = last_sub_track.clone();
+            let weak = ui.as_weak();
+            move || {
+                let snapshot = read_state(&state).clone();
+                if snapshot.subtitle_tracks.is_empty() {
+                    queue_player_status(&weak, "No subtitles available");
+                    return;
+                }
+                let is_active = snapshot.active_subtitle_track.is_some()
+                    || weak.upgrade().map(|ui| ui.get_player_active_subtitle_idx() >= 0).unwrap_or(false);
+
+                let (track_id, next_idx) = if is_active {
+                    // Turn OFF
+                    if let Some(active) = snapshot.active_subtitle_track.as_ref() {
+                        if let Ok(mut last) = last_sub_track.lock() {
+                            *last = Some(active.clone());
+                        }
+                    }
+                    (None, -1)
+                } else {
+                    // Turn ON (remembered track if available, else first track)
+                    let remembered = last_sub_track.lock().ok().and_then(|g| g.clone());
+                    let target_pos = remembered.as_ref().and_then(|rem_id| {
+                        snapshot.subtitle_tracks.iter().position(|t| &t.id == rem_id)
+                    }).unwrap_or(0);
+
+                    let track = snapshot.subtitle_tracks.get(target_pos);
+                    (track.map(|t| t.id.clone()), target_pos as i32)
+                };
+
+                log_command(controller.send(PlaybackCommand::SetSubtitleTrack(track_id.clone())));
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_player_active_subtitle_idx(next_idx);
+                    let label = if let Some(id) = track_id {
+                        snapshot
+                            .subtitle_tracks
+                            .iter()
+                            .find(|t| t.id == id)
+                            .map(|t| format!("Subtitles: {}", t.language.as_deref().or(t.title.as_deref()).unwrap_or("Track")))
+                            .unwrap_or_else(|| "Subtitles enabled".to_string())
+                    } else {
+                        "Subtitles disabled".to_string()
+                    };
+                    queue_player_status(&weak, label);
+                }
+            }
+        });
+
+        ui.on_player_cycle_audio({
+            let controller = self.controller.clone();
+            let state = self.state.clone();
+            let weak = ui.as_weak();
+            move || {
+                let snapshot = read_state(&state).clone();
+                if snapshot.audio_tracks.is_empty() {
+                    queue_player_status(&weak, "No audio tracks available");
+                    return;
+                }
+                let next_idx = match snapshot.active_audio_track.as_ref() {
+                    None => 0,
+                    Some(active) => {
+                        let pos = snapshot.audio_tracks.iter().position(|t| &t.id == active);
+                        match pos {
+                            Some(idx) if idx + 1 < snapshot.audio_tracks.len() => (idx + 1) as i32,
+                            _ => 0,
+                        }
+                    }
+                };
+                let track = snapshot.audio_tracks.get(next_idx as usize);
+                let track_id = track.map(|t| t.id.clone());
+                log_command(controller.send(PlaybackCommand::SetAudioTrack(track_id)));
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_player_active_audio_idx(next_idx);
+                    let label = if let Some(t) = track {
+                        format!("Audio: {}", t.language.as_deref().or(t.title.as_deref()).unwrap_or("Track"))
+                    } else {
+                        "Audio track changed".to_string()
+                    };
+                    queue_player_status(&weak, label);
+                }
+            }
+        });
+
+        ui.on_player_start_pip_drag({
+            let weak = ui.as_weak();
+            move || {
+                let Some(ui) = weak.upgrade() else {
+                    return;
+                };
+                let _ = ui.window().with_winit_window(|window| {
+                    let _ = window.drag_window();
+                });
+
+                let weak_release = weak.clone();
+                slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
+                    if let Some(ui) = weak_release.upgrade() {
+                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                            position: slint::LogicalPosition::new(15.0, 15.0),
+                            button: slint::platform::PointerEventButton::Left,
+                        });
+                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerExited);
+                    }
+                });
+            }
+        });
+
+        ui.on_player_start_pip_resize({
+            let weak = ui.as_weak();
+            move |direction_idx| {
+                let Some(ui) = weak.upgrade() else {
+                    return;
+                };
+                use slint::winit_030::winit::window::ResizeDirection;
+                let dir = match direction_idx {
+                    0 => ResizeDirection::East,
+                    1 => ResizeDirection::West,
+                    2 => ResizeDirection::South,
+                    3 => ResizeDirection::North,
+                    4 => ResizeDirection::SouthEast,
+                    5 => ResizeDirection::SouthWest,
+                    6 => ResizeDirection::NorthWest,
+                    7 => ResizeDirection::NorthEast,
+                    _ => return,
+                };
+                let _ = ui.window().with_winit_window(|window| {
+                    let _ = window.drag_resize_window(dir);
+                });
+
+                let weak_release = weak.clone();
+                slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
+                    if let Some(ui) = weak_release.upgrade() {
+                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                            position: slint::LogicalPosition::new(15.0, 15.0),
+                            button: slint::platform::PointerEventButton::Left,
+                        });
+                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerExited);
+                    }
+                });
+            }
+        });
+
+        ui.on_player_scale_pip({
+            let weak = ui.as_weak();
+            move |delta| {
+                let Some(ui) = weak.upgrade() else {
+                    return;
+                };
+                let _ = ui.window().with_winit_window(|window| {
+                    let current_size = window.inner_size();
+                    let current_w = current_size.width as f32;
+                    let factor = if delta > 0.0 { 1.1 } else { 0.9 };
+                    let mut new_w = (current_w * factor).round();
+                    let mut new_h = (new_w * 9.0 / 16.0).round();
+                    if new_w < 120.0 {
+                        new_w = 120.0;
+                        new_h = 68.0;
+                    }
+                    if let Some(monitor) = window.current_monitor() {
+                        let max_w = monitor.size().width as f32 * 0.8;
+                        if new_w > max_w {
+                            new_w = max_w;
+                            new_h = (new_w * 9.0 / 16.0).round();
+                        }
+                    }
+                    let _ = window.request_inner_size(
+                        slint::winit_030::winit::dpi::PhysicalSize::new(
+                            new_w as u32,
+                            new_h as u32,
+                        ),
+                    );
+                });
             }
         });
 
@@ -2087,7 +2379,9 @@ impl NativePlaybackBridge {
         ui.on_player_choose_another_stream({
             let weak = ui.as_weak();
             move || {
+                crate::callbacks::clear_pending_torrent_fallback();
                 if let Some(ui) = weak.upgrade() {
+                    ui.set_player_debrid_uncached(false);
                     ui.invoke_player_close();
                 }
             }
@@ -2096,7 +2390,9 @@ impl NativePlaybackBridge {
         ui.on_player_return_to_details({
             let weak = ui.as_weak();
             move || {
+                crate::callbacks::clear_pending_torrent_fallback();
                 if let Some(ui) = weak.upgrade() {
+                    ui.set_player_debrid_uncached(false);
                     ui.set_detail_in_stream_view(false);
                     ui.invoke_player_close();
                 }
@@ -2675,6 +2971,8 @@ impl NativePlaybackBridge {
                     ui.invoke_close_player_menus();
                     // Never leave the player with the pointer hidden after exit.
                     set_player_cursor_hidden(&ui, false);
+                    crate::callbacks::clear_pending_torrent_fallback();
+                    ui.set_player_debrid_uncached(false);
                     ui.set_player_loading(false);
                     ui.set_player_buffering(false);
                     ui.set_player_has_video_frame(false);
@@ -3024,6 +3322,9 @@ fn handle_event(
         PlaybackEvent::FileLoaded => {
             let (load_elapsed_ms, thumbnail_source, pause_restore, pending_subtitles) = {
                 let mut session = lock_session(session);
+                if let Some(task) = session.load_watchdog_task.take() {
+                    task.abort();
+                }
                 (
                     session
                         .load_requested_at
@@ -3055,6 +3356,8 @@ fn handle_event(
                 let ui = ui.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui.upgrade() {
+                        ui.set_player_loading_stage_title("Decodificando video…".into());
+                        ui.set_player_loading_stage_detail("Iniciando superficie gráfica…".into());
                         ui.invoke_focus_app_shortcuts();
                     }
                 });
@@ -3086,16 +3389,7 @@ fn handle_event(
                     .map(|model| model.ctx.profile.settings.binge_watching)
                     .unwrap_or(false);
                 let advanced = binge && play_next(core);
-                if advanced {
-                    let ui = ui.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui.upgrade() {
-                            ui.set_player_active_episode_idx(
-                                ui.get_player_active_episode_idx() + 1,
-                            );
-                        }
-                    });
-                } else {
+                if !advanced {
                     let ui = ui.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui.upgrade()
@@ -3811,7 +4105,7 @@ fn expand_language_code(code: &str) -> String {
         "jpn" | "ja" | "japanese" => "jpn,ja,japanese".to_string(),
         "kor" | "ko" | "korean" => "kor,ko,korean".to_string(),
         other => {
-            if other.len() == 3 {
+            if other.len() == 3 && other.is_char_boundary(2) {
                 format!("{other},{}", &other[..2])
             } else {
                 other.to_string()
@@ -4248,7 +4542,7 @@ fn install_renderer(
 ) -> anyhow::Result<()> {
     tracing::info!(
         backend = "winit",
-        renderer = "skia-opengl",
+        renderer = "femtovg-opengl",
         "installing MPV renderer"
     );
     let window_weak = ui.as_weak();
@@ -4326,7 +4620,7 @@ fn install_renderer(
                             };
                             tracing::info!(
                                 backend = "winit",
-                                renderer = "skia-opengl",
+                                renderer = "femtovg-opengl",
                                 profile = ?diagnostics.profile,
                                 context_profile = ?diagnostics.context_profile,
                                 gl_major = diagnostics.major,
@@ -4453,6 +4747,8 @@ fn install_renderer(
 
                                 if frame_ready {
                                     ui.set_player_has_video_frame(true);
+                                    ui.set_player_loading(false);
+                                    ui.set_player_loading_stalled(false);
                                 }
 
                                 let playable_frame =
@@ -4694,7 +4990,14 @@ fn youtube_watch_url(
 /// path is taken from there rather than guessed, and [`None`] simply means the
 /// hook can find `yt-dlp` on `PATH` without help.
 fn resolve_ytdl_path() -> Option<PathBuf> {
-    stream_server::ytdlp::player_path(crate::paths::get().streaming_server())
+    let base = crate::paths::get().streaming_server();
+    let binary = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+    let candidate = base.join(binary);
+    if candidate.exists() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 fn resolve_spatial_audio_sofa_path(config_dir: &std::path::Path) -> Option<PathBuf> {
@@ -4923,6 +5226,19 @@ static PLAYER_CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 /// thread and blocks on the reply — so skip it whenever the state already
 /// matches, and only remember the new state once the window actually applied it.
 fn set_player_cursor_hidden(ui: &MainWindow, hidden: bool) {
+    if ui.get_player_pip_active() {
+        // Never hide cursor in Picture-in-Picture mode so resizing and controls remain accessible
+        if PLAYER_CURSOR_HIDDEN.load(Ordering::Relaxed) {
+            let applied = ui
+                .window()
+                .with_winit_window(|window| window.set_cursor_visible(true))
+                .is_some();
+            if applied {
+                PLAYER_CURSOR_HIDDEN.store(false, Ordering::Relaxed);
+            }
+        }
+        return;
+    }
     if PLAYER_CURSOR_HIDDEN.load(Ordering::Relaxed) == hidden {
         return;
     }
@@ -4959,6 +5275,7 @@ fn reset_autohide_timer(
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak_ui.upgrade()
                     && !ui.get_player_paused()
+                    && !ui.get_player_pip_active()
                     && !ui.get_player_show_subtitles_menu()
                     && !ui.get_player_show_audio_menu()
                     && !ui.get_player_show_speed_menu()
@@ -4969,7 +5286,9 @@ fn reset_autohide_timer(
                 {
                     ui.set_player_controls_visible(false);
                     ui.invoke_player_seek_leave();
-                    set_player_cursor_hidden(&ui, true);
+                    if !ui.get_player_pip_active() {
+                        set_player_cursor_hidden(&ui, true);
+                    }
                 }
             });
         }));

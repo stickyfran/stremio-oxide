@@ -221,8 +221,12 @@ fn open_gl_context_profile(gl: &glow::Context) -> OpenGlContextProfile {
 impl OpenGlContextCapabilities {
     fn for_context(gl: &glow::Context) -> Self {
         // SAFETY: Construction happens while Slint keeps this context current.
-        let fragment_texture_units =
-            unsafe { gl.get_parameter_i32(glow::MAX_TEXTURE_IMAGE_UNITS).max(1) as u32 };
+        // Acotamos a un máximo de 8 unidades de textura (las que usan FemtoVG y MPV)
+        // para evitar iterar por 32-80 unidades y ejecutar cientos de glGet* por frame.
+        let fragment_texture_units = unsafe {
+            gl.get_parameter_i32(glow::MAX_TEXTURE_IMAGE_UNITS)
+                .clamp(1, 8) as u32
+        };
         Self {
             state: OpenGlCapabilities::for_context(gl),
             fragment_texture_units,

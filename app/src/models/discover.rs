@@ -7,7 +7,7 @@ use crate::models::{
 use crate::{AppModel, AppModelField, MainWindow, NavigationController, NavigationIntent};
 use crate::{DiscoverFilterOption, DiscoverRow};
 use core_env::DesktopEnv;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use std::sync::{Arc, Mutex, OnceLock};
 use stremio_core::{
     models::{
@@ -264,20 +264,16 @@ pub fn setup(
             tokio::spawn(async move {
                 let model = rt.model().expect("model read failed");
                 if query.is_empty() {
-                    let request = model
-                        .discover
-                        .selectable
-                        .types
-                        .first()
-                        .map(|t| t.request.clone())
-                        .unwrap_or_else(|| {
-                            model
-                                .discover
-                                .selected
-                                .as_ref()
-                                .map(|s| s.request.clone())
-                                .unwrap()
-                        });
+                    let request = match model.discover.selectable.types.first() {
+                        Some(t) => t.request.clone(),
+                        None => match model.discover.selected.as_ref() {
+                            Some(s) => s.request.clone(),
+                            None => {
+                                drop(model);
+                                return;
+                            }
+                        },
+                    };
                     drop(model);
                     rt.dispatch(RuntimeAction {
                         field: None,
@@ -294,21 +290,16 @@ pub fn setup(
                     .iter()
                     .find(|e| e.name == "search")
                 {
-                    let mut request = model
-                        .discover
-                        .selected
-                        .as_ref()
-                        .map(|s| s.request.clone())
-                        .unwrap_or_else(|| {
-                            model
-                                .discover
-                                .selectable
-                                .types
-                                .first()
-                                .unwrap()
-                                .request
-                                .clone()
-                        });
+                    let mut request = match model.discover.selected.as_ref() {
+                        Some(s) => s.request.clone(),
+                        None => match model.discover.selectable.types.first() {
+                            Some(t) => t.request.clone(),
+                            None => {
+                                drop(model);
+                                return;
+                            }
+                        },
+                    };
                     request.path.extra.retain(|e| e.name != "search");
                     request.path.extra.push(ExtraValue {
                         name: "search".to_string(),
@@ -326,48 +317,36 @@ pub fn setup(
         }
     });
 
-    // Item selection callback
+    // Item selection callback: single-click selects item in right preview drawer (official Stremio behavior)
     ui.on_discover_item_selected({
         let runtime = runtime.clone();
         let navigation = navigation.clone();
         move |id, media_type, video_id| {
             let id = id.to_string();
+            let media_type = media_type.to_string();
+            let video_id = (!video_id.is_empty()).then(|| video_id.to_string());
             let transition = navigation.dispatch(NavigationIntent::SelectDiscoverPreview {
                 media_id: id.clone(),
             });
             if transition.changed {
-                load_meta_details_for_video(
-                    &runtime,
-                    id,
-                    Some(media_type.to_string()),
-                    (!video_id.is_empty()).then(|| video_id.to_string()),
-                );
+                load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
             }
         }
     });
 
-    // Discover mirrors the official desktop interaction: one click updates
-    // the preview, while a double-click opens the full details route.
+    // Double-click or Enter activates full details
     ui.on_discover_item_activated({
         let runtime = runtime.clone();
         let ui_weak = ui_weak.clone();
         let navigation = navigation.clone();
         move |id, media_type, video_id| {
             let id = id.to_string();
-            if navigation.snapshot().discover_preview_id.as_deref() != Some(id.as_str()) {
-                navigation.dispatch(NavigationIntent::SelectDiscoverPreview {
-                    media_id: id.clone(),
-                });
-                load_meta_details_for_video(
-                    &runtime,
-                    id.clone(),
-                    Some(media_type.to_string()),
-                    (!video_id.is_empty()).then(|| video_id.to_string()),
-                );
-            }
+            let media_type = media_type.to_string();
+            let video_id = (!video_id.is_empty()).then(|| video_id.to_string());
             if let Some(ui) = ui_weak.upgrade() {
                 crate::models::details::open_details_route(&ui, &runtime, &navigation, &id);
             }
+            load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
         }
     });
 
@@ -376,7 +355,11 @@ pub fn setup(
         let navigation = navigation.clone();
         let runtime = runtime.clone();
         move || {
-            let Some(media_id) = navigation.snapshot().discover_preview_id else {
+            let media_id = navigation
+                .snapshot()
+                .discover_preview_id
+                .or_else(|| navigation.snapshot().library_preview_id);
+            let Some(media_id) = media_id else {
                 return;
             };
             let Some(ui) = ui_weak.upgrade() else {
@@ -547,6 +530,21 @@ pub fn sync(
         })
         .unwrap_or((true, String::new()));
 
+    let watched_ids: std::collections::HashSet<String> = runtime
+        .model()
+        .ok()
+        .map(|model| {
+            model
+                .ctx
+                .library
+                .items
+                .values()
+                .filter(|lib_item| lib_item.watched())
+                .map(|lib_item| lib_item.id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut fingerprint = Fingerprint::new();
     fingerprint.usize(columns);
     fingerprint.str(&active_type);
@@ -577,6 +575,7 @@ pub fn sync(
         fingerprint.optional_str(item.poster.as_ref().map(url::Url::as_str));
         fingerprint.optional_str(item.release_info.as_deref());
         fingerprint.optional_str(item.behavior_hints.default_video_id.as_deref());
+        fingerprint.bool(watched_ids.contains(&item.id));
     }
     if !sync_fingerprint_changed(&LAST_SYNC_STATE, fingerprint.finish()) {
         return;
@@ -650,27 +649,60 @@ pub fn sync(
         let _span = tracing::info_span!("map_visible_items").entered();
         let mut visible_items = Vec::with_capacity(raw_items.len());
         for item in &raw_items {
-            visible_items.push(catalog_media_card(item));
+            let mut card = catalog_media_card(item);
+            if watched_ids.contains(&item.id) {
+                card.show_checkmark = true;
+            }
+            visible_items.push(card);
         }
         visible_items
     };
 
     ui.set_discover_column_count(columns as i32);
 
-    let rows_model = {
+    {
         let _span = tracing::info_span!("chunk_discover_rows").entered();
         let chunked = crate::models::chunk_vector_owned(visible_items, columns);
-        let mut slint_rows = Vec::with_capacity(chunked.len());
-        for row_items in chunked {
-            let row_model = slint::VecModel::from(row_items);
-            slint_rows.push(DiscoverRow {
-                cols: slint::ModelRc::new(row_model),
-            });
+        let existing = ui.get_discover_rows();
+        if let Some(vec_model) = existing.as_any().downcast_ref::<slint::VecModel<DiscoverRow>>() {
+            let existing_len = vec_model.row_count();
+            let common_len = existing_len.min(chunked.len());
+            for (index, row_items) in chunked.iter().take(common_len).enumerate() {
+                let updated_in_place = vec_model
+                    .row_data(index)
+                    .is_some_and(|existing_row| {
+                        crate::models::update_media_card_cols_in_place(&existing_row.cols, row_items)
+                    });
+                if !updated_in_place {
+                    vec_model.set_row_data(
+                        index,
+                        DiscoverRow {
+                            cols: slint::ModelRc::new(slint::VecModel::from(row_items.clone())),
+                        },
+                    );
+                }
+            }
+            if chunked.len() > existing_len {
+                vec_model.extend(chunked.into_iter().skip(existing_len).map(|row_items| {
+                    DiscoverRow {
+                        cols: slint::ModelRc::new(slint::VecModel::from(row_items)),
+                    }
+                }));
+            } else if chunked.len() < existing_len {
+                for index in (chunked.len()..existing_len).rev() {
+                    vec_model.remove(index);
+                }
+            }
+        } else {
+            let slint_rows: Vec<DiscoverRow> = chunked
+                .into_iter()
+                .map(|row_items| DiscoverRow {
+                    cols: slint::ModelRc::new(slint::VecModel::from(row_items)),
+                })
+                .collect();
+            ui.set_discover_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
         }
-        slint::VecModel::from(slint_rows)
-    };
-
-    ui.set_discover_rows(slint::ModelRc::new(rows_model));
+    }
 
     // Auto-select the first item for preview on catalog load if no item is selected yet (matching web behavior)
     if navigation.snapshot().discover_preview_id.is_none()

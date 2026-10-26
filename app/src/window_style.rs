@@ -113,4 +113,26 @@ pub fn set_app_user_model_id() {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn set_app_user_model_id() {}
+pub fn set_app_user_model_id() {
+    let _ = slint::set_xdg_app_id("stremio-oxide");
+}
+
+/// Registers the bundled application font directly on a specific Slint window's
+/// renderer rather than via a top-level `.slint` font import.
+///
+/// Importing a `.ttf` inside `app.slint` causes `i-slint-compiler` to emit
+/// `window_adapter_impl().renderer().register_font_from_memory(...)` inside
+/// every exported root component's `init` — including `AppTray`
+/// (`SystemTrayIcon`), which forces `i-slint-backend-winit` to allocate a
+/// second `WinitWindowAdapter` and map a duplicate top-level window entry in
+/// the KDE Plasma / Wayland / X11 task manager.
+pub fn register_embedded_fonts(window: &slint::Window) {
+    const PLUS_JAKARTA_SANS: &[u8] = include_bytes!("../ui/assets/fonts/PlusJakartaSans.ttf");
+    if let Err(error) = slint::private_unstable_api::re_exports::WindowInner::from_pub(window)
+        .window_adapter()
+        .renderer()
+        .register_font_from_memory(PLUS_JAKARTA_SANS)
+    {
+        tracing::warn!(%error, "failed to register embedded PlusJakartaSans font on window renderer");
+    }
+}

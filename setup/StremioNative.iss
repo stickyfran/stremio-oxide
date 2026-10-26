@@ -10,6 +10,14 @@
   #define ArtifactsDir "..\artifacts"
 #endif
 
+#ifndef OutputBaseName
+  #define OutputBaseName "StremioSetup-v" + AppVersion + "-x64"
+#endif
+
+#ifndef ArchAllowed
+  #define ArchAllowed "x64compatible arm64"
+#endif
+
 #define AppName "Stremio"
 #define AppExeName "stremio-native.exe"
 
@@ -22,8 +30,8 @@ DefaultDirName={localappdata}\Programs\stremio-native
 DefaultGroupName=Stremio
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#ArchAllowed}
+ArchitecturesInstallIn64BitMode={#ArchAllowed}
 ; Older clients launch Setup before their shutdown has completed. Restart Manager
 ; still requests a graceful close first; force is the fallback for a stuck client.
 CloseApplications=force
@@ -31,7 +39,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 OutputDir={#ArtifactsDir}
-OutputBaseFilename=StremioSetup-v{#AppVersion}-x64
+OutputBaseFilename={#OutputBaseName}
 SetupIconFile=..\app\assets\app.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 VersionInfoVersion={#AppVersion}

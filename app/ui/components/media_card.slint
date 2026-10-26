@@ -53,11 +53,32 @@ export component MediaCard inherits Rectangle {
     callback hover-preview-requested(string, string, length, length, length, length);
     callback hover-preview-dismissed();
 
+    poster-request-timer := Timer {
+        interval: 35ms;
+        running: false;
+        triggered => {
+            self.stop();
+            if ((!root.enable-lazy-loading || root.is-visible)
+                && root.item.poster.width == 0
+                && root.item.poster-url != "") {
+                root.poster-requested(root.item.poster-url);
+            }
+        }
+    }
+
     function request-poster-if-needed() {
-        if ((!root.enable-lazy-loading || root.is-visible)
-            && root.item.poster.width == 0
-            && root.item.poster-url != "") {
-            root.poster-requested(root.item.poster-url);
+        if (root.item.poster.width == 0 && root.item.poster-url != "") {
+            if (!root.enable-lazy-loading) {
+                poster-request-timer.stop();
+                root.poster-requested(root.item.poster-url);
+            } else if (root.is-visible) {
+                poster-request-timer.start();
+                poster-request-timer.restart();
+            } else {
+                poster-request-timer.stop();
+            }
+        } else {
+            poster-request-timer.stop();
         }
     }
 
@@ -83,46 +104,8 @@ export component MediaCard inherits Rectangle {
     property <bool> highlighted: card-button.has-hover || card-button.has-focus
         || root.selected || root.menu-open;
 
-    private property <bool> preview-armed: root.enable-hover-preview
-        && card-button.has-hover
-        && root.item.id != "";
+    private property <bool> preview-armed: false;
     private property <bool> preview-emitted: false;
-
-    // Driven imperatively rather than by binding `running` to `preview-armed`.
-    // Re-enabling a Slint timer only marks it active again: the deadline from
-    // the previous hover is kept, so a card the pointer had already rested on
-    // would open its popup with no delay at all. `restart()` recomputes the
-    // deadline from now, which is what makes the threshold hold on every hover.
-    hover-preview-timer := Timer {
-        interval: root.hover-preview-delay;
-        running: false;
-        triggered => {
-            // One-shot: Slint timers repeat until stopped.
-            self.stop();
-            root.preview-emitted = true;
-            root.hover-preview-requested(
-                root.item.id,
-                root.item.media-type,
-                root.absolute-position.x,
-                root.absolute-position.y,
-                root.width,
-                root.height,
-            );
-        }
-    }
-
-    changed preview-armed => {
-        if (root.preview-armed) {
-            hover-preview-timer.start();
-            hover-preview-timer.restart();
-        } else {
-            hover-preview-timer.stop();
-            if (root.preview-emitted) {
-                root.preview-emitted = false;
-                root.hover-preview-dismissed();
-            }
-        }
-    }
 
     background: transparent;
     height: root.poster-height + 6 * root.unit;
@@ -187,7 +170,10 @@ export component MediaCard inherits Rectangle {
         border-radius: Theme.border-radius;
         clip: true;
 
-        if (root.item.poster.width == 0 || (root.enable-lazy-loading && !root.is-visible)) : Image {
+        property <bool> poster-ready: root.item.poster.width > 0
+            && (!root.enable-lazy-loading || root.is-visible);
+
+        Image {
             x: parent.width * 0.1;
             y: parent.height * 0.25;
             width: 80%;
@@ -198,21 +184,24 @@ export component MediaCard inherits Rectangle {
                 : (root.item.media-type == "anime" ? @image-url("../assets/images/icons/anime.svg")
                 : root.fallback-icon-source)));
             colorize: Theme.primary-foreground;
-            opacity: 0.2;
+            opacity: poster-container.poster-ready ? 0.0 : 0.2;
+            visible: self.opacity > 0.01;
             image-fit: contain;
+            animate opacity { duration: 180ms; easing: ease-out; }
         }
 
-        if (root.item.poster.width > 0 && (!root.enable-lazy-loading || root.is-visible)) : Image {
+        Image {
             source: root.item.poster;
             x: 0px;
             y: 0px;
             width: parent.width;
             height: parent.height;
             image-fit: cover;
-            opacity: 0.9;
+            opacity: poster-container.poster-ready ? 0.95 : 0.0;
+            visible: self.opacity > 0.01;
             transform-origin: { x: self.width / 2, y: self.height / 2 };
             transform-scale: root.highlighted && root.enable-hover-scale ? 105% : 100%;
-            // Render-only scaling keeps the repeated card geometry stable.
+            animate opacity { duration: 220ms; easing: cubic-bezier(0.22, 1.0, 0.36, 1.0); }
             animate transform-scale { duration: Theme.motion-fast; easing: ease-out; }
         }
 

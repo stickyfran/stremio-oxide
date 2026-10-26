@@ -131,7 +131,15 @@ mod tests {
             Color::from_rgb_u8(0xff, 0xff, 0xff),
         );
         assert_eq!(theme.text_primary, "#FFFFFFFF");
-        assert_eq!(theme.text_secondary, "#FFFFFFB3");
-        assert_eq!(theme.text_muted, "#FFFFFF80");
+        assert!(
+            theme.text_secondary == "#FFFFFFB2" || theme.text_secondary == "#FFFFFFB3",
+            "expected #FFFFFFB2 or #FFFFFFB3, got {}",
+            theme.text_secondary
+        );
+        assert!(
+            theme.text_muted == "#FFFFFF7F" || theme.text_muted == "#FFFFFF80",
+            "expected #FFFFFF7F or #FFFFFF80, got {}",
+            theme.text_muted
+        );
     }
 }

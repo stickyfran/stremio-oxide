@@ -30,7 +30,12 @@ pub(super) fn create(actions: TrayActions) -> anyhow::Result<Tray> {
     tray.on_install_update(install_update);
     tray.on_quit(quit);
 
-    tray.show()?;
+    // NOTE: We deliberately do NOT call `tray.show()?` here.
+    // `AppTray` is a `SystemTrayIcon` component. Calling `tray.show()` tells Slint's
+    // WindowAdapter to map a real OS window for the component on X11/Wayland, which causes
+    // KWin / Plasma / taskbar to spawn an unwanted duplicate empty window/icon in the taskbar.
+    // The tray icon is already registered and managed over D-Bus via KSNI on construction.
+
     Ok(Tray(tray))
 }
 

@@ -721,7 +721,10 @@ fn interface_language_options() -> slint::ModelRc<slint::SharedString> {
     slint::ModelRc::new(slint::VecModel::from(names))
 }
 
-fn format_cache_size(bytes: f64) -> String {
+fn format_cache_size(bytes: Option<f64>) -> String {
+    let Some(bytes) = bytes else {
+        return "Infinite".to_string();
+    };
     if bytes <= 0.0 {
         "No Caching".to_string()
     } else if bytes >= 1024.0 * 1024.0 * 1024.0 * 1024.0 {
@@ -881,8 +884,8 @@ pub fn setup(
             .map(|value| value == "true");
 
         if let Ok(snapshot) = conn_init.get_settings_snapshot().await {
-            let mut settings = snapshot.settings;
-            let server_version = snapshot.server_version;
+            let server_version = snapshot.server_version.clone();
+            let mut settings = snapshot.into_settings();
             let mut dirty = false;
             let seeding_value = settings.seeding_enabled.to_string();
             let dht_value = settings.bt_enable_dht.to_string();
@@ -980,9 +983,9 @@ pub fn setup(
                     } else {
                         (val_gb as f64) * 1024.0 * 1024.0 * 1024.0
                     };
-                    settings.cache_size = bytes;
+                    settings.cache_size = Some(bytes);
                     if (conn.apply_settings(settings).await).is_ok() {
-                        let cache_size_str = format_cache_size(bytes);
+                        let cache_size_str = format_cache_size(Some(bytes));
                         let _ = crate::db::insert_log(
                             "INFO",
                             &format!("Cache size adjusted to: {}", cache_size_str),

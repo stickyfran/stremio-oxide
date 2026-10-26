@@ -464,6 +464,7 @@ fn show_crash_dialog(
     // Try launching the themed Slint Crash Dialog first.
     if let Ok(dialog) = crate::CrashDialog::new() {
         use slint::ComponentHandle as _;
+        crate::window_style::register_embedded_fonts(dialog.window());
 
         dialog.set_app_version(env!("CARGO_PKG_VERSION").into());
         dialog.set_build_version(env!("STREMIO_BUILD_VERSION").into());
@@ -518,7 +519,7 @@ fn show_crash_dialog(
 
         dialog.on_report_github({
             move || {
-                let github_url = "https://github.com/stremio-native/stremio-native/issues/new?template=bug_report.md&title=%5BCrash%5D+Application+Crash+Report";
+                let github_url = "https://github.com/stickyfran/stremio-oxide/issues/new?template=bug_report.md&title=%5BCrash%5D+Application+Crash+Report";
                 let _ = open::that(github_url);
             }
         });

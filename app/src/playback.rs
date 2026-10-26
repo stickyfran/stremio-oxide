@@ -260,7 +260,9 @@ impl PlaybackSelections {
                         .read()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .get(&stream_selection_id(resource_index, stream_index))
-                        .copied(),
+                        .copied()
+                        .or_else(|| stream_ranking::parse_debrid_availability_from_text(&description))
+                        .or_else(|| stream_ranking::parse_debrid_availability_from_text(&name)),
                 });
             }
         }
@@ -489,7 +491,7 @@ fn find_meta_preview<'a>(model: &'a AppModel, meta_id: &str) -> Option<&'a MetaI
 }
 
 /// Renders the trailer stream as a URL the preview MPV worker can open.
-fn trailer_stream_url(
+pub(crate) fn trailer_stream_url(
     stream: &Stream,
     streaming_server_url: Option<&url::Url>,
     settings: &Settings,

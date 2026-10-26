@@ -215,7 +215,7 @@ jobs:
   linux:
     name: Linux x86_64 (${{ inputs.gcc_arch }})
     if: inputs.targets != 'windows'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - name: Check out this repository

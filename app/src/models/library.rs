@@ -4,10 +4,10 @@ use crate::models::{
     Fingerprint, SyncFingerprint, clear_sync_fingerprint, library_details_video_id,
     sync_fingerprint_changed,
 };
-use crate::{AppModel, AppModelField, MainWindow, NavigationController};
+use crate::{AppModel, AppModelField, MainWindow, NavigationController, NavigationIntent};
 use crate::{LibraryRow, MediaCardItem};
 use core_env::DesktopEnv;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 use std::sync::{Arc, Mutex, OnceLock};
 use stremio_core::{
     models::library_with_filters::{
@@ -223,6 +223,7 @@ pub fn setup(
     ui.on_library_search_changed({
         let runtime = runtime.clone();
         let ui_weak = ui_weak.clone();
+        let navigation = navigation.clone();
         move |query| {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_library_has_next_page(false);
@@ -240,9 +241,9 @@ pub fn setup(
                 let ui_sync = ui_weak.clone();
                 let rt_sync = runtime.clone();
                 if ui.get_library_continue_watching_mode() {
-                    sync(&ui, &model.continue_watching, &ui_sync, &rt_sync, true);
+                    sync(&ui, &model.continue_watching, &ui_sync, &rt_sync, &navigation, true);
                 } else {
-                    sync(&ui, &model.library, &ui_sync, &rt_sync, false);
+                    sync(&ui, &model.library, &ui_sync, &rt_sync, &navigation, false);
                 }
             }
         }
@@ -257,10 +258,33 @@ pub fn setup(
             let id = id.to_string();
             let media_type = media_type.to_string();
             let video_id = (!video_id.is_empty()).then(|| video_id.to_string());
-            if let Some(ui) = ui_weak.upgrade() {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            if ui.get_library_preview_enabled() {
+                let transition = navigation.dispatch(NavigationIntent::SelectLibraryPreview {
+                    media_id: id.clone(),
+                });
+                if transition.changed {
+                    load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
+                }
+            } else {
                 open_details_route(&ui, &runtime, &navigation, &id);
+                load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
             }
-            load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
+        }
+    });
+
+    ui.on_library_toggle_preview_enabled({
+        let ui_weak = ui_weak.clone();
+        move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                let enabled = ui.get_library_preview_enabled();
+                let mut cfg = crate::config::load_config();
+                cfg.library_preview_enabled = enabled;
+                crate::config::save_config(&cfg);
+                tracing::info!(enabled, "library preview enabled toggled");
+            }
         }
     });
 
@@ -342,6 +366,7 @@ pub fn sync<F: LibraryFilter>(
     library: &LibraryWithFilters<F>,
     _ui_weak: &slint::Weak<MainWindow>,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
+    navigation: &NavigationController,
     continue_watching_mode: bool,
 ) {
     let pagination_scope = if continue_watching_mode {
@@ -401,7 +426,11 @@ pub fn sync<F: LibraryFilter>(
         }
 
         let metrics = crate::models::media_grid_metrics(ui);
-        let columns = metrics.columns;
+        let columns = if ui.get_library_preview_enabled() {
+            metrics.columns.saturating_sub(2).max(4)
+        } else {
+            metrics.columns
+        };
 
         (raw_items, columns)
     };
@@ -411,6 +440,7 @@ pub fn sync<F: LibraryFilter>(
     fingerprint.str(&normalized_query);
     fingerprint.bool(authenticated);
     fingerprint.bool(continue_watching_mode);
+    fingerprint.bool(ui.get_library_preview_enabled());
     if let Some(selected) = &library.selected {
         fingerprint.optional_str(selected.request.r#type.as_deref());
         fingerprint.str(sort_label(&selected.request.sort));
@@ -444,7 +474,7 @@ pub fn sync<F: LibraryFilter>(
     let visible_items = {
         let _span = tracing::info_span!("map_library_cards").entered();
         let mut visible_items = Vec::with_capacity(raw_items.len());
-        for item in raw_items {
+        for item in &raw_items {
             let progress = item.progress();
             visible_items.push(MediaCardItem {
                 id: item.id.as_str().into(),
@@ -490,18 +520,68 @@ pub fn sync<F: LibraryFilter>(
 
     ui.set_library_column_count(columns as i32);
 
-    let rows_model = {
+    {
         let _span = tracing::info_span!("chunk_library_rows").entered();
         let chunked = crate::models::chunk_vector_owned(visible_items, columns);
-        let mut slint_rows = Vec::with_capacity(chunked.len());
-        for row_items in chunked {
-            let row_model = slint::VecModel::from(row_items);
-            slint_rows.push(LibraryRow {
-                cols: slint::ModelRc::new(row_model),
-            });
+        let existing = ui.get_library_rows();
+        if let Some(vec_model) = existing.as_any().downcast_ref::<slint::VecModel<LibraryRow>>() {
+            let existing_len = vec_model.row_count();
+            let common_len = existing_len.min(chunked.len());
+            for (index, row_items) in chunked.iter().take(common_len).enumerate() {
+                let updated_in_place = vec_model
+                    .row_data(index)
+                    .is_some_and(|existing_row| {
+                        crate::models::update_media_card_cols_in_place(&existing_row.cols, row_items)
+                    });
+                if !updated_in_place {
+                    vec_model.set_row_data(
+                        index,
+                        LibraryRow {
+                            cols: slint::ModelRc::new(slint::VecModel::from(row_items.clone())),
+                        },
+                    );
+                }
+            }
+            if chunked.len() > existing_len {
+                vec_model.extend(chunked.into_iter().skip(existing_len).map(|row_items| {
+                    LibraryRow {
+                        cols: slint::ModelRc::new(slint::VecModel::from(row_items)),
+                    }
+                }));
+            } else if chunked.len() < existing_len {
+                for index in (chunked.len()..existing_len).rev() {
+                    vec_model.remove(index);
+                }
+            }
+        } else {
+            let slint_rows: Vec<LibraryRow> = chunked
+                .into_iter()
+                .map(|row_items| LibraryRow {
+                    cols: slint::ModelRc::new(slint::VecModel::from(row_items)),
+                })
+                .collect();
+            ui.set_library_rows(slint::ModelRc::new(slint::VecModel::from(slint_rows)));
         }
-        slint::VecModel::from(slint_rows)
-    };
+    }
 
-    ui.set_library_rows(slint::ModelRc::new(rows_model));
+    // Auto-select the first item for preview on library load if no item is selected yet
+    if navigation.snapshot().library_preview_id.is_none()
+        && ui.get_library_preview_enabled()
+        && let Some(first_item) = raw_items.first()
+    {
+        let media_id = first_item.id.clone();
+        let media_type = first_item.r#type.clone();
+        let video_id = first_item.behavior_hints.default_video_id.clone();
+        let transition = navigation.dispatch(NavigationIntent::SelectLibraryPreview {
+            media_id: media_id.clone(),
+        });
+        if transition.changed {
+            crate::models::details::load_meta_details_for_video(
+                runtime,
+                media_id,
+                Some(media_type),
+                video_id,
+            );
+        }
+    }
 }

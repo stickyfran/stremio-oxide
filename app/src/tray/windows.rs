@@ -73,6 +73,7 @@ pub(super) struct TrayView(Weak<TrayPanel>);
 
 pub(super) fn create(actions: TrayActions) -> anyhow::Result<Tray> {
     let panel = TrayPanel::new()?;
+    crate::window_style::register_embedded_fonts(panel.window());
     panel.set_version(env!("CARGO_PKG_VERSION").into());
     panel.set_update_version(env!("CARGO_PKG_VERSION").into());
 

@@ -481,10 +481,12 @@ fn schedule_access_touch(cache_key: String, now: i64) {
         let Ok(conn) = get_db_conn().await else {
             return;
         };
+        // Evitar tormenta de UPDATEs: actualizar solo si accessed_at es anterior a 300 segundos (5 min)
+        let min_timestamp = now - 300;
         if let Err(error) = conn
             .execute(
-                "UPDATE http_cache SET accessed_at = ? WHERE cache_key = ?",
-                (now, cache_key),
+                "UPDATE http_cache SET accessed_at = ? WHERE cache_key = ? AND accessed_at < ?",
+                (now, cache_key, min_timestamp),
             )
             .await
         {

@@ -512,7 +512,64 @@ export component DetailsPage inherits Rectangle {
                 }
             }
 
-            if ((!root.is-series || root.in-stream-view) && root.streams.length == 0) : VerticalLayout {
+            // =========================================================================
+            // FASE 1: CARGA INICIAL (0 streams recibidos y búsqueda en progreso)
+            // =========================================================================
+            if ((!root.is-series || root.in-stream-view)
+                && root.streams.length == 0
+                && (root.stream-loading-count > 0 || root.loading)) : VerticalLayout {
+                vertical-stretch: 1;
+                alignment: center;
+                spacing: 1.5 * root.unit;
+                padding: 2 * root.unit;
+
+                // Animación de pulso continuo autónoma basada en animation-tick()
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 4 * root.unit;
+                        height: 4 * root.unit;
+                        border-radius: 2 * root.unit;
+                        background: Theme.accent.with-alpha(0.15);
+
+                        Rectangle {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 2.2 * root.unit;
+                            height: 2.2 * root.unit;
+                            border-radius: 1.1 * root.unit;
+                            background: Theme.accent;
+                            // Pulso continuo suave entre 0.25 y 1.0 sin timers externos
+                            opacity: 0.25 + 0.75 * abs(sin(animation-tick() / 800ms * 180deg));
+                        }
+                    }
+                }
+
+                Text {
+                    text: root.stream-loading-count > 0
+                        ? @tr("Buscando streams en addons ({} pendientes)...", root.stream-loading-count)
+                        : @tr("Cargando streams...");
+                    color: Theme.text-primary;
+                    font-size: 1.1 * root.unit;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: @tr("Consultando proveedores configurados...");
+                    color: Theme.text-muted;
+                    font-size: 0.9 * root.unit;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // =========================================================================
+            // FASE 2: ESTADO VACÍO GENUINO (Todos los addons terminaron y hay 0 streams)
+            // =========================================================================
+            if ((!root.is-series || root.in-stream-view)
+                && root.streams.length == 0
+                && root.stream-loading-count == 0
+                && !root.loading) : VerticalLayout {
                 vertical-stretch: 1;
                 padding-top: root.unit;
                 padding-bottom: root.unit;
@@ -571,6 +628,9 @@ export component DetailsPage inherits Rectangle {
                 }
             }
 
+            // =========================================================================
+            // FASE 3: LISTA DE STREAMS DISPONIBLES (Progresiva)
+            // =========================================================================
             if ((!root.is-series || root.in-stream-view) && root.streams.length > 0) : ListView {
                 vertical-stretch: 1;
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
@@ -580,8 +640,6 @@ export component DetailsPage inherits Rectangle {
                         root.active-stream-provider == "All"
                             || stream.provider == root.active-stream-provider;
                     width: parent.width;
-                    // The additional 0.1rem preserves the web row gap while
-                    // allowing ListView to virtualize off-screen streams.
                     height: self.matches-provider ? 5.8 * root.unit : 0px;
                     clip: true;
                     background: transparent;
@@ -595,7 +653,7 @@ export component DetailsPage inherits Rectangle {
                         unit: root.unit;
                         name: stream.name;
                         description: stream.description;
-                        score-label: root.ranking-mode == "Original" ? "" : (stream.score >= 0 ? "+" + stream.score : "" + stream.score);
+                        score-label: "";
                         score-details: stream.score-summary;
                         filtered: stream.filtered;
                         thumbnail: stream.thumbnail;
@@ -611,19 +669,40 @@ export component DetailsPage inherits Rectangle {
                 }
             }
 
-            if ((!root.is-series || root.in-stream-view) && root.stream-loading-count > 0) : VerticalLayout {
-                height: 4 * root.unit;
-                spacing: 0.75 * root.unit;
-                Text {
-                    text: @tr("STREMIO_TV_STREAMS_STILL_LOADING" => "{} addon is still loading...", root.stream-loading-count);
-                    color: Theme.text-primary;
-                    font-size: root.unit;
-                    horizontal-alignment: center;
-                }
-                Rectangle {
-                    height: 0.3 * root.unit;
-                    border-radius: self.height / 2;
-                    background: Theme.accent;
+            // =========================================================================
+            // BADGE DE CARGA EN SEGUNDO PLANO (Solo si ya hay streams pero faltan addons)
+            // =========================================================================
+            if ((!root.is-series || root.in-stream-view)
+                && root.streams.length > 0
+                && root.stream-loading-count > 0) : Rectangle {
+                height: 2.8 * root.unit;
+                border-radius: 6px;
+                background: Theme.control-background;
+                border-width: 1px;
+                border-color: Theme.divider;
+
+                HorizontalLayout {
+                    padding-left: root.unit;
+                    padding-right: root.unit;
+                    spacing: 0.75 * root.unit;
+                    alignment: center;
+
+                    // Indicador circular con centrado vertical explícito y pulso dinámico
+                    Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: Theme.accent;
+                        opacity: 0.35 + 0.65 * abs(sin(animation-tick() / 700ms * 180deg));
+                    }
+
+                    Text {
+                        text: @tr("Buscando más streams en {} addons...", root.stream-loading-count);
+                        color: Theme.text-secondary;
+                        font-size: 0.85 * root.unit;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }

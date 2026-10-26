@@ -24,6 +24,7 @@ export component Slider inherits Rectangle {
     in property <brush> thumb-border-color: transparent;
     in property <length> thumb-border-width: 0px;
     out property <bool> has-focus: slider-focus.has-focus;
+    out property <bool> has-hover: slider-area.has-hover;
     callback changed(float);
     callback released(float);
     // Compatibility names for the web component's callback vocabulary.

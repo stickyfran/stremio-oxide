@@ -36,6 +36,7 @@ use stremio_core::{
 };
 
 use core_env::DesktopEnv;
+use slint::winit_030::WinitWindowAccessor;
 
 pub mod backup;
 mod color_picker;
@@ -96,11 +97,32 @@ pub use discord::DiscordRpc;
 pub use navigation::{DetailsPresentation, NavigationController, NavigationIntent, Tab};
 
 fn main() -> anyhow::Result<()> {
+    // Configure mimalloc for minimal memory footprint and immediate page decommit
+    if std::env::var_os("MIMALLOC_ARENA_EAGER_COMMIT").is_none() {
+        unsafe { std::env::set_var("MIMALLOC_ARENA_EAGER_COMMIT", "0"); }
+    }
+    if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+        unsafe { std::env::set_var("MIMALLOC_PURGE_DELAY", "0"); }
+    }
+    if std::env::var_os("MIMALLOC_PURGE_DECOMMITS").is_none() {
+        unsafe { std::env::set_var("MIMALLOC_PURGE_DECOMMITS", "1"); }
+    }
+
     if crash_handler::run_helper_from_args()? {
         return Ok(());
     }
 
-    run_application()
+    let result = run_application();
+    match result {
+        Ok(()) => {
+            tracing::info!("stremio-native exited cleanly, terminating process");
+            std::process::exit(0);
+        }
+        Err(ref error) => {
+            tracing::error!(%error, "stremio-native exited with error");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[tokio::main]
@@ -121,7 +143,7 @@ async fn run_application() -> anyhow::Result<()> {
     // A forwarded process exits before touching the primary process's log.
     let app_paths = paths::initialize()?;
     let _guards = logger::init_logger(&profile, app_paths)?;
-    tracing::info!(data_root = %app_paths.root().display(), "Starting Stremio-Rust GUI client...");
+    tracing::info!(data_root = %app_paths.root().display(), "Starting Stremio Oxide GUI client...");
 
     let res = run_app(&profile, primary_instance, startup_started).await;
     if let Err(ref e) = res {
@@ -141,21 +163,26 @@ async fn run_app(
         initial_command,
         commands,
         start_hidden,
+        listener_task,
     } = primary_instance;
 
     slint::BackendSelector::new()
         .backend_name("winit".into())
-        .renderer_name("skia-opengl".into())
-        .require_opengl()
+        .renderer_name("femtovg".into())
         .select()
-        .context("could not select Slint's Skia OpenGL renderer")?;
+        .context("could not select Slint's FemtoVG renderer")?;
     tracing::info!(
         backend = "winit",
-        renderer = "skia-opengl",
-        opengl_version_policy = "highest-available-desktop",
+        renderer = "femtovg",
         "Slint backend selected"
     );
-    let initial_config = config::AppConfig::default();
+
+    // Initialize database and load persisted configuration before creating the window
+    if let Err(error) = lock_handler::init_db_with_lock_handling(paths::get().database()).await {
+        tracing::warn!(%error, "failed early database initialization; continuing with defaults");
+    }
+    config::init_config().await;
+    let initial_config = config::load_config();
 
     // Icon fonts are registered/embedded at compile time via app.slint imports.
     tracing::info!("Icon fonts registered at compile time.");
@@ -166,7 +193,30 @@ async fn run_app(
 
     // 5. Initialize Slint MainWindow UI
     let ui = MainWindow::new()?;
+    window_style::register_embedded_fonts(ui.window());
     tracing::info!("MainWindow created");
+
+    // Restore persisted window geometry before initial paint.
+    // Always apply the last floating window size first so `WinitWindowAdapter`
+    // marks `has_explicit_size = true` (preventing `preferred-width: 1280px`
+    // from overriding the window on `show()`), then set `maximized` via Slint's
+    // `Window::set_maximized` so pre-creation `WindowAttributes` carry the flag.
+    if initial_config.window_width >= 800 && initial_config.window_height >= 600 {
+        let _ = ui.window().with_winit_window(|w| {
+            let _ = w.request_inner_size(slint::winit_030::winit::dpi::PhysicalSize::new(
+                initial_config.window_width,
+                initial_config.window_height,
+            ));
+        });
+        ui.window().set_size(slint::PhysicalSize::new(
+            initial_config.window_width,
+            initial_config.window_height,
+        ));
+    }
+    if initial_config.window_maximized {
+        ui.window().set_maximized(true);
+        let _ = ui.window().with_winit_window(|w| w.set_maximized(true));
+    }
 
     // Apply Dynamic Theme to Slint Global Theme Singleton
     apply_theme(&ui, &initial_config);
@@ -203,10 +253,17 @@ async fn run_app(
     let (installer_request, installer_launcher) = updater::installer_handoff();
     let startup_ui = ui.clone_strong();
     let startup_navigation = navigation.clone();
+    let initial_maximized = initial_config.window_maximized;
     let startup_handle = slint::spawn_local(async move {
         // Ensure the native event loop can paint the loading shell before even
         // small synchronous setup such as icon lookup or tray creation begins.
         tokio::time::sleep(Duration::from_millis(1)).await;
+        if initial_maximized && !start_hidden {
+            startup_ui.window().set_maximized(true);
+            let _ = startup_ui
+                .window()
+                .with_winit_window(|w| w.set_maximized(true));
+        }
         let tray = match tray::setup(&startup_ui, &startup_navigation) {
             Ok(tray) => Some(tray),
             Err(error) => {
@@ -253,13 +310,31 @@ async fn run_app(
         startup_handle.abort();
         None
     };
+    window_events::persist_window_geometry(ui.window());
     let hide_result = ui.hide();
     drop(ui);
 
     let session_result = match startup_result {
         Some(result) => result.and_then(AppSession::shutdown),
-        None => Ok(()),
+        None => {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    let _ = config::save_config_async(&config::load_config()).await;
+                    if tokio::time::timeout(
+                        std::time::Duration::from_millis(2000),
+                        db::close_and_checkpoint_db(),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        tracing::warn!("database WAL checkpoint timed out during shutdown");
+                    }
+                });
+            });
+            Ok(())
+        }
     };
+    listener_task.abort();
     let installer_result = installer_launcher.launch_pending();
 
     ui_result?;
@@ -269,7 +344,7 @@ async fn run_app(
 }
 
 struct AppSession {
-    server_handle: stream_server::ServerHandle,
+    server_handle: stremio_runtime::ServerHandle,
     native_playback: Option<mpv_integration::NativePlayback>,
     command_task: tokio::task::JoinHandle<()>,
     tray: Option<tray::Tray>,
@@ -291,18 +366,27 @@ impl AppSession {
             None => Ok(()),
         };
         if let Err(error) = self.server_handle.shutdown() {
-            tracing::warn!(%error, "stream-server was already stopped");
+            tracing::warn!(%error, "stremio-runtime was already stopped");
         }
-        let server_result = self.server_handle.join();
+        let server_result = tokio::task::block_in_place(|| self.server_handle.join());
 
         playback_result?;
         match server_result? {
-            Some(source) => tracing::info!(?source, "stream-server stopped"),
-            None => tracing::info!("stream-server stopped"),
+            Some(source) => tracing::info!(?source, "stremio-runtime stopped"),
+            None => tracing::info!("stremio-runtime stopped"),
         }
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                db::close_and_checkpoint_db().await;
+                let _ = config::save_config_async(&config::load_config()).await;
+                if tokio::time::timeout(
+                    std::time::Duration::from_millis(2000),
+                    db::close_and_checkpoint_db(),
+                )
+                .await
+                .is_err()
+                {
+                    tracing::warn!("database WAL checkpoint timed out during shutdown");
+                }
             });
         });
         Ok(())
@@ -362,7 +446,6 @@ async fn finish_startup(
 ) -> anyhow::Result<AppSession> {
     let ui_weak = ui.as_weak();
 
-    lock_handler::init_db_with_lock_handling(paths::get().database()).await?;
     let credential_store: Arc<dyn credential_store::CredentialStore> =
         Arc::new(credential_store::PlatformCredentialStore::default());
     core_env::install_credential_store(credential_store.clone());
@@ -377,8 +460,8 @@ async fn finish_startup(
         .context("could not load local profiles")?;
     let active_profile_id = select_startup_profile(&ui, local_profiles, active_profile_id).await?;
     core_env::set_active_profile_scope(active_profile_id.as_str());
-    config::init_config().await;
     let mut config = config::load_config();
+
     download_manager.set_bandwidth_limit(
         (config.download_bandwidth_limit_bps > 0).then_some(config.download_bandwidth_limit_bps),
     );
@@ -440,25 +523,32 @@ async fn finish_startup(
         navigation.dispatch_and_project(&ui, NavigationIntent::SelectTab(active_tab));
     }
 
-    let server_cfg = stream_server::ServerConfig {
+    let server_cfg = stremio_runtime::ServerConfig {
         http_addr: std::net::SocketAddr::from(([127, 0, 0, 1], config.torrent_port)),
         config_dir: Some(paths::get().streaming_server().to_path_buf()),
         cache_dir: Some(paths::get().streaming_server_cache().to_path_buf()),
         print_startup: true,
         init_logging: false,
-        ..stream_server::ServerConfig::embedded()
+        ..Default::default()
     };
-    tracing::info!("launching stream-server engine");
-    let server_task = tokio::task::spawn_blocking(move || stream_server::start(server_cfg));
+    tracing::info!("launching stremio-runtime engine");
+    let server_task = tokio::spawn(stremio_runtime::start(server_cfg));
     let storage_task = tokio::spawn(load_startup_storage());
     let playback_files_task = tokio::spawn(mpv_integration::prepare_playback_files());
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            crate::event_loop::trim_process_memory();
+        }
+    });
 
     // Await these independent tasks from Slint's local executor so the event
     // loop keeps painting and processing input while the loading UI is visible.
     let server_handle = server_task
         .await
-        .map_err(|error| anyhow::anyhow!("stream-server startup task failed: {error}"))?
-        .map_err(|error| anyhow::anyhow!("failed to start stream-server: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("stremio-runtime startup task failed: {error}"))?
+        .map_err(|error| anyhow::anyhow!("failed to start stremio-runtime: {error}"))?;
     let mut startup_storage = storage_task
         .await
         .map_err(|error| anyhow::anyhow!("storage startup task failed: {error}"))?;
@@ -2021,9 +2111,9 @@ fn sync_tab_from_model(
                 .map(|model| (model.library.clone(), model.continue_watching.clone()));
             if let Some((library, continue_watching_library)) = snapshot {
                 if continue_watching {
-                    models::library::sync(ui, &continue_watching_library, ui_weak, runtime, true);
+                    models::library::sync(ui, &continue_watching_library, ui_weak, runtime, navigation, true);
                 } else {
-                    models::library::sync(ui, &library, ui_weak, runtime, false);
+                    models::library::sync(ui, &library, ui_weak, runtime, navigation, false);
                 }
             }
         }

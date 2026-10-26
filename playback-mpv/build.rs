@@ -73,6 +73,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn configure_windows_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    let profile_dir = cargo_profile_dir()?;
+    if let Some(directory) = env::var_os("STREMIO_MPV_DIR") {
+        let sdk_dir = PathBuf::from(directory);
+        let library_dir = if sdk_dir.join("lib").is_dir() {
+            sdk_dir.join("lib")
+        } else {
+            sdk_dir.clone()
+        };
+        println!("cargo:rustc-link-search=native={}", library_dir.display());
+        println!("cargo:rustc-link-lib=dylib=mpv");
+        println!("cargo:rerun-if-env-changed=STREMIO_MPV_DIR");
+
+        for candidate in [
+            sdk_dir.join("bin").join("libmpv-2.dll"),
+            sdk_dir.join("libmpv-2.dll"),
+            library_dir.join("libmpv-2.dll"),
+        ] {
+            if candidate.is_file() {
+                deploy_runtime_library(&candidate, &profile_dir)?;
+                deploy_runtime_library(&candidate, &profile_dir.join("deps"))?;
+                break;
+            }
+        }
+        return Ok(());
+    }
+
     let target = env::var("TARGET")?;
     if target != WINDOWS_TARGET {
         return Err(io::Error::other(format!(

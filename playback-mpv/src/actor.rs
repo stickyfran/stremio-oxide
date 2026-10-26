@@ -533,10 +533,10 @@ impl PlaybackRuntime {
         client.set_option("cache", "no")?;
         client.set_option("cache-pause", "yes")?;
         client.set_option("cache-pause-initial", "no")?;
-        client.set_option("cache-pause-wait", "0.5")?;
-        client.set_option("cache-secs", "60")?;
-        client.set_option("demuxer-max-bytes", "300000000")?;
-        client.set_option("vd-lavc-threads", "0")?;
+        client.set_option("cache-secs", "30")?;
+        client.set_option("demuxer-max-bytes", "67108864")?; // 64 MiB
+        client.set_option("demuxer-max-back-bytes", "33554432")?; // 32 MiB
+        client.set_option("hr-seek", "yes")?;
         client.set_option("ad-lavc-threads", "0")?;
         client.set_option("audio-fallback-to-null", "yes")?;
         client.set_option("audio-client-name", "Stremio")?;
@@ -1583,15 +1583,16 @@ fn drain_events(
     running: &mut bool,
     spatial_audio: &SpatialAudioRuntime,
 ) {
+    let mut state_dirty = false;
     loop {
         let event = client.wait_event(0.0);
         if event.is_null() {
-            return;
+            break;
         }
         // SAFETY: MPV guarantees the event pointer until the next wait call.
         let event = unsafe { &*event };
         match event.event_id {
-            EVENT_NONE => return,
+            EVENT_NONE => break,
             EVENT_COMMAND_REPLY if event.error < 0 => {
                 let error = client.api.operation_error(event.error).to_string();
                 sink(PlaybackEvent::Warning(error));
@@ -1601,7 +1602,7 @@ fn drain_events(
                 state.loading = true;
                 state.loaded = false;
                 state.cache_buffering_percent = 0.0;
-                sink(PlaybackEvent::State(Arc::new(state.clone())));
+                state_dirty = true;
             }
             EVENT_FILE_LOADED => {
                 state.loading = false;
@@ -1610,11 +1611,11 @@ fn drain_events(
                     spatial_audio.send_live_controls();
                 }
                 sink(PlaybackEvent::FileLoaded);
-                sink(PlaybackEvent::State(Arc::new(state.clone())));
+                state_dirty = true;
             }
             EVENT_PLAYBACK_RESTART => {
                 state.buffering = false;
-                sink(PlaybackEvent::State(Arc::new(state.clone())));
+                state_dirty = true;
             }
             EVENT_PROPERTY_CHANGE => {
                 let update = update_property(event, state);
@@ -1630,7 +1631,7 @@ fn drain_events(
                     }),
                     PropertyUpdate::StateOnly => {}
                 }
-                sink(PlaybackEvent::State(Arc::new(state.clone())));
+                state_dirty = true;
             }
             EVENT_CLIENT_MESSAGE if !event.data.is_null() => {
                 // SAFETY: mpv guarantees the data pointer is a valid
@@ -1649,7 +1650,10 @@ fn drain_events(
                 }
                 sink(PlaybackEvent::ClientMessage(args));
             }
-            EVENT_END_FILE => handle_end_file(client, event, state, sink),
+            EVENT_END_FILE => {
+                handle_end_file(client, event, state, sink);
+                state_dirty = false;
+            }
             EVENT_QUEUE_OVERFLOW => sink(PlaybackEvent::Warning(
                 "MPV event queue overflowed; playback state may be stale".to_owned(),
             )),
@@ -1659,6 +1663,9 @@ fn drain_events(
             }
             _ => {}
         }
+    }
+    if state_dirty {
+        sink(PlaybackEvent::State(Arc::new(state.clone())));
     }
 }
 

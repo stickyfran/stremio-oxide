@@ -464,6 +464,7 @@ fn normalize_enrichment(
         .get("data")
         .and_then(|data| data.get("attributes"))
         .or_else(|| value.get("movie_results").and_then(|items| items.get(0)))
+        .or_else(|| value.get("tv_results").and_then(|items| items.get(0)))
         .unwrap_or(value);
     let mut external_ids = HashMap::new();
     if let Some(id) = data.get("id").and_then(serde_json::Value::as_u64) {

@@ -4,8 +4,9 @@ import { MediaCardItem } from "../components/media_card.slint";
 import { MediaCardGridRow, MediaGridPlaceholder } from "../components/media_carousel.slint";
 import { EmptyState } from "../components/feedback.slint";
 import { SelectField } from "../components/select.slint";
-import { ButtonSurface, PillButton } from "../components/button.slint";
+import { ButtonSurface, PillButton, IconAction } from "../components/button.slint";
 import { NativeTextField } from "../components/text_input.slint";
+import { MediaPreviewDrawer } from "../components/preview_drawer.slint";
 
 export struct LibraryRow {
     cols: [MediaCardItem],
@@ -31,6 +32,48 @@ export component LibraryPage inherits Rectangle {
     in property <bool> enable-hover-preview: false;
     in property <duration> hover-preview-delay: 1200ms;
 
+    in-out property <bool> preview-enabled: true;
+    in property <bool> has-preview: false;
+    in property <string> preview-title: "";
+    in property <image> preview-logo;
+    in property <string> preview-description: "";
+    in property <string> preview-rating: "";
+    in property <string> preview-year: "";
+    in property <string> preview-runtime: "";
+    in property <[string]> preview-genres: [];
+    in property <[string]> preview-cast: [];
+    in property <[string]> preview-directors: [];
+    in property <image> preview-poster;
+    in property <bool> preview-is-in-library: true;
+    in property <bool> preview-is-watched: false;
+    in property <bool> preview-has-trailer: false;
+    in property <string> preview-trailer-selection-id: "";
+    in property <string> preview-rt-rating: "";
+    in property <string> preview-metacritic-rating: "";
+    in property <bool> preview-ratings-loading: false;
+    in property <image> preview-video-frame;
+    in property <bool> preview-has-video-frame: false;
+    in property <bool> preview-video-loading: false;
+    in property <bool> preview-video-playing: false;
+    in property <bool> preview-video-muted: true;
+    in property <bool> preview-autoplay-enabled: false;
+    in-out property <float> preview-video-progress: 0.0;
+    in property <string> preview-video-time-label: "";
+
+    callback toggle-preview-enabled();
+    callback play-preview;
+    callback toggle-library-preview;
+    callback toggle-watched-preview;
+    callback play-trailer-preview(string);
+    callback toggle-trailer-playback;
+    callback toggle-video-muted;
+    callback toggle-autoplay;
+    callback maximize-trailer;
+    callback seek-video-relative(float);
+    callback seek-video-progress(float);
+    callback close-preview-drawer;
+    callback metadata-filter-selected(string);
+
     callback hover-preview-requested(string, string, length, length, length, length);
     callback hover-preview-dismissed();
     callback type-changed(string);
@@ -47,6 +90,9 @@ export component LibraryPage inherits Rectangle {
     callback local-rescan;
     callback local-play(string);
     in-out property <length> scroll-y: 0px;
+    function reset-scroll() {
+        root.scroll-y = 0px;
+    }
 
     private property <bool> pagination-latched: false;
     private property <int> pagination-content-length: root.rows.length;
@@ -73,7 +119,9 @@ export component LibraryPage inherits Rectangle {
     in property <length> unit: Theme.root-font-size;
     in-out property <bool> type-open: false;
     in-out property <bool> sort-open: false;
-    property <length> grid-width: root.width - 3 * root.unit;
+    property <length> drawer-width: 29 * root.unit;
+    property <length> effective-drawer-width: (!root.local-mode && root.preview-enabled && root.has-preview && root.preview-title != "") ? root.drawer-width : 0px;
+    property <length> grid-width: root.width - root.effective-drawer-width - 3 * root.unit;
     property <length> card-width: root.column-count > 0
         ? (root.grid-width - (root.column-count - 1) * 0.5 * root.unit) / root.column-count
         : root.grid-width;
@@ -81,10 +129,14 @@ export component LibraryPage inherits Rectangle {
 
     background: transparent;
 
-    VerticalLayout {
+    HorizontalLayout {
         spacing: 0px;
 
-        if (root.authenticated || root.local-mode) : Rectangle {
+        catalog := VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 0px;
+
+            if (root.authenticated || root.local-mode) : Rectangle {
             height: 5.75 * root.unit;
             z: 1000;
 
@@ -104,6 +156,7 @@ export component LibraryPage inherits Rectangle {
                         root.sort-open = false;
                     }
                     selected(value) => {
+                        root.reset-scroll();
                         root.type-open = false;
                         root.active-type = value;
                         root.type-changed(value);
@@ -151,6 +204,7 @@ export component LibraryPage inherits Rectangle {
                         border-color: Theme.surface-light;
                         accessible-name: sort-label;
                         clicked => {
+                            root.reset-scroll();
                             root.active-sort = sort-label;
                             root.sort-changed(sort-label);
                         }
@@ -160,6 +214,48 @@ export component LibraryPage inherits Rectangle {
                             font-size: 0.9 * root.unit;
                             font-weight: sort-label == root.active-sort ? 700 : 500;
                             horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Spacer que empuja a la extrema derecha
+                Rectangle { horizontal-stretch: 1; }
+
+                // Botón indicativo coherente a la derecha de todo
+                ButtonSurface {
+                    height: 3.25 * root.unit;
+                    border-radius: self.height / 2;
+                    background: root.preview-enabled
+                        ? Theme.primary-accent
+                        : (self.has-hover ? Theme.overlay-hover : Theme.overlay-color);
+                    border-width: self.has-focus ? Theme.focus-outline-size : 0px;
+                    border-color: Theme.surface-light;
+                    accessible-name: root.preview-enabled ? @tr("Hide details panel") : @tr("Show details panel");
+                    clicked => {
+                        root.preview-enabled = !root.preview-enabled;
+                        root.toggle-preview-enabled();
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 1.2 * root.unit;
+                        padding-right: 1.2 * root.unit;
+                        spacing: 0.6 * root.unit;
+                        alignment: center;
+
+                        Image {
+                            width: 1.3 * root.unit;
+                            height: 1.3 * root.unit;
+                            source: @image-url("../assets/images/icons/details.svg");
+                            colorize: Theme.primary-foreground;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.preview-enabled ? @tr("Hide Preview") : @tr("Show Preview");
+                            color: Theme.primary-foreground;
+                            font-size: 0.85 * root.unit;
+                            font-weight: 600;
                             vertical-alignment: center;
                         }
                     }
@@ -278,7 +374,7 @@ export component LibraryPage inherits Rectangle {
 
         if ((root.local-mode || root.authenticated) && !root.loading && root.visible-rows.length > 0) : library-scroll := ListView {
             vertical-stretch: 1;
-            viewport-width: root.width;
+            viewport-width: parent.width;
             viewport-y <=> root.scroll-y;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
             changed viewport-y => {
@@ -289,7 +385,7 @@ export component LibraryPage inherits Rectangle {
             }
 
             for row[row-index] in root.visible-rows : Rectangle {
-                width: root.width;
+                width: parent.width;
                 height: root.card-height + 0.5 * root.unit;
 
                 init => {
@@ -335,5 +431,88 @@ export component LibraryPage inherits Rectangle {
                 }
             }
         }
+
+        if (!root.local-mode && root.pagination-latched && root.has-next-page) : Rectangle {
+            height: 3 * root.unit;
+            background: transparent;
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 8.5 * root.unit;
+                height: 2.2 * root.unit;
+                background: Theme.background.with-alpha(0.85);
+                border-radius: self.height / 2;
+                border-width: 1px;
+                border-color: Theme.divider;
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 0.6 * root.unit;
+                    padding-left: root.unit;
+                    padding-right: root.unit;
+
+                    Image {
+                        width: 1.1 * root.unit;
+                        height: 1.1 * root.unit;
+                        source: @image-url("../assets/images/icons/hourglass.svg");
+                        colorize: Theme.primary-accent;
+                        image-fit: contain;
+                    }
+                    Text {
+                        text: @tr("Loading...");
+                        color: Theme.text-primary;
+                        font-size: 0.85 * root.unit;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
     }
+
+    if (!root.local-mode) : MediaPreviewDrawer {
+        unit: root.unit;
+        drawer-width: root.drawer-width;
+        is-open: root.preview-enabled && root.has-preview && root.preview-title != "";
+        title: root.preview-title;
+        logo: root.preview-logo;
+        poster: root.preview-poster;
+        description: root.preview-description;
+        year: root.preview-year;
+        runtime: root.preview-runtime;
+        genres: root.preview-genres;
+        cast: root.preview-cast;
+        directors: root.preview-directors;
+        rating-imdb: root.preview-rating;
+        rating-rt: root.preview-rt-rating;
+        rating-metacritic: root.preview-metacritic-rating;
+        ratings-loading: root.preview-ratings-loading;
+        video-frame: root.preview-video-frame;
+        has-video-frame: root.preview-has-video-frame;
+        video-loading: root.preview-video-loading;
+        video-playing: root.preview-video-playing;
+        video-muted: root.preview-video-muted;
+        has-trailer: root.preview-has-trailer;
+        autoplay-enabled: root.preview-autoplay-enabled;
+        video-progress <=> root.preview-video-progress;
+        video-time-label: root.preview-video-time-label;
+        in-library: root.preview-is-in-library;
+        is-watched: root.preview-is-watched;
+
+        play-full-details => { root.play-preview(); }
+        toggle-library => { root.toggle-library-preview(); }
+        toggle-watched => { root.toggle-watched-preview(); }
+        close-drawer => {
+            root.preview-enabled = false;
+            root.close-preview-drawer();
+        }
+        toggle-trailer-playback => { root.toggle-trailer-playback(); }
+        toggle-video-muted => { root.toggle-video-muted(); }
+        toggle-autoplay => { root.toggle-autoplay(); }
+        maximize-trailer => { root.maximize-trailer(); }
+        seek-video-relative(offset) => { root.seek-video-relative(offset); }
+        seek-video-progress(progress) => { root.seek-video-progress(progress); }
+        metadata-filter-selected(val) => { root.metadata-filter-selected(val); }
+    }
+}
 }

@@ -22,8 +22,6 @@ mod http_cache;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static TOKIO_HANDLE: OnceLock<Handle> = OnceLock::new();
-#[cfg(feature = "in-process")]
-static IN_PROCESS_ROUTER: OnceLock<axum::Router> = OnceLock::new();
 type SequentialFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 const SEQUENTIAL_QUEUE_CAPACITY: usize = 64;
 const SEQUENTIAL_WORKER_STACK_BYTES: usize = 512 * 1024;
@@ -85,18 +83,43 @@ fn submit_sequential(
     match sender.try_send(future) {
         Ok(()) => Ok(()),
         Err(TrySendError::Full(future)) => {
-            if SEQUENTIAL_SATURATED
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-            {
-                tracing::warn!(
-                    capacity = SEQUENTIAL_QUEUE_CAPACITY,
-                    "sequential core executor saturated; applying producer backpressure"
-                );
+            // Si la cola secuencial está llena y se intenta encolar desde un hilo
+            // de worker de Tokio, hacer `sender.send()` bloquearía el worker thread,
+            // lo cual arriesga deadlock si `run_sequential` necesita ese worker thread.
+            // En ese caso, o si estamos en cualquier hilo con runtime activo, despachar
+            // de forma desacoplada para evitar atascar el pool de Tokio.
+            if Handle::try_current().is_ok() {
+                if SEQUENTIAL_SATURATED
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    tracing::warn!(
+                        capacity = SEQUENTIAL_QUEUE_CAPACITY,
+                        "sequential core executor saturated from within runtime; offloading to avoid deadlock"
+                    );
+                }
+                let sender_clone = sender.clone();
+                spawn_on_runtime(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ = sender_clone.send(future);
+                        SEQUENTIAL_SATURATED.store(false, Ordering::Release);
+                    }).await;
+                });
+                Ok(())
+            } else {
+                if SEQUENTIAL_SATURATED
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    tracing::warn!(
+                        capacity = SEQUENTIAL_QUEUE_CAPACITY,
+                        "sequential core executor saturated; applying producer backpressure"
+                    );
+                }
+                let result = sender.send(future).map_err(|error| error.0);
+                SEQUENTIAL_SATURATED.store(false, Ordering::Release);
+                result
             }
-            let result = sender.send(future).map_err(|error| error.0);
-            SEQUENTIAL_SATURATED.store(false, Ordering::Release);
-            result
         }
         Err(TrySendError::Disconnected(future)) => Err(future),
     }
@@ -430,25 +453,9 @@ async fn rehydrate_profile_from_vault(
 
 #[cfg(feature = "in-process")]
 fn in_process_router() -> Result<axum::Router, EnvError> {
-    if let Some(router) = IN_PROCESS_ROUTER.get() {
-        return Ok(router.clone());
-    }
-
-    let app_state = {
-        let guard = stream_server::GLOBAL_STATE
-            .read()
-            .map_err(|e| EnvError::Other(format!("Failed to read GLOBAL_STATE lock: {e}")))?;
-        guard.clone().ok_or_else(|| {
-            EnvError::Other("stream-server AppState is not initialized".to_owned())
-        })?
-    };
-    let router = stream_server::build_router(app_state);
-    let _ = IN_PROCESS_ROUTER.set(router);
-    Ok(IN_PROCESS_ROUTER
-        .get()
-        .expect("in-process router was just initialized")
-        .clone())
+    Err(EnvError::Other("in-process router disabled; use HTTP loopback".to_owned()))
 }
+
 
 /// Returned when a database is installed after core storage has already
 /// initialized its database handle.
@@ -547,9 +554,9 @@ impl Env for DesktopEnv {
         key: &str,
     ) -> TryEnvFuture<Option<T>> {
         let key = key.to_owned();
+        let profile_id = active_profile_scope();
         async move {
             let mut conn = get_db_conn().await?;
-            let profile_id = active_profile_scope();
             let mut rows = conn
                 .query(
                     "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = ?",
@@ -588,6 +595,7 @@ impl Env for DesktopEnv {
 
     fn set_storage<T: Serialize>(key: &str, value: Option<&T>) -> TryEnvFuture<()> {
         let key = key.to_owned();
+        let profile_id = active_profile_scope();
         let value_json = match value {
             Some(v) => match serde_json::to_value(v) {
                 Ok(value) => Some(value),
@@ -597,7 +605,6 @@ impl Env for DesktopEnv {
         };
         async move {
             let conn = get_db_conn().await?;
-            let profile_id = active_profile_scope();
             if key == PROFILE_STORAGE_KEY && value_json.is_none() {
                 let reference = vault_reference(&profile_id)?;
                 credential_store()

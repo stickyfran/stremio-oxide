@@ -200,6 +200,13 @@ pub fn install_hover_preview_callbacks(
         }
     });
 
+    ui.on_hover_preview_seek({
+        let preview = preview.clone();
+        move |offset| {
+            preview.seek(offset as f64);
+        }
+    });
+
     ui.on_hover_preview_play({
         let ui_weak = ui_weak.clone();
         let runtime = runtime.clone();
@@ -246,6 +253,67 @@ pub fn install_hover_preview_callbacks(
                 field: None,
                 action: Action::Ctx(action),
             });
+        }
+    });
+
+    // MediaPreviewDrawer Callbacks
+    ui.on_preview_drawer_toggle_playback({
+        let preview = preview.clone();
+        move || {
+            preview.toggle_playback();
+        }
+    });
+
+    ui.on_preview_drawer_toggle_muted({
+        let preview = preview.clone();
+        move || {
+            preview.toggle_muted();
+        }
+    });
+
+    ui.on_preview_drawer_toggle_autoplay({
+        let preview = preview.clone();
+        move || {
+            let autoplay = preview.toggle_autoplay();
+            let mut cfg = crate::config::load_config();
+            cfg.trailer_autoplay = autoplay;
+            crate::config::save_config(&cfg);
+        }
+    });
+
+    ui.on_preview_drawer_seek_relative({
+        let preview = preview.clone();
+        move |offset| {
+            preview.seek(offset as f64);
+        }
+    });
+
+    ui.on_preview_drawer_seek_progress({
+        let preview = preview.clone();
+        move |progress| {
+            preview.seek_progress(progress);
+        }
+    });
+
+    ui.on_preview_drawer_close({
+        let preview = preview.clone();
+        move || {
+            preview.dismiss();
+        }
+    });
+
+    ui.on_preview_drawer_maximize({
+        let preview = preview.clone();
+        let ui_weak = ui_weak.clone();
+        move || {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            let trailer_id = ui.get_detail_trailer_selection_id();
+            if !trailer_id.is_empty() {
+                preview.dismiss();
+                ui.invoke_play_stream(trailer_id);
+            }
         }
     });
 }
@@ -786,6 +854,30 @@ pub fn start_event_loop(
                                     ui.set_player_upload_speed(upload.as_str().into());
                                     ui.set_player_peer_count(*peers);
                                     ui.set_player_stream_progress(*progress);
+
+                                    if ui.get_player_loading() && !ui.get_player_has_video_frame() {
+                                        if *peers > 0 {
+                                            let pct = (*progress * 100.0).clamp(0.0, 100.0) as u32;
+                                            let speed_str = if !download.is_empty() {
+                                                format!(" • Descarga: {download}")
+                                            } else {
+                                                String::new()
+                                            };
+                                            ui.set_player_loading_stage_title(
+                                                "Descargando y almacenando en búfer…".into(),
+                                            );
+                                            ui.set_player_loading_stage_detail(
+                                                format!("{peers} pares conectados • Búfer: {pct}%{speed_str}").into(),
+                                            );
+                                        } else {
+                                            ui.set_player_loading_stage_title(
+                                                "Buscando enjambre de torrents…".into(),
+                                            );
+                                            ui.set_player_loading_stage_detail(
+                                                "Conectando con DHT y trackers (0 pares por ahora)…".into(),
+                                            );
+                                        }
+                                    }
                                 } else {
                                     ui.set_player_download_speed("".into());
                                     ui.set_player_upload_speed("".into());
@@ -940,6 +1032,7 @@ pub fn start_event_loop(
                                             lib,
                                             &ui_weak_for_sync,
                                             &runtime_for_sync,
+                                            &navigation_for_sync,
                                             true,
                                         );
                                     }
@@ -949,6 +1042,7 @@ pub fn start_event_loop(
                                         lib,
                                         &ui_weak_for_sync,
                                         &runtime_for_sync,
+                                        &navigation_for_sync,
                                         false,
                                     );
                                 }
@@ -1060,5 +1154,12 @@ fn handle_core_event(event: Event, ui_weak: &slint::Weak<MainWindow>) {
         // and very large library ID lists. The state projections below provide
         // actionable diagnostics without serializing those payloads to disk.
         tracing::debug!("core event received");
+    }
+}
+
+pub fn trim_process_memory() {
+    unsafe {
+        // Forzar purga de arenas de memoria vacías al sistema operativo vía C FFI de mimalloc
+        libmimalloc_sys::mi_collect(true);
     }
 }

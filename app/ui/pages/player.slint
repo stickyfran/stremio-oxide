@@ -40,6 +40,51 @@ component PlayerIconButton inherits IconAction {
     active-foreground-color: Theme.accent;
 }
 
+component PipIconButton inherits Rectangle {
+    in property <image> icon-source;
+    in property <string> tooltip: "";
+    in property <bool> active: false;
+    in property <bool> danger: false;
+    out property <bool> has-hover: pip-btn-touch.has-hover;
+    callback clicked();
+    callback activity();
+    callback scroll-delta(float);
+
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: pip-btn-touch.has-hover
+        ? (danger ? #ee2222dd : (active ? Theme.overlay-pressed : Theme.overlay-hover))
+        : (active ? Theme.overlay-pressed : transparent);
+
+    pip-btn-touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.move || event.kind == PointerEventKind.down) {
+                root.activity();
+            }
+        }
+        scroll-event(event) => {
+            root.activity();
+            root.scroll-delta(event.delta-y / 1px);
+            accept
+        }
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Image {
+        width: 16px;
+        height: 16px;
+        source: root.icon-source;
+        colorize: (danger && pip-btn-touch.has-hover) ? #ffffff : (root.active ? Theme.accent : Theme.primary-foreground);
+        image-fit: contain;
+    }
+}
+
 component TrackItem inherits ButtonSurface {
     in property <string> label;
     in property <string> secondary-label: "";
@@ -249,6 +294,9 @@ export component PlayerPage inherits Rectangle {
     in property <image> video-frame;
     in property <bool> has-video-frame: false;
     in property <bool> loading: false;
+    in property <string> loading-stage-title: "";
+    in property <string> loading-stage-detail: "";
+    in property <bool> loading-stalled: false;
     in property <bool> buffering: false;
     in property <float> buffering-percent: 0.0;
     in property <string> error-message: "";
@@ -331,6 +379,58 @@ export component PlayerPage inherits Rectangle {
     in property <bool> hdr-content: false;
     in property <bool> hdr-passthrough-available: false;
     in-out property <bool> pip-active: false;
+    property <bool> pip-pointer-in-window: false;
+    property <bool> pip-has-pointer: false;
+    property <bool> pip-volume-open: false;
+    property <bool> main-volume-open: false;
+    property <bool> pip-controls-visible: root.pip-has-pointer || root.paused || root.pip-volume-open;
+
+    pip-hide-timer := Timer {
+        interval: 400ms;
+        running: false;
+        triggered => {
+            self.stop();
+            if (!root.pip-pointer-in-window) {
+                root.pip-has-pointer = false;
+            }
+        }
+    }
+
+    pip-vol-hide-timer := Timer {
+        interval: 500ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.pip-volume-open = false;
+        }
+    }
+
+    function pip-report-pointer-enter() {
+        root.pip-pointer-in-window = true;
+        root.pip-has-pointer = true;
+        pip-hide-timer.stop();
+    }
+
+    function pip-report-pointer-leave() {
+        root.pip-pointer-in-window = false;
+        pip-hide-timer.restart();
+    }
+
+    function pip-report-vol-enter() {
+        root.pip-report-pointer-enter();
+        root.pip-volume-open = true;
+        pip-vol-hide-timer.stop();
+    }
+
+    function pip-report-vol-leave() {
+        pip-vol-hide-timer.restart();
+    }
+    property <length> pip-press-x: 0px;
+    property <length> pip-press-y: 0px;
+    property <bool> pip-is-pressed: false;
+    property <bool> pip-is-dragging: false;
+    property <bool> pip-drag-active: false;
+    in property <bool> debrid-uncached: false;
     in property <[bool]> shader-preset-available: [true, false, false, false, false, false, false, false];
     in property <string> shader-status: "Checking GPU support…";
     in property <[string]> shader-preset-names: [
@@ -391,9 +491,15 @@ export component PlayerPage inherits Rectangle {
     callback reveal-last-capture();
     callback cycle-hdr-mode();
     callback toggle-pip();
+    callback toggle-subtitles();
+    callback cycle-audio();
+    callback start-pip-drag();
+    callback start-pip-resize(int);
+    callback scale-pip(float);
     callback retry-playback();
     callback choose-another-stream();
     callback return-to-details();
+    callback continue-as-torrent();
     callback switch-stream(string);
     callback copy-stream-link();
     callback copy-magnet-link();
@@ -691,6 +797,7 @@ export component PlayerPage inherits Rectangle {
 
     // Interactive Screen Area (to toggle controls visibility)
     screen-touch := TouchArea {
+        enabled: !root.pip-active;
         width: 100%;
         height: 100%;
         mouse-cursor: controls-visible ? default : none;
@@ -719,6 +826,10 @@ export component PlayerPage inherits Rectangle {
             season-menu-open = false;
             
             controls-visible = true;
+            root.activity();
+        }
+        double-clicked => {
+            root.toggle-fullscreen();
             root.activity();
         }
         pointer-event(event) => {
@@ -793,48 +904,194 @@ export component PlayerPage inherits Rectangle {
 
 
 
-    // Match the web player: buffering is a transparent, pulsing Stremio mark.
-    // The foreground fill follows torrent/cache progress while the faded mark
-    // remains visible behind it. Video is never covered by an opaque scrim.
-    if (!has-video-frame) : Rectangle {
+    // Loading & Buffering Screen: Centered, prominent diagnostic card and pulsing logo.
+    // Displayed whenever a video frame is not yet decoded and error is empty.
+    if (!has-video-frame && error-message == "") : Rectangle {
         width: 100%;
         height: 100%;
         background: transparent;
-        z: 20;
+        z: 160;
 
-        buffer-mark := Rectangle {
-            width: buffer-pulse ? buffer-logo-size * 1.05 : buffer-logo-size;
-            height: buffer-pulse ? buffer-logo-size * 1.05 : buffer-logo-size;
+        VerticalLayout {
+            alignment: center;
+            spacing: 20px;
+            width: min(560px, parent.width - 32px);
             x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            background: transparent;
-            opacity: buffer-pulse ? 1.0 : 0.4;
 
-            animate width { duration: 1s; easing: ease-in-out; }
-            animate height { duration: 1s; easing: ease-in-out; }
-            animate opacity { duration: 1s; easing: ease-in-out; }
+            // 1. Pulsing Stremio Symbol with buffer fill
+            HorizontalLayout {
+                alignment: center;
+                buffer-mark := Rectangle {
+                    width: buffer-pulse ? 96px : 90px;
+                    height: buffer-pulse ? 96px : 90px;
+                    background: transparent;
+                    opacity: buffer-pulse ? 1.0 : 0.5;
 
-            Image {
-                width: 100%;
-                height: 100%;
-                source: @image-url("../assets/images/stremio_symbol.png");
-                image-fit: contain;
-                opacity: 0.2;
-            }
+                    animate width { duration: 1s; easing: ease-in-out; }
+                    animate height { duration: 1s; easing: ease-in-out; }
+                    animate opacity { duration: 1s; easing: ease-in-out; }
 
-            Rectangle {
-                width: parent.width * max(0.0, min(100.0, buffer-visual-progress)) / 100.0;
-                height: parent.height;
-                clip: true;
-                background: transparent;
+                    Image {
+                        width: 100%;
+                        height: 100%;
+                        source: @image-url("../assets/images/stremio_symbol.png");
+                        image-fit: contain;
+                        opacity: 0.25;
+                    }
 
-                Image {
-                    width: buffer-mark.width;
-                    height: buffer-mark.height;
-                    source: @image-url("../assets/images/stremio_symbol.png");
-                    image-fit: contain;
+                    Rectangle {
+                        width: parent.width * max(0.0, min(100.0, buffer-visual-progress)) / 100.0;
+                        height: parent.height;
+                        clip: true;
+                        background: transparent;
+
+                        Image {
+                            width: buffer-mark.width;
+                            height: buffer-mark.height;
+                            source: @image-url("../assets/images/stremio_symbol.png");
+                            image-fit: contain;
+                        }
+                    }
                 }
             }
+
+            // 2. High-Contrast Diagnostic & Stage Information Card
+            Rectangle {
+                width: 100%;
+                border-radius: 14px;
+                background: Theme.card-background.with-alpha(0.92);
+                border-width: 1px;
+                border-color: Theme.divider;
+
+                VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    spacing: 8px;
+                    alignment: center;
+
+                    if (stream-name != "") : Text {
+                        text: stream-name;
+                        color: Theme.text-primary;
+                        font-size: 14px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: loading-stage-title != "" ? loading-stage-title : @tr("Starting playback…");
+                        color: Theme.accent;
+                        font-size: 15px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                    }
+
+                    if (loading-stage-detail != "") : Text {
+                        text: loading-stage-detail;
+                        color: Theme.text-primary.with-alpha(0.85);
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    if (debrid-uncached) : Rectangle {
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+
+                    if (debrid-uncached) : VerticalLayout {
+                        spacing: 12px;
+                        alignment: center;
+
+                        Text {
+                            text: @tr("¿Deseas reproducir mediante la red Torrent P2P o elegir otro stream?");
+                            color: Theme.warning;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            alignment: center;
+
+                            PillButton {
+                                width: 190px;
+                                unit: 14px;
+                                label: @tr("Reproducir vía Torrent");
+                                outlined: false;
+                                clicked => { continue-as-torrent(); }
+                            }
+                            PillButton {
+                                width: 170px;
+                                unit: 14px;
+                                label: @tr("Elegir otro stream");
+                                outlined: true;
+                                surface-color: transparent;
+                                clicked => { choose-another-stream(); }
+                            }
+                        }
+                    }
+
+                    if (loading-stalled) : Rectangle {
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+
+                    if (loading-stalled) : VerticalLayout {
+                        spacing: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: @tr("Stream loading is taking longer than usual (few seeds or slow network).");
+                            color: Theme.warning;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            alignment: center;
+
+                            PillButton {
+                                width: 170px;
+                                unit: 14px;
+                                label: @tr("Choose another stream");
+                                outlined: false;
+                                clicked => { choose-another-stream(); }
+                            }
+                            PillButton {
+                                width: 150px;
+                                unit: 14px;
+                                label: @tr("Return to details");
+                                outlined: true;
+                                surface-color: transparent;
+                                clicked => { return-to-details(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Mid-playback buffering indicator
+    if (buffering && has-video-frame) : Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 64px;
+        height: 64px;
+        z: 160;
+        background: transparent;
+        Image {
+            width: 100%;
+            height: 100%;
+            source: @image-url("../assets/images/stremio_symbol.png");
+            image-fit: contain;
+            opacity: 0.7;
         }
     }
 
@@ -1350,11 +1607,17 @@ export component PlayerPage inherits Rectangle {
                             ? @image-url("../assets/images/icons/volume-medium.svg")
                             : @image-url("../assets/images/icons/volume-high.svg")));
                 tooltip: muted ? @tr("PLAYER_UNMUTE" => "Unmute") + " (M)" : @tr("PLAYER_MUTE" => "Mute") + " (M)";
-                clicked => { toggle-mute(); }
+                clicked => {
+                    if (root.width <= 900px && !root.main-volume-open) {
+                        root.main-volume-open = true;
+                    } else {
+                        toggle-mute();
+                    }
+                }
             }
 
-            if (root.width > 900px) : Slider {
-                width: 160px;
+            if (root.width > 900px || root.main-volume-open) : Slider {
+                width: root.width > 900px ? 160px : 100px;
                 height: 64px;
                 unit: 16px;
                 minimum: 0;
@@ -1375,12 +1638,18 @@ export component PlayerPage inherits Rectangle {
 
         // Menus and display controls are independently anchored to the right.
         HorizontalLayout {
-            width: is-series ? 608px : 540px;
+            width: is-series ? 676px : 608px;
             x: parent.width - self.width - 32px;
             y: 88px;
             height: 64px;
             spacing: 4px;
             alignment: end;
+
+            PlayerIconButton {
+                icon-source: @image-url("../assets/images/icons/minimize.svg");
+                tooltip: @tr("Picture-in-picture") + " (P)";
+                clicked => { root.toggle-pip(); }
+            }
 
             PlayerIconButton {
                 icon-source: @image-url("../assets/images/icons/cast.svg");
@@ -1539,50 +1808,552 @@ export component PlayerPage inherits Rectangle {
         }
     }
 
-    if (controls-visible && pip-active) : Rectangle {
-        x: 12px;
-        y: parent.height - self.height - 12px;
-        width: parent.width - 24px;
-        height: 68px;
-        border-radius: 18px;
-        background: Theme.scrim.with-alpha(0.86);
+    // PiP Window Drag Area and 8-Axis Resizing System (like Mitub)
+    if (pip-active) : Rectangle {
+        width: 100%;
+        height: 100%;
+        z: 80;
+
+        // Background click-and-drag over inner video surface (inset 7px from edges to never swallow resize hits)
+        pip-drag-touch := TouchArea {
+            x: 7px;
+            y: 7px;
+            width: parent.width - 14px;
+            height: parent.height - 14px;
+            mouse-cursor: default;
+            changed has-hover => {
+                if (self.has-hover) {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                } else {
+                    root.pip-report-pointer-leave();
+                }
+            }
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    pip-press-x = self.mouse-x;
+                    pip-press-y = self.mouse-y;
+                    pip-is-pressed = true;
+                    pip-is-dragging = false;
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                }
+                if (event.kind == PointerEventKind.move) {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                    if (pip-is-pressed && !pip-is-dragging) {
+                        let dx = self.mouse-x - pip-press-x;
+                        let dy = self.mouse-y - pip-press-y;
+                        if (abs(dx) > 6px || abs(dy) > 6px) {
+                            pip-is-dragging = true;
+                            pip-is-pressed = false;
+                            root.start-pip-drag();
+                        }
+                    }
+                }
+                if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    pip-is-pressed = false;
+                    pip-is-dragging = false;
+                }
+            }
+            clicked => {
+                if (!pip-is-dragging) {
+                    root.activity();
+                    root.toggle-pause();
+                }
+                pip-is-dragging = false;
+            }
+            double-clicked => {
+                if (!pip-is-dragging) {
+                    root.toggle-pip();
+                }
+                pip-is-dragging = false;
+            }
+            scroll-event(event) => {
+                if (event.delta-y > 0) {
+                    root.scale-pip(1.10);
+                } else if (event.delta-y < 0) {
+                    root.scale-pip(0.90);
+                }
+                accept
+            }
+        }
+
+        // 8 Resizing Handles (edges: 7px, corners: 14px) - placed on z: 120 above drag area
+        // Right edge (0)
+        TouchArea {
+            z: 120;
+            x: parent.width - 7px;
+            y: 14px;
+            width: 7px;
+            height: parent.height - 28px;
+            mouse-cursor: ew-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(0);
+                }
+            }
+        }
+        // Left edge (1)
+        TouchArea {
+            z: 120;
+            x: 0px;
+            y: 14px;
+            width: 7px;
+            height: parent.height - 28px;
+            mouse-cursor: ew-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(1);
+                }
+            }
+        }
+        // Bottom edge (2)
+        TouchArea {
+            z: 120;
+            x: 14px;
+            y: parent.height - 7px;
+            width: parent.width - 28px;
+            height: 7px;
+            mouse-cursor: ns-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(2);
+                }
+            }
+        }
+        // Top edge (3)
+        TouchArea {
+            z: 120;
+            x: 14px;
+            y: 0px;
+            width: parent.width - 28px;
+            height: 7px;
+            mouse-cursor: ns-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(3);
+                }
+            }
+        }
+        // Bottom-Right corner (4)
+        TouchArea {
+            z: 120;
+            x: parent.width - 14px;
+            y: parent.height - 14px;
+            width: 14px;
+            height: 14px;
+            mouse-cursor: nwse-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(4);
+                }
+            }
+        }
+        // Bottom-Left corner (5)
+        TouchArea {
+            z: 120;
+            x: 0px;
+            y: parent.height - 14px;
+            width: 14px;
+            height: 14px;
+            mouse-cursor: nesw-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(5);
+                }
+            }
+        }
+        // Top-Left corner (6)
+        TouchArea {
+            z: 120;
+            x: 0px;
+            y: 0px;
+            width: 14px;
+            height: 14px;
+            mouse-cursor: nwse-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(6);
+                }
+            }
+        }
+        // Top-Right corner (7)
+        TouchArea {
+            z: 120;
+            x: parent.width - 14px;
+            y: 0px;
+            width: 14px;
+            height: 14px;
+            mouse-cursor: nesw-resize;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.start-pip-resize(7);
+                }
+            }
+        }
+    }
+
+    // PiP Top Bar Overlay
+    if (pip-active) : Rectangle {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        height: 32px;
+        border-radius: 8px;
+        background: Theme.scrim.with-alpha(0.85);
         border-width: 1px;
         border-color: Theme.divider;
-        z: 190;
+        z: 220;
+        opacity: root.pip-controls-visible ? 1.0 : 0.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+        visible: self.opacity > 0.01;
+
+        top-bar-touch := TouchArea {
+            width: 100%;
+            height: 100%;
+            changed has-hover => {
+                if (self.has-hover) {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                } else {
+                    root.pip-report-pointer-leave();
+                }
+            }
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    pip-press-x = self.mouse-x;
+                    pip-press-y = self.mouse-y;
+                    pip-is-pressed = true;
+                    pip-is-dragging = false;
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                }
+                if (event.kind == PointerEventKind.move) {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                    if (pip-is-pressed && !pip-is-dragging) {
+                        if (abs(self.mouse-x - pip-press-x) > 4px || abs(self.mouse-y - pip-press-y) > 4px) {
+                            pip-is-dragging = true;
+                            pip-is-pressed = false;
+                            root.start-pip-drag();
+                        }
+                    }
+                }
+                if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    pip-is-pressed = false;
+                    pip-is-dragging = false;
+                }
+            }
+            clicked => {
+                pip-is-dragging = false;
+            }
+        }
 
         HorizontalLayout {
-            padding-left: 12px;
-            padding-right: 12px;
-            spacing: 4px;
+            padding-left: 6px;
+            padding-right: 6px;
+            spacing: 8px;
             alignment: center;
 
-            PlayerIconButton {
-                icon-source: paused
-                    ? @image-url("../assets/images/icons/play.svg")
-                    : @image-url("../assets/images/icons/pause.svg");
-                tooltip: paused ? @tr("Play") : @tr("Pause");
-                clicked => { root.toggle-pause(); }
-            }
-            PlayerIconButton {
-                icon-source: @image-url("../assets/images/icons/replay.svg");
-                tooltip: @tr("Seek backward");
-                clicked => { root.seek-relative(-root.seek-step-seconds); }
-            }
-            if (is-series && has-next-episode) : PlayerIconButton {
-                icon-source: @image-url("../assets/images/icons/next.svg");
-                tooltip: @tr("Next episode");
-                clicked => { root.play-next-episode(); }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            PlayerIconButton {
+            // Expandir a pantalla completa / restaurar ventana arriba a la izquierda
+            PipIconButton {
                 icon-source: @image-url("../assets/images/icons/maximize.svg");
-                tooltip: @tr("Restore window");
-                clicked => { root.toggle-pip(); }
+                tooltip: @tr("Restore window") + " (Escape)";
+                activity => {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                }
+                clicked => {
+                    root.activity();
+                    root.toggle-pip();
+                }
             }
-            PlayerIconButton {
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.item-title != "" ? root.item-title : (root.series-name != "" ? root.series-name : @tr("Picture-in-picture"));
+                color: Theme.text-primary;
+                font-size: 11px;
+                font-weight: 600;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            // Cerrar arriba a la derecha
+            PipIconButton {
                 icon-source: @image-url("../assets/images/icons/close.svg");
                 tooltip: @tr("Close player");
-                clicked => { root.close(); }
+                danger: true;
+                activity => {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                }
+                clicked => {
+                    root.activity();
+                    root.close();
+                }
+            }
+        }
+    }
+
+    // PiP Bottom Bar Overlay (with Scrubber and Preserved Subtitles/Audio/Volume Controls)
+    if (pip-active) : Rectangle {
+        x: 8px;
+        y: parent.height - self.height - 8px;
+        width: parent.width - 16px;
+        height: 58px;
+        border-radius: 10px;
+        background: Theme.scrim.with-alpha(0.88);
+        border-width: 1px;
+        border-color: Theme.divider;
+        z: 220;
+        opacity: root.pip-controls-visible ? 1.0 : 0.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+        visible: self.opacity > 0.01;
+
+        bottom-bar-touch := TouchArea {
+            width: 100%;
+            height: 100%;
+            changed has-hover => {
+                if (self.has-hover) {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                } else {
+                    root.pip-report-pointer-leave();
+                }
+            }
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.move || event.kind == PointerEventKind.down) {
+                    root.pip-report-pointer-enter();
+                    root.activity();
+                }
+            }
+        }
+
+        VerticalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            spacing: 2px;
+
+            // Row 1: Mini Scrubber & Times
+            HorizontalLayout {
+                height: 16px;
+                spacing: 6px;
+
+                Text {
+                    text: root.elapsed-time-str;
+                    color: Theme.text-secondary;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+
+                Slider {
+                    horizontal-stretch: 1;
+                    min-width: 50px;
+                    height: 16px;
+                    unit: 8px;
+                    minimum: 0.0;
+                    maximum: 1.0;
+                    step: 0.001;
+                    value: root.progress;
+                    buffered: root.buffered-percent / 100;
+                    track-inset: 0px;
+                    track-size: 3px;
+                    thumb-size: 8px;
+                    hover-thumb-size: 10px;
+                    track-color: Theme.primary-foreground;
+                    track-opacity: 0.2;
+                    buffered-color: Theme.primary-foreground.with-alpha(0.35);
+                    progress-color: Theme.accent;
+                    thumb-color: Theme.primary-foreground;
+                    changed(val) => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                        root.seek(val);
+                    }
+                }
+
+                Text {
+                    text: root.total-time-str;
+                    color: Theme.text-muted;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Row 2: Playback, Volume & Action Buttons
+            HorizontalLayout {
+                height: 28px;
+                spacing: 4px;
+
+                PipIconButton {
+                    icon-source: @image-url("../assets/images/icons/replay.svg");
+                    tooltip: @tr("Seek backward") + " (-10s)";
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                        root.seek-relative(-10);
+                    }
+                }
+                PipIconButton {
+                    icon-source: paused
+                        ? @image-url("../assets/images/icons/play.svg")
+                        : @image-url("../assets/images/icons/pause.svg");
+                    tooltip: paused ? @tr("Play") : @tr("Pause");
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                        root.toggle-pause();
+                    }
+                }
+                PipIconButton {
+                    icon-source: @image-url("../assets/images/icons/skip-15-forward.svg");
+                    tooltip: @tr("Seek forward") + " (+10s)";
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                        root.seek-relative(10);
+                    }
+                }
+                if (is-series && has-next-episode) : PipIconButton {
+                    icon-source: @image-url("../assets/images/icons/next.svg");
+                    tooltip: @tr("Next episode");
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                        root.play-next-episode();
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Volume Button + Expandable Volume Slider (Single Unified Container)
+                pip-volume-box := Rectangle {
+                    height: 28px;
+                    width: (pip-vol-btn.has-hover || pip-vol-slider.has-hover || root.pip-volume-open) ? 96px : 28px;
+                    clip: true;
+                    animate width { duration: 150ms; easing: ease-out; }
+
+                    property <bool> vol-is-hovered: pip-vol-btn.has-hover || pip-vol-slider.has-hover;
+                    changed vol-is-hovered => {
+                        if (self.vol-is-hovered) {
+                            root.pip-report-vol-enter();
+                        } else {
+                            root.pip-report-vol-leave();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        x: 0px;
+                        y: 0px;
+                        width: 96px;
+                        height: 28px;
+                        spacing: 6px;
+                        alignment: start;
+
+                        pip-vol-btn := PipIconButton {
+                            width: 28px;
+                            height: 28px;
+                            icon-source: (muted || volume == 0.0)
+                                ? @image-url("../assets/images/icons/volume-mute.svg")
+                                : (volume < 0.3
+                                    ? @image-url("../assets/images/icons/volume-low.svg")
+                                    : (volume < 0.7
+                                        ? @image-url("../assets/images/icons/volume-medium.svg")
+                                        : @image-url("../assets/images/icons/volume-high.svg")));
+                            tooltip: muted ? @tr("PLAYER_UNMUTE" => "Unmute") : @tr("PLAYER_MUTE" => "Mute");
+                            activity => {
+                                root.pip-report-vol-enter();
+                                root.activity();
+                            }
+                            scroll-delta(dy) => {
+                                root.pip-report-vol-enter();
+                                root.activity();
+                                let step = dy > 0 ? 0.05 : -0.05;
+                                root.change-volume(max(0.0, min(2.0, root.volume + step)));
+                            }
+                            clicked => {
+                                root.pip-report-vol-enter();
+                                root.activity();
+                                root.toggle-mute();
+                            }
+                        }
+
+                        pip-vol-slider := Slider {
+                            width: 58px;
+                            height: 28px;
+                            unit: 8px;
+                            minimum: 0.0;
+                            maximum: 2.0;
+                            step: 0.02;
+                            value: muted ? 0.0 : volume;
+                            track-inset: 0px;
+                            track-size: 3px;
+                            thumb-size: 8px;
+                            hover-thumb-size: 10px;
+                            track-color: Theme.primary-foreground;
+                            track-opacity: 0.25;
+                            progress-color: Theme.accent;
+                            thumb-color: Theme.primary-foreground;
+                            changed(val) => {
+                                root.pip-report-vol-enter();
+                                root.activity();
+                                root.change-volume(val);
+                            }
+                        }
+                    }
+                }
+
+                // Subtitles toggle (Strict On / Off)
+                PipIconButton {
+                    icon-source: @image-url("../assets/images/icons/subtitles.svg");
+                    tooltip: active-subtitle-idx >= 0 ? @tr("Disable subtitles") : @tr("Enable subtitles");
+                    active: active-subtitle-idx >= 0;
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                        root.toggle-subtitles();
+                    }
+                }
+
+                // Audio cycle
+                PipIconButton {
+                    icon-source: @image-url("../assets/images/icons/audio.svg");
+                    tooltip: @tr("Audio");
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                        root.cycle-audio();
+                    }
+                }
             }
         }
     }

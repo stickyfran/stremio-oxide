@@ -368,27 +368,43 @@ pub fn sync(
         board_sections
     };
 
-    // Update rows in-place when the section count is stable so the ListView
-    // keeps its current viewport-y. A full model replacement resets scroll
-    // position, which causes a visible snap-back during lazy catalog loading.
-    // Per-section fingerprints skip set_row_data for unchanged rows, avoiding
-    // Slint re-instantiating all cards in rows whose data didn't change.
+    // Update rows in-place so the ListView keeps its current viewport-y.
+    // A full model replacement resets scroll position, which causes a visible
+    // snap-back during lazy catalog loading. Per-section fingerprints skip
+    // set_row_data for unchanged rows, avoiding Slint re-instantiating all
+    // cards in rows whose data didn't change.
     let existing = ui.get_board_sections();
     let mut cached_fps = SECTION_FINGERPRINTS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if existing.row_count() == board_sections.len() {
-        for (index, section) in board_sections.into_iter().enumerate() {
+    if let Some(vec_model) = existing.as_any().downcast_ref::<slint::VecModel<BoardSection>>() {
+        let existing_len = vec_model.row_count();
+        let new_len = board_sections.len();
+        let common_len = existing_len.min(new_len);
+        let mut iter = board_sections.into_iter();
+        for index in 0..common_len {
+            let section = iter.next().expect("common_len bounded by new_len");
             let fp = section_data_fingerprint(&section);
             if cached_fps.get(index) != Some(&fp) {
-                existing.set_row_data(index, section);
+                vec_model.set_row_data(index, section);
                 if index < cached_fps.len() {
                     cached_fps[index] = fp;
                 } else {
                     cached_fps.push(fp);
                 }
             }
+        }
+        if new_len > existing_len {
+            for section in iter {
+                cached_fps.push(section_data_fingerprint(&section));
+                vec_model.push(section);
+            }
+        } else if new_len < existing_len {
+            for index in (new_len..existing_len).rev() {
+                vec_model.remove(index);
+            }
+            cached_fps.truncate(new_len);
         }
     } else {
         *cached_fps = board_sections

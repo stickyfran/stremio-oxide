@@ -10,11 +10,11 @@ members = [
     "server-connector",
     "stream-ranking",
 ]
-exclude = ["vendor/i-slint-renderer-skia", "vendor/i-slint-core"]
+exclude = ["vendor/i-slint-renderer-skia", "vendor/i-slint-core", "vendor/rustix", "stremio-runtime"]
 
 [workspace.package]
 authors = ["perpetus <perpetus.github@gmail.com>"]
-repository = "https://github.com/stremio-native/stremio-native"
+repository = "https://github.com/stickyfran/stremio-oxide"
 license = "GPL-3.0-only"
 
 [workspace.dependencies]
@@ -45,7 +45,6 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 slint = { version = "1.17.1", default-features = false }
 slint-build = "1.17.1"
 stremio-core = { git = "https://github.com/perpetus/stremio-core.git", rev = "4562b37be8ea788801e12c608a6aa3e43c646123", features = ["derive", "analytics", "env-future-send"] }
-stream-server = { git = "https://github.com/stremio-native/stream-server.git", rev = "f585ab6eda9b1411034548c131bb0dc30c6f5f9e", package = "server" }
 sys-locale = "0.3.2"
 thiserror = "2.0.20"
 tokio = "1.53.1"
@@ -71,27 +70,20 @@ minidumper = "0.11.0"
 turso = { version = "0.7.2", default-features = false }
 
 [patch.crates-io]
-# Slint 1.17 asks glutin for OpenGL without a version, which glutin maps to
-# exactly 3.3. Keep Slint's public unversioned policy while negotiating the
-# newest desktop context that each driver actually supports.
-i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia" }
+# i-slint-renderer-skia deshabilitado en favor de renderer-femtovg
+# i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia" }
 # Slint's Flickable ships desktop-unfriendly scroll physics (180ms quadratic
 # wheel steps, 2000px/s^2 fling). Retune them to browser values. This has to
 # live in the engine because ListView rewrites viewport-y mid-animation, so
 # only Slint's incremental physics animations survive virtualized scrolling.
 # See vendor/i-slint-core/PATCHES.md.
 i-slint-core = { path = "vendor/i-slint-core" }
+rustix = { path = "vendor/rustix" }
 
 [profile.release]
 opt-level = 3
-# ThinLTO instead of `true` (fat). Fat LTO merges the whole program into one
-# module and optimizes it on a single thread, which is the dominant cost of a
-# release build here. ThinLTO keeps cross-crate inlining through summaries and
-# runs in parallel. `codegen-units = 1` existed to compensate for the lack of
-# cross-unit optimization; ThinLTO restores that across units, so the serial
-# codegen bottleneck is no longer buying anything.
-lto = "thin"
-codegen-units = 16
+lto = false
+codegen-units = 2
 panic = "abort"
 strip = true
 

@@ -100,6 +100,8 @@ pub enum ProfileError {
     NotFound,
     #[error("the active profile cannot be deleted; switch profiles first")]
     ActiveProfile,
+    #[error("an Owner PIN must be set in settings before authorization can be requested")]
+    OwnerPinRequired,
     #[error("profile database operation failed: {0}")]
     Database(String),
 }
@@ -379,10 +381,9 @@ pub async fn authorize_owner_pin(
         .filter(|profile| profile.has_pin)
         .collect::<Vec<_>>();
     if protected.is_empty() {
-        let owner = owners.first().ok_or(ProfileError::LastOwner)?;
-        set_pin(&owner.id, pin).await?;
-        verify_pin(&owner.id, pin, limiter).await?;
-        return Ok(owner.id.clone());
+        // Si el Owner no tiene PIN configurado, no permitir que un atacante
+        // o perfil hijo fije un PIN silenciosamente. Se requiere configurar PIN explícitamente desde ajustes.
+        return Err(ProfileError::OwnerPinRequired);
     }
     let mut rate_limit = None;
     for owner in protected {
@@ -398,11 +399,17 @@ pub async fn authorize_owner_pin(
 
 pub async fn set_pin(profile_id: &ProfileId, pin: &str) -> Result<(), ProfileError> {
     validate_pin(pin)?;
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
-        .hash_password(pin.as_bytes(), &salt)
-        .map_err(|_| ProfileError::InvalidPin)?
-        .to_string();
+    let pin_string = pin.to_owned();
+    let hash = tokio::task::spawn_blocking(move || {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(pin_string.as_bytes(), &salt)
+            .map_err(|_| ProfileError::InvalidPin)
+            .map(|h| h.to_string())
+    })
+    .await
+    .map_err(|e| ProfileError::Database(e.to_string()))??;
+
     let conn = crate::db::get_conn()
         .await
         .map_err(|error| ProfileError::Database(error.to_string()))?;
@@ -443,11 +450,23 @@ pub async fn verify_pin(
         .ok_or(ProfileError::IncorrectPin)?;
     drop(rows);
     drop(conn);
-    let parsed = PasswordHash::new(&hash).map_err(|_| ProfileError::IncorrectPin)?;
-    if Argon2::default()
-        .verify_password(pin.as_bytes(), &parsed)
-        .is_ok()
-    {
+
+    let pin_string = pin.to_owned();
+    let verify_res = tokio::task::spawn_blocking(move || {
+        let parsed = PasswordHash::new(&hash).map_err(|_| ProfileError::IncorrectPin)?;
+        if Argon2::default()
+            .verify_password(pin_string.as_bytes(), &parsed)
+            .is_ok()
+        {
+            Ok(())
+        } else {
+            Err(ProfileError::IncorrectPin)
+        }
+    })
+    .await
+    .map_err(|e| ProfileError::Database(e.to_string()))?;
+
+    if verify_res.is_ok() {
         limiter.succeeded(profile_id);
         Ok(())
     } else {

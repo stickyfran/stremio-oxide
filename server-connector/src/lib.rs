@@ -7,7 +7,7 @@ pub struct SettingsPayload {
     #[serde(rename = "cacheRoot", default)]
     pub cache_root: String,
     #[serde(rename = "cacheSize", default)]
-    pub cache_size: f64,
+    pub cache_size: Option<f64>,
     #[serde(rename = "proxyStreamsEnabled", default)]
     pub proxy_streams_enabled: bool,
     #[serde(rename = "btMaxConnections", default)]
@@ -123,28 +123,8 @@ pub trait ServerConnector: Send + Sync + 'static {
 }
 
 #[cfg(feature = "in-process")]
-static IN_PROCESS_ROUTER: std::sync::OnceLock<axum::Router> = std::sync::OnceLock::new();
-
-#[cfg(feature = "in-process")]
 fn in_process_router() -> Result<axum::Router> {
-    if let Some(router) = IN_PROCESS_ROUTER.get() {
-        return Ok(router.clone());
-    }
-
-    let app_state = {
-        let guard = stream_server::GLOBAL_STATE
-            .read()
-            .map_err(|e| anyhow::anyhow!("Failed to read GLOBAL_STATE lock: {e}"))?;
-        guard
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("stream-server AppState is not initialized"))?
-    };
-    let router = stream_server::build_router(app_state);
-    let _ = IN_PROCESS_ROUTER.set(router);
-    Ok(IN_PROCESS_ROUTER
-        .get()
-        .expect("in-process router was just initialized")
-        .clone())
+    Err(anyhow::anyhow!("in-process router disabled; use HTTP loopback"))
 }
 
 pub struct AppServerConnector {
@@ -156,10 +136,22 @@ pub struct AppServerConnector {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsSnapshot {
+    #[serde(default)]
+    pub values: Option<SettingsPayload>,
     #[serde(flatten)]
-    pub settings: SettingsPayload,
+    pub fallback_settings: SettingsPayload,
     #[serde(default)]
     pub server_version: String,
+}
+
+impl SettingsSnapshot {
+    pub fn into_settings(self) -> SettingsPayload {
+        self.values.unwrap_or(self.fallback_settings)
+    }
+
+    pub fn settings(&self) -> &SettingsPayload {
+        self.values.as_ref().unwrap_or(&self.fallback_settings)
+    }
 }
 
 impl AppServerConnector {
@@ -262,7 +254,7 @@ impl ServerConnector for AppServerConnector {
     async fn get_settings(&self) -> Result<SettingsPayload> {
         self.get_settings_snapshot()
             .await
-            .map(|snapshot| snapshot.settings)
+            .map(|snapshot| snapshot.into_settings())
     }
 
     async fn apply_settings(&self, settings: SettingsPayload) -> Result<()> {

@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string]$BuildRoot = (Join-Path $PSScriptRoot "..\target\release")
+    [string]$BuildRoot = (Join-Path $PSScriptRoot "..\target\release"),
+    [Parameter()]
+    [string]$Architecture = "x64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +23,8 @@ function Get-VisualStudioInstallationPath {
 
 function Find-CrtDirectory {
     param(
-        [string[]]$SearchRoots
+        [string[]]$SearchRoots,
+        [string]$Arch = "x64"
     )
 
     $candidates = foreach ($root in $SearchRoots) {
@@ -29,7 +32,7 @@ function Find-CrtDirectory {
             continue
         }
         Get-ChildItem -LiteralPath $root -Directory -Recurse -Filter "Microsoft.VC143.CRT" |
-            Where-Object { $_.Parent.Name -eq "x64" }
+            Where-Object { $_.Parent.Name -ieq $Arch }
     }
 
     $selected = $candidates |
@@ -43,7 +46,7 @@ function Find-CrtDirectory {
         Select-Object -First 1
 
     if ($null -eq $selected) {
-        throw "Could not locate an x64 Microsoft.VC143.CRT redistributable directory. Install the Visual Studio 2022 C++ redistributables."
+        throw "Could not locate an $Arch Microsoft.VC143.CRT redistributable directory. Install the Visual Studio 2022 C++ redistributables."
     }
     return $selected.FullName
 }
@@ -98,7 +101,7 @@ if (-not [string]::IsNullOrWhiteSpace($env:VCToolsRedistDir)) {
 if (-not [string]::IsNullOrWhiteSpace($visualStudioPath)) {
     $redistRoots += Join-Path $visualStudioPath "VC\Redist\MSVC"
 }
-$crtDirectory = Find-CrtDirectory -SearchRoots $redistRoots
+$crtDirectory = Find-CrtDirectory -SearchRoots $redistRoots -Arch $Architecture
 $dumpbin = Find-Dumpbin -VisualStudioPath $visualStudioPath
 
 $stageDirectory = Join-Path $resolvedBuildRoot "msvc-runtime"

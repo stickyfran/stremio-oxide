@@ -45,14 +45,11 @@ pub struct PreviewConfig {
 impl Default for PreviewConfig {
     fn default() -> Self {
         Self {
-            // The popup's video area is roughly 420x235 logical pixels, and
-            // every frame is copied twice on its way to Slint, so decoding
-            // larger than the card can show is pure bandwidth.
-            max_width: 480,
-            max_height: 270,
-            frame_interval: Duration::from_millis(66),
+            max_width: 854,
+            max_height: 480,
+            frame_interval: Duration::from_millis(50),
             load_timeout: Duration::from_secs(20),
-            hardware_decoding: false,
+            hardware_decoding: true,
             loop_playback: true,
             max_capture_failures: 5,
             ytdl_path: None,
@@ -187,6 +184,36 @@ impl PreviewController {
         Ok(())
     }
 
+    /// Relative seek in seconds (+5.0 or -5.0) for preview scrubbing.
+    pub fn seek(&self, offset_seconds: f64) -> Result<(), MpvError> {
+        let mut mailbox = lock_mailbox(&self.shared);
+        ensure_open(&mailbox)?;
+        mailbox.controls.push_back(Control::Seek(offset_seconds));
+        drop(mailbox);
+        self.shared.condvar.notify_one();
+        Ok(())
+    }
+
+    /// Absolute seek in seconds for preview timeline scrubber.
+    pub fn seek_absolute(&self, seconds: f64) -> Result<(), MpvError> {
+        let mut mailbox = lock_mailbox(&self.shared);
+        ensure_open(&mailbox)?;
+        mailbox.controls.push_back(Control::SeekAbsolute(seconds));
+        drop(mailbox);
+        self.shared.condvar.notify_one();
+        Ok(())
+    }
+
+    /// Sets playback pause state.
+    pub fn pause(&self, paused: bool) -> Result<(), MpvError> {
+        let mut mailbox = lock_mailbox(&self.shared);
+        ensure_open(&mailbox)?;
+        mailbox.controls.push_back(Control::Pause(paused));
+        drop(mailbox);
+        self.shared.condvar.notify_one();
+        Ok(())
+    }
+
     fn shutdown(&self) {
         let mut mailbox = lock_mailbox(&self.shared);
         if mailbox.closed {
@@ -288,6 +315,9 @@ struct Mailbox {
 enum Control {
     Play(u64, PreviewSource),
     Mute(bool),
+    Seek(f64),
+    SeekAbsolute(f64),
+    Pause(bool),
     Stop(u64),
     Shutdown,
 }
@@ -370,9 +400,9 @@ fn configure_client(client: &MpvClient, config: &PreviewConfig) -> Result<(), Mp
         ("vd-lavc-threads", "2"),
         ("vd-lavc-fast", "yes"),
         ("cache", "yes"),
-        ("cache-secs", "10"),
-        ("demuxer-max-bytes", "16777216"),
-        ("demuxer-max-back-bytes", "8388608"),
+        ("cache-secs", "5"),
+        ("demuxer-max-bytes", "4194304"),
+        ("demuxer-max-back-bytes", "2097152"),
         ("sws-scaler", "fast-bilinear"),
         ("loop-file", if config.loop_playback { "inf" } else { "no" }),
     ];
@@ -531,6 +561,24 @@ fn handle_control(
                 && let Err(error) = client.set_flag("mute", muted)
             {
                 tracing::debug!(%error, "hover preview mute change was rejected");
+            }
+            true
+        }
+        Control::Seek(offset_seconds) => {
+            if source.is_some() {
+                let _ = client.command(&["seek", &format!("{offset_seconds:.2}"), "relative"]);
+            }
+            true
+        }
+        Control::SeekAbsolute(seconds) => {
+            if source.is_some() {
+                let _ = client.command(&["seek", &format!("{seconds:.2}"), "absolute"]);
+            }
+            true
+        }
+        Control::Pause(paused) => {
+            if source.is_some() {
+                let _ = client.set_flag("pause", paused);
             }
             true
         }

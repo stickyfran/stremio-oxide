@@ -116,15 +116,15 @@ fn create_sandboxed_lua() -> mlua::Result<mlua::Lua> {
         },
     );
 
-    // Remove dangerous standard library functions
+    // Remove dangerous standard library functions and modules
     let globals = lua.globals();
     globals.raw_remove("os")?;
     globals.raw_remove("io")?;
     globals.raw_remove("loadfile")?;
     globals.raw_remove("dofile")?;
-
-    // Replace `require` with a restricted version that only loads from plugin dir
+    globals.raw_remove("package")?; // Previene package.loadlib que permite cargar C libraries (.so/.dll)
     globals.raw_remove("require")?;
+    globals.raw_remove("load")?; // Previene ejecución de bytecode no confiable
 
     Ok(lua)
 }

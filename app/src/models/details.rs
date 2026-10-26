@@ -326,9 +326,15 @@ pub fn setup(
     // Episode changed callback
     ui.on_details_episode_changed({
         let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
         move |episode_idx, video_id| {
             if let Ok(mut ep) = get_active_episode_idx().lock() {
                 *ep = episode_idx as usize;
+            }
+
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_detail_stream_loading_count(1);
+                ui.set_stream_links(slint::ModelRc::default());
             }
 
             let rt = runtime.clone();
@@ -341,6 +347,7 @@ pub fn setup(
 
     ui.on_details_manual_episode_selected({
         let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
         move |season, episode| {
             if episode < 1 || season < 0 {
                 return;
@@ -367,7 +374,14 @@ pub fn setup(
                     .or_else(|| Some(format!("{}:{season}:{episode}", selected.meta_path.id)))
             });
             if let Some(video_id) = video_id {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_detail_stream_loading_count(1);
+                    ui.set_stream_links(slint::ModelRc::default());
+                }
                 reload_stream_for_video(&runtime, video_id);
+            } else if let Some(ui) = ui_weak.upgrade() {
+                ui.set_detail_stream_loading_count(0);
+                ui.set_stream_links(slint::ModelRc::default());
             }
         }
     });
@@ -695,6 +709,7 @@ pub(crate) fn projection_fingerprint(
     fingerprint.bool(is_in_library);
     fingerprint.u64(match presentation {
         DetailsPresentation::Preview => 0,
+        DetailsPresentation::LibraryPreview => 2,
         DetailsPresentation::Full => 1,
     });
 
@@ -956,7 +971,36 @@ pub fn sync(
 
         let directors = projected_links(meta_item, &["director", "directors"]);
         ui.set_discover_preview_directors(slint::ModelRc::new(slint::VecModel::from(directors)));
-        ui.set_discover_preview_has_trailer(!meta_item.preview.trailer_streams.is_empty());
+        let stream_url = meta_item
+            .preview
+            .trailer_streams
+            .first()
+            .and_then(|stream| {
+                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } = &stream.source {
+                    Some(format!("https://www.youtube.com/watch?v={yt_id}"))
+                } else {
+                    crate::playback::trailer_stream_url(stream, None, &stremio_core::types::profile::Settings::default())
+                }
+            });
+
+        ui.set_discover_preview_has_trailer(stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty());
+
+        if let Some(preview_player) = crate::preview_player::global() {
+            let trailer = crate::playback::TrailerPreview {
+                meta_id: meta_item.preview.id.clone(),
+                title: detail_title.to_string(),
+                year: detail_released_date.to_string(),
+                runtime: detail_runtime.to_string(),
+                rating: detail_rating.to_string(),
+                description: detail_description.to_string(),
+                genres: Vec::new(),
+                poster: meta_item.preview.poster.clone(),
+                in_library: is_in_library,
+                stream_url,
+                preview: Some(meta_item.preview.clone()),
+            };
+            preview_player.begin_drawer(&ui, &trailer);
+        }
 
         // Sync Library State for discover preview
         ui.set_discover_preview_is_in_library(is_in_library);
@@ -966,6 +1010,100 @@ pub fn sync(
                 .as_ref()
                 .map(|item| item.watched())
                 .unwrap_or(false),
+        );
+
+        let is_series = meta_item.preview.r#type == "series";
+        let year_opt = (!detail_released_date.is_empty()).then(|| detail_released_date.to_string());
+        crate::ratings::fetch_and_project_preview(
+            ui_weak.clone(),
+            meta_item.preview.id.clone(),
+            detail_title.to_string(),
+            year_opt.clone(),
+            is_series,
+            crate::ratings::PreviewSource::Discover,
+        );
+    } else if presentation == DetailsPresentation::LibraryPreview {
+        let _span = tracing::info_span!("sync_library_preview_panel").entered();
+        ui.set_library_preview_title(detail_title.into());
+        ui.set_library_preview_description(detail_description.into());
+        ui.set_library_preview_year(detail_released_date.as_ref().into());
+        ui.set_library_preview_rating(detail_rating.into());
+        ui.set_library_preview_runtime(detail_runtime.into());
+        ui.set_library_has_preview(true);
+
+        ui.set_library_preview_poster_url(
+            meta_item
+                .preview
+                .poster
+                .as_ref()
+                .map(url::Url::as_str)
+                .unwrap_or_default()
+                .into(),
+        );
+        let poster = crate::image_cache::get_poster_image(&meta_item.preview.poster, ui_weak);
+        ui.set_library_preview_poster(poster);
+        ui.set_library_preview_logo_url(logo_url.into());
+        let logo = crate::image_cache::get_poster_image(&meta_item.preview.logo, ui_weak);
+        ui.set_library_preview_logo(logo);
+
+        let slint_genres = projected_links(meta_item, &["genre", "genres"]);
+        let genres_model = slint::VecModel::from(slint_genres);
+        ui.set_library_preview_genres(slint::ModelRc::new(genres_model));
+
+        let cast_names = projected_links(meta_item, &["actor", "actors", "cast"]);
+        let cast_model = slint::VecModel::from(cast_names);
+        ui.set_library_preview_cast(slint::ModelRc::new(cast_model));
+
+        let directors = projected_links(meta_item, &["director", "directors"]);
+        let stream_url = meta_item
+            .preview
+            .trailer_streams
+            .first()
+            .and_then(|stream| {
+                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } = &stream.source {
+                    Some(format!("https://www.youtube.com/watch?v={yt_id}"))
+                } else {
+                    crate::playback::trailer_stream_url(stream, None, &stremio_core::types::profile::Settings::default())
+                }
+            });
+
+        ui.set_library_preview_has_trailer(stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty());
+
+        if let Some(preview_player) = crate::preview_player::global() {
+            let trailer = crate::playback::TrailerPreview {
+                meta_id: meta_item.preview.id.clone(),
+                title: detail_title.to_string(),
+                year: detail_released_date.to_string(),
+                runtime: detail_runtime.to_string(),
+                rating: detail_rating.to_string(),
+                description: detail_description.to_string(),
+                genres: Vec::new(),
+                poster: meta_item.preview.poster.clone(),
+                in_library: is_in_library,
+                stream_url,
+                preview: Some(meta_item.preview.clone()),
+            };
+            preview_player.begin_drawer(&ui, &trailer);
+        }
+
+        ui.set_library_preview_is_in_library(is_in_library);
+        ui.set_library_preview_is_watched(
+            meta_details
+                .library_item
+                .as_ref()
+                .map(|item| item.watched())
+                .unwrap_or(false),
+        );
+
+        let is_series = meta_item.preview.r#type == "series";
+        let year_opt = (!detail_released_date.is_empty()).then(|| detail_released_date.to_string());
+        crate::ratings::fetch_and_project_preview(
+            ui_weak.clone(),
+            meta_item.preview.id.clone(),
+            detail_title.to_string(),
+            year_opt,
+            is_series,
+            crate::ratings::PreviewSource::Library,
         );
     } else {
         let _span = tracing::info_span!("sync_full_details").entered();

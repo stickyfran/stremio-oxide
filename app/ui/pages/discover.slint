@@ -7,6 +7,7 @@ import { EmptyState } from "../components/feedback.slint";
 import { MetaStringLinks } from "../components/meta_preview.slint";
 import { SelectField } from "../components/select.slint";
 import { ModalDialog } from "../components/overlays.slint";
+import { MediaPreviewDrawer } from "../components/preview_drawer.slint";
 
 export struct DiscoverRow {
     cols: [MediaCardItem],
@@ -37,6 +38,9 @@ export component DiscoverPage inherits Rectangle {
     in property <string> selected-addon-name: "";
 
     in-out property <length> scroll-y: 0px;
+    function reset-scroll() {
+        root.scroll-y = 0px;
+    }
 
     in property <bool> has-preview: false;
     in property <string> preview-title: "";
@@ -53,6 +57,17 @@ export component DiscoverPage inherits Rectangle {
     in property <bool> preview-is-watched: false;
     in property <bool> preview-has-trailer: false;
     in property <string> preview-trailer-selection-id: "";
+    in property <string> preview-rt-rating: "";
+    in property <string> preview-metacritic-rating: "";
+    in property <bool> preview-ratings-loading: false;
+    in property <image> preview-video-frame;
+    in property <bool> preview-has-video-frame: false;
+    in property <bool> preview-video-loading: false;
+    in property <bool> preview-video-playing: false;
+    in property <bool> preview-video-muted: true;
+    in property <bool> preview-autoplay-enabled: false;
+    in-out property <float> preview-video-progress: 0.0;
+    in property <string> preview-video-time-label: "";
     in property <bool> enable-hover-preview: false;
     in property <duration> hover-preview-delay: 1200ms;
 
@@ -69,6 +84,13 @@ export component DiscoverPage inherits Rectangle {
     callback toggle-library-preview;
     callback toggle-watched-preview;
     callback play-trailer-preview(string);
+    callback toggle-trailer-playback;
+    callback toggle-video-muted;
+    callback toggle-autoplay;
+    callback maximize-trailer;
+    callback seek-video-relative(float);
+    callback seek-video-progress(float);
+    callback close-preview-drawer;
     callback extra-changed(string, string);
     callback install-selected-addon;
     callback metadata-filter-selected(string);
@@ -138,6 +160,7 @@ export component DiscoverPage inherits Rectangle {
                             root.genre-open = false;
                         }
                         selected(value) => {
+                            root.reset-scroll();
                             root.type-open = false;
                             root.type-changed(value);
                         }
@@ -156,6 +179,7 @@ export component DiscoverPage inherits Rectangle {
                             root.genre-open = false;
                         }
                         selected(value) => {
+                            root.reset-scroll();
                             root.catalog-open = false;
                             root.catalog-changed(value);
                         }
@@ -174,6 +198,7 @@ export component DiscoverPage inherits Rectangle {
                             root.catalog-open = false;
                         }
                         selected(value) => {
+                            root.reset-scroll();
                             root.genre-open = false;
                             root.genre-changed(value);
                         }
@@ -303,188 +328,85 @@ export component DiscoverPage inherits Rectangle {
                     }
                 }
             }
-        }
 
-        if (root.preview-visible) : preview := Rectangle {
-            width: root.preview-panel-width;
-            background: Theme.modal-background;
-            border-radius: 0.75 * root.unit;
-            clip: true;
+            if (root.pagination-latched && root.has-next-page) : Rectangle {
+                height: 3 * root.unit;
+                background: transparent;
 
-            if (root.preview-poster.width > 0) : Image {
-                source: root.preview-poster;
-                width: parent.width;
-                height: parent.height;
-                image-fit: cover;
-                opacity: 0.15;
-            }
-
-            ScrollView {
-                width: parent.width;
-                height: max(0px, parent.height - 6.5 * root.unit);
-                viewport-width: parent.width;
-                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
-
-                drawer-content := VerticalLayout {
-                    width: preview.width;
-                    padding-left: 2.5 * root.unit;
-                    padding-right: 2.5 * root.unit;
-                    padding-top: 2 * root.unit;
-                    padding-bottom: 2 * root.unit;
-                    spacing: 1.5 * root.unit;
-                    alignment: start;
-
-                    if (root.preview-logo.width > 0) : Image {
-                        horizontal-stretch: 1;
-                        max-width: preview.width - 5 * root.unit;
-                        height: 5 * root.unit;
-                        source: root.preview-logo;
-                        image-fit: contain;
-                        horizontal-alignment: left;
-                    }
-
-                    if (root.preview-logo.width == 0) : Text {
-                        horizontal-stretch: 1;
-                        max-width: preview.width - 5 * root.unit;
-                        text: root.preview-title;
-                        color: Theme.text-primary;
-                        font-size: 1.8 * root.unit;
-                        font-weight: 600;
-                        wrap: word-wrap;
-                    }
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 8.5 * root.unit;
+                    height: 2.2 * root.unit;
+                    background: Theme.background.with-alpha(0.85);
+                    border-radius: self.height / 2;
+                    border-width: 1px;
+                    border-color: Theme.divider;
 
                     HorizontalLayout {
-                        horizontal-stretch: 1;
-                        max-width: preview.width - 5 * root.unit;
-                        spacing: 2.25 * root.unit;
-                        alignment: start;
-                        Text {
-                            text: root.preview-runtime;
-                            color: Theme.text-primary;
-                            opacity: 0.85;
-                            font-size: 1.1 * root.unit;
-                            font-weight: 600;
-                        }
-                        Text {
-                            text: root.preview-year;
-                            color: Theme.text-primary;
-                            opacity: 0.6;
-                            font-size: root.unit;
-                        }
-                        Text {
-                            text: root.preview-rating;
-                            color: Theme.text-primary;
-                            opacity: 0.6;
-                            font-size: root.unit;
-                        }
-                        if (root.preview-rating != "") : Image {
-                            width: 2.5 * root.unit;
-                            height: 1.4 * root.unit;
-                            source: @image-url("../assets/images/icons/imdb.svg");
+                        alignment: center;
+                        spacing: 0.6 * root.unit;
+                        padding-left: root.unit;
+                        padding-right: root.unit;
+
+                        Image {
+                            width: 1.1 * root.unit;
+                            height: 1.1 * root.unit;
+                            source: @image-url("../assets/images/icons/hourglass.svg");
+                            colorize: Theme.primary-accent;
                             image-fit: contain;
                         }
-                    }
-
-                    Text {
-                        horizontal-stretch: 1;
-                        max-width: preview.width - 5 * root.unit;
-                        text: root.preview-description;
-                        color: Theme.text-primary;
-                        opacity: 0.65;
-                        font-size: root.unit;
-                        wrap: word-wrap;
-                    }
-
-                    if (root.preview-genres.length > 0) : MetaStringLinks {
-                        horizontal-stretch: 1;
-                        max-width: preview.width - 5 * root.unit;
-                        unit: root.unit;
-                        label: @tr("LINKS_GENRES" => "Genres");
-                        values: root.preview-genres;
-                        link-selected(value) => { root.metadata-filter-selected(value); }
-                    }
-
-                    if (root.preview-cast.length > 0) : MetaStringLinks {
-                        horizontal-stretch: 1;
-                        max-width: preview.width - 5 * root.unit;
-                        unit: root.unit;
-                        label: @tr("CAST" => "Cast");
-                        values: root.preview-cast;
-                        link-selected(value) => { root.metadata-filter-selected(value); }
-                    }
-
-                    if (root.preview-directors.length > 0) : MetaStringLinks {
-                        horizontal-stretch: 1;
-                        max-width: preview.width - 5 * root.unit;
-                        unit: root.unit;
-                        label: @tr("LINKS_DIRECTORS" => "Directors");
-                        values: root.preview-directors;
-                        link-selected(value) => { root.metadata-filter-selected(value); }
+                        Text {
+                            text: @tr("Loading...");
+                            color: Theme.text-primary;
+                            font-size: 0.85 * root.unit;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
+        }
 
-            actions := HorizontalLayout {
-                x: 2.5 * root.unit;
-                y: parent.height - 5.5 * root.unit;
-                width: parent.width - 5 * root.unit;
-                height: 3.5 * root.unit;
-                spacing: 0.65 * root.unit;
+        MediaPreviewDrawer {
+            unit: root.unit;
+            drawer-width: root.preview-panel-width;
+            is-open: root.has-preview && root.preview-title != "";
+            title: root.preview-title;
+            logo: root.preview-logo;
+            poster: root.preview-poster;
+            year: root.preview-year;
+            runtime: root.preview-runtime;
+            description: root.preview-description;
+            genres: root.preview-genres;
+            cast: root.preview-cast;
+            directors: root.preview-directors;
+            rating-imdb: root.preview-rating;
+            rating-rt: root.preview-rt-rating;
+            rating-metacritic: root.preview-metacritic-rating;
+            ratings-loading: root.preview-ratings-loading;
+            video-frame: root.preview-video-frame;
+            has-video-frame: root.preview-has-video-frame;
+            video-loading: root.preview-video-loading;
+            video-playing: root.preview-video-playing;
+            video-muted: root.preview-video-muted;
+            has-trailer: root.preview-has-trailer;
+            autoplay-enabled: root.preview-autoplay-enabled;
+            video-progress <=> root.preview-video-progress;
+            video-time-label: root.preview-video-time-label;
+            in-library: root.preview-is-in-library;
+            is-watched: root.preview-is-watched;
 
-                if (root.preview-has-trailer && root.preview-trailer-selection-id != "") : IconAction {
-                    unit: root.unit;
-                    width: 3.5 * root.unit;
-                    height: 3.5 * root.unit;
-                    icon-size: 1.55 * root.unit;
-                    label: @tr("TRAILER" => "Trailer");
-                    surface-color: Theme.overlay;
-                    icon-source: @image-url("../assets/images/icons/trailer.svg");
-                    clicked => { root.play-trailer-preview(root.preview-trailer-selection-id); }
-                }
-
-                IconAction {
-                    unit: root.unit;
-                    width: 3.5 * root.unit;
-                    height: 3.5 * root.unit;
-                    icon-size: 1.55 * root.unit;
-                    label: root.preview-is-in-library
-                        ? @tr("REMOVE_FROM_LIB" => "Remove from Library")
-                        : @tr("ADD_TO_LIB" => "Add to Library");
-                    active: root.preview-is-in-library;
-                    active-color: Theme.accent;
-                    surface-color: Theme.overlay;
-                    icon-source: root.preview-is-in-library
-                        ? @image-url("../assets/images/icons/remove-from-library.svg")
-                        : @image-url("../assets/images/icons/add-to-library.svg");
-                    clicked => { root.toggle-library-preview(); }
-                }
-
-                IconAction {
-                    unit: root.unit;
-                    width: 3.5 * root.unit;
-                    height: 3.5 * root.unit;
-                    icon-size: 1.55 * root.unit;
-                    label: root.preview-is-watched
-                        ? @tr("MARK_AS_UNWATCHED" => "Mark as unwatched")
-                        : @tr("MARK_AS_WATCHED" => "Mark as watched");
-                    active: root.preview-is-watched;
-                    active-color: Theme.accent;
-                    surface-color: Theme.overlay;
-                    icon-source: root.preview-is-watched
-                        ? @image-url("../assets/images/icons/eye-off.svg")
-                        : @image-url("../assets/images/icons/eye.svg");
-                    clicked => { root.toggle-watched-preview(); }
-                }
-
-                PillButton {
-                    horizontal-stretch: 1;
-                    unit: root.unit;
-                    label: @tr("SHOW" => "Show");
-                    primary: true;
-                    clicked => { root.play-preview(); }
-                }
-            }
+            play-full-details => { root.play-preview(); }
+            toggle-library => { root.toggle-library-preview(); }
+            toggle-watched => { root.toggle-watched-preview(); }
+            close-drawer => { root.close-preview-drawer(); }
+            toggle-trailer-playback => { root.toggle-trailer-playback(); }
+            toggle-video-muted => { root.toggle-video-muted(); }
+            toggle-autoplay => { root.toggle-autoplay(); }
+            maximize-trailer => { root.maximize-trailer(); }
+            seek-video-relative(offset) => { root.seek-video-relative(offset); }
+            seek-video-progress(progress) => { root.seek-video-progress(progress); }
+            metadata-filter-selected(val) => { root.metadata-filter-selected(val); }
         }
     }
 

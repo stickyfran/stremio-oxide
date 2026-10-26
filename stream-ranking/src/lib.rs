@@ -69,6 +69,10 @@ pub struct RankedStream {
     pub score: i32,
     pub reasons: Vec<ScoreReason>,
     pub filtered: bool,
+    #[serde(default)]
+    pub effective_size: Option<u64>,
+    #[serde(default)]
+    pub effective_seeders: Option<u32>,
 }
 
 pub fn rank_streams(
@@ -85,48 +89,39 @@ pub fn rank_streams(
     match mode {
         RankingMode::Original => streams.sort_by_key(|stream| stream.input.original_index),
         RankingMode::Quality => streams.sort_by(|left, right| {
-            right
-                .parsed
-                .quality_height
-                .cmp(&left.parsed.quality_height)
+            let left_cached = left.input.debrid == Some(DebridAvailability::Cached);
+            let right_cached = right.input.debrid == Some(DebridAvailability::Cached);
+            right_cached
+                .cmp(&left_cached)
+                .then_with(|| right.parsed.quality_height.cmp(&left.parsed.quality_height))
                 .then_with(|| left.input.original_index.cmp(&right.input.original_index))
         }),
         RankingMode::Smallest => streams.sort_by(|left, right| {
-            let left_size = left
-                .input
-                .size_bytes
-                .or_else(|| parse_size_bytes_from_text(&left.input.description))
-                .or_else(|| parse_size_bytes_from_text(&left.input.name));
-            let right_size = right
-                .input
-                .size_bytes
-                .or_else(|| parse_size_bytes_from_text(&right.input.description))
-                .or_else(|| parse_size_bytes_from_text(&right.input.name));
-            left_size
-                .unwrap_or(u64::MAX)
-                .cmp(&right_size.unwrap_or(u64::MAX))
+            let left_cached = left.input.debrid == Some(DebridAvailability::Cached);
+            let right_cached = right.input.debrid == Some(DebridAvailability::Cached);
+            let left_size = left.effective_size;
+            let right_size = right.effective_size;
+            right_cached
+                .cmp(&left_cached)
+                .then_with(|| left_size.unwrap_or(u64::MAX).cmp(&right_size.unwrap_or(u64::MAX)))
                 .then_with(|| left.input.original_index.cmp(&right.input.original_index))
         }),
         RankingMode::Seeders => streams.sort_by(|left, right| {
-            let left_seeds = left
-                .input
-                .seeders
-                .or_else(|| parse_seeders_from_text(&left.input.description))
-                .or_else(|| parse_seeders_from_text(&left.input.name));
-            let right_seeds = right
-                .input
-                .seeders
-                .or_else(|| parse_seeders_from_text(&right.input.description))
-                .or_else(|| parse_seeders_from_text(&right.input.name));
-            right_seeds
-                .unwrap_or_default()
-                .cmp(&left_seeds.unwrap_or_default())
+            let left_cached = left.input.debrid == Some(DebridAvailability::Cached);
+            let right_cached = right.input.debrid == Some(DebridAvailability::Cached);
+            let left_seeds = left.effective_seeders;
+            let right_seeds = right.effective_seeders;
+            right_cached
+                .cmp(&left_cached)
+                .then_with(|| right_seeds.unwrap_or_default().cmp(&left_seeds.unwrap_or_default()))
                 .then_with(|| left.input.original_index.cmp(&right.input.original_index))
         }),
         RankingMode::Smart => streams.sort_by(|left, right| {
-            right
-                .score
-                .cmp(&left.score)
+            let left_cached = left.input.debrid == Some(DebridAvailability::Cached);
+            let right_cached = right.input.debrid == Some(DebridAvailability::Cached);
+            right_cached
+                .cmp(&left_cached)
+                .then_with(|| right.score.cmp(&left.score))
                 .then_with(|| compare_quality(right, left))
                 .then_with(|| left.input.original_index.cmp(&right.input.original_index))
         }),
@@ -138,7 +133,11 @@ fn compare_quality(left: &RankedStream, right: &RankedStream) -> Ordering {
     left.parsed.quality_height.cmp(&right.parsed.quality_height)
 }
 
-fn rank_one(input: RankInput) -> RankedStream {
+fn rank_one(mut input: RankInput) -> RankedStream {
+    if input.debrid.is_none() {
+        input.debrid = parse_debrid_availability_from_text(&input.description)
+            .or_else(|| parse_debrid_availability_from_text(&input.name));
+    }
     let parsed = parse_stream(&input);
     let mut score = 0;
     let mut reasons = Vec::new();
@@ -257,12 +256,12 @@ fn rank_one(input: RankInput) -> RankedStream {
         Some(DebridAvailability::Cached) => reason(
             ReasonKind::Positive,
             "Instant on debrid provider".to_owned(),
-            32,
+            100,
         ),
         Some(DebridAvailability::Uncached) => reason(
-            ReasonKind::Neutral,
+            ReasonKind::Negative,
             "Not cached on debrid provider".to_owned(),
-            0,
+            -50,
         ),
         Some(DebridAvailability::Unknown | DebridAvailability::ProviderUnavailable) | None => {
             reason(
@@ -286,6 +285,8 @@ fn rank_one(input: RankInput) -> RankedStream {
         score,
         reasons,
         filtered: parsed.suspicious,
+        effective_size,
+        effective_seeders,
     }
 }
 
@@ -295,23 +296,44 @@ pub fn parse_stream(input: &RankInput) -> ParsedStream {
     let quality_height = [4320_u16, 2160, 1440, 1080, 720, 576, 540, 480, 360]
         .into_iter()
         .find(|height| {
-            upper.contains(&format!("{height}P"))
+            let marker = match height {
+                4320 => "4320P",
+                2160 => "2160P",
+                1440 => "1440P",
+                1080 => "1080P",
+                720 => "720P",
+                576 => "576P",
+                540 => "540P",
+                480 => "480P",
+                360 => "360P",
+                _ => "",
+            };
+            upper.contains(marker)
                 || (*height == 2160 && upper.contains("4K"))
                 || (*height == 4320 && upper.contains("8K"))
         });
-    let source = [
-        ("REMUX", "REMUX"),
-        ("BLURAY", "BluRay"),
-        ("BLU-RAY", "BluRay"),
-        ("WEB-DL", "WEB-DL"),
-        ("WEBDL", "WEB-DL"),
-        ("WEBRIP", "WEBRip"),
-        ("HDTV", "HDTV"),
-        ("CAM", "CAM"),
-        ("TELESYNC", "TS"),
-    ]
-    .into_iter()
-    .find_map(|(marker, normalized)| upper.contains(marker).then(|| normalized.to_owned()));
+
+    let has_token = |token: &str| -> bool {
+        upper.split(|c: char| !c.is_alphanumeric()).any(|w| w == token)
+    };
+
+    let source = if upper.contains("REMUX") {
+        Some("REMUX".to_owned())
+    } else if upper.contains("BLU-RAY") || upper.contains("BLURAY") {
+        Some("BluRay".to_owned())
+    } else if upper.contains("WEB-DL") || upper.contains("WEBDL") {
+        Some("WEB-DL".to_owned())
+    } else if upper.contains("WEBRIP") {
+        Some("WEBRip".to_owned())
+    } else if upper.contains("HDTV") {
+        Some("HDTV".to_owned())
+    } else if has_token("CAM") || has_token("CAMRIP") || has_token("HDCAM") {
+        Some("CAM".to_owned())
+    } else if has_token("TELESYNC") || has_token("TS") || has_token("HDTS") {
+        Some("TS".to_owned())
+    } else {
+        None
+    };
     let codec = [
         (&["AV1", "AV01"][..], "AV1"),
         (&["HEVC", "H265", "H.265", "X265"][..], "HEVC"),
@@ -324,13 +346,14 @@ pub fn parse_stream(input: &RankInput) -> ParsedStream {
             .any(|marker| upper.contains(marker))
             .then(|| normalized.to_owned())
     });
-    let dolby_vision = ["DOLBY VISION", "DOVI", " DV "]
-        .iter()
-        .any(|marker| upper.contains(marker));
+    let dolby_vision = upper.contains("DOLBY VISION")
+        || upper.contains("DOVI")
+        || has_token("DV");
     let hdr = dolby_vision
-        || ["HDR10+", "HDR10", " HDR ", "HLG"]
-            .iter()
-            .any(|marker| upper.contains(marker));
+        || upper.contains("HDR10+")
+        || upper.contains("HDR10")
+        || upper.contains("HLG")
+        || has_token("HDR");
     let audio = [
         "TRUEHD ATMOS",
         "ATMOS",
@@ -372,10 +395,10 @@ pub fn parse_stream(input: &RankInput) -> ParsedStream {
         "INSTALL CODEC",
         "EXE INCLUDED",
         "SCAM",
-        "FAKE",
     ]
     .iter()
-    .any(|marker| upper.contains(marker));
+    .any(|marker| upper.contains(marker))
+        || has_token("FAKE");
 
     ParsedStream {
         quality_height,
@@ -388,6 +411,38 @@ pub fn parse_stream(input: &RankInput) -> ParsedStream {
         release_group,
         suspicious,
     }
+}
+
+pub fn parse_debrid_availability_from_text(text: &str) -> Option<DebridAvailability> {
+    let upper = text.to_ascii_uppercase();
+    if upper.contains("DOWNLOAD]")
+        || upper.contains("DOWNLOAD)")
+        || upper.contains("RD DOWNLOAD")
+        || upper.contains("PM DOWNLOAD")
+        || upper.contains("AD DOWNLOAD")
+        || upper.contains("TB DOWNLOAD")
+        || upper.contains("OC DOWNLOAD")
+        || upper.contains("UNCACHED")
+    {
+        return Some(DebridAvailability::Uncached);
+    }
+    if upper.contains("[RD+]")
+        || upper.contains("[PM+]")
+        || upper.contains("[AD+]")
+        || upper.contains("[TB+]")
+        || upper.contains("[OC+]")
+        || upper.contains("[DL+]")
+        || upper.contains("[ED+]")
+        || upper.contains("RD+")
+        || upper.contains("PM+")
+        || upper.contains("AD+")
+        || upper.contains("TB+")
+        || text.contains('⚡')
+        || upper.contains("DEBRID CACHED")
+    {
+        return Some(DebridAvailability::Cached);
+    }
+    None
 }
 
 pub fn parse_size_bytes_from_text(text: &str) -> Option<u64> {
@@ -688,5 +743,50 @@ mod tests {
         assert!(formatted.contains("👤 12"));
         assert!(formatted.contains("💾 1.24 GB"));
         assert_eq!(formatted.lines().count(), 2);
+    }
+
+    #[test]
+    fn parses_debrid_availability_from_text_correctly() {
+        assert_eq!(
+            parse_debrid_availability_from_text("[RD+] Torrentio 1080p"),
+            Some(DebridAvailability::Cached)
+        );
+        assert_eq!(
+            parse_debrid_availability_from_text("Torrentio\nRD+ 4K HDR"),
+            Some(DebridAvailability::Cached)
+        );
+        assert_eq!(
+            parse_debrid_availability_from_text("MediaFusion ⚡ 1080p"),
+            Some(DebridAvailability::Cached)
+        );
+        assert_eq!(
+            parse_debrid_availability_from_text("[RD download] Torrentio 1080p"),
+            Some(DebridAvailability::Uncached)
+        );
+        assert_eq!(
+            parse_debrid_availability_from_text("Torrentio\nRD download"),
+            Some(DebridAvailability::Uncached)
+        );
+        assert_eq!(
+            parse_debrid_availability_from_text("The Pirate Bay 1080p"),
+            None
+        );
+    }
+
+    #[test]
+    fn cached_debrid_streams_always_prioritized_over_torrents() {
+        let torrent_4k = input(0, "4K REMUX BluRay Atmos", 50_000_000_000, 500);
+        let rd_cached_1080p = input(1, "[RD+] 1080p WEB-DL", 2_000_000_000, 10);
+        let rd_uncached = input(2, "[RD download] 4K BluRay", 40_000_000_000, 5);
+
+        let ranked = rank_streams(
+            [torrent_4k.clone(), rd_cached_1080p.clone(), rd_uncached.clone()],
+            RankingMode::Smart,
+            false,
+        );
+
+        // Cached RD must be first even if torrent has 4K REMUX 500 seeds
+        assert_eq!(ranked[0].input.id, rd_cached_1080p.id);
+        assert_eq!(ranked[0].input.debrid, Some(DebridAvailability::Cached));
     }
 }

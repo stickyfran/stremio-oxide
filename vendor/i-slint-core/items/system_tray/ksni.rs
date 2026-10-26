@@ -38,7 +38,11 @@ struct KsniTray {
 impl ::ksni::Tray for KsniTray {
     fn id(&self) -> std::string::String {
         // This cannot be empty.
-        "slint-tray".into()
+        "stremio-oxide".into()
+    }
+
+    fn icon_name(&self) -> std::string::String {
+        "stremio-oxide".into()
     }
 
     fn activate(&mut self, x: i32, y: i32) {

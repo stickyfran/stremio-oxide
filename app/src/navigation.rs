@@ -66,6 +66,7 @@ impl TryFrom<i32> for Tab {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DetailsPresentation {
     Preview,
+    LibraryPreview,
     Full,
 }
 
@@ -83,6 +84,7 @@ pub enum NavigationIntent {
     SelectTab(Tab),
     OpenSearch { query: String },
     SelectDiscoverPreview { media_id: String },
+    SelectLibraryPreview { media_id: String },
     OpenAddonDetails { transport_url: String },
     OpenDetails { media_id: String },
     OpenPlayer,
@@ -94,6 +96,7 @@ pub enum NavigationIntent {
 struct NavigationHistoryEntry {
     routes: Vec<Route>,
     discover_preview_id: Option<String>,
+    library_preview_id: Option<String>,
 }
 
 impl From<&NavigationSnapshot> for NavigationHistoryEntry {
@@ -101,6 +104,7 @@ impl From<&NavigationSnapshot> for NavigationHistoryEntry {
         Self {
             routes: snapshot.routes.clone(),
             discover_preview_id: snapshot.discover_preview_id.clone(),
+            library_preview_id: snapshot.library_preview_id.clone(),
         }
     }
 }
@@ -110,6 +114,7 @@ pub struct NavigationSnapshot {
     pub routes: Vec<Route>,
     pub revision: u64,
     pub discover_preview_id: Option<String>,
+    pub library_preview_id: Option<String>,
 }
 
 impl NavigationSnapshot {
@@ -153,8 +158,15 @@ impl NavigationSnapshot {
             return Some(DetailsPresentation::Full);
         }
 
-        (self.root_tab().is_discovery() && self.discover_preview_id.as_deref() == Some(media_id))
-            .then_some(DetailsPresentation::Preview)
+        if self.root_tab().is_discovery() && self.discover_preview_id.as_deref() == Some(media_id) {
+            return Some(DetailsPresentation::Preview);
+        }
+
+        if self.root_tab() == Tab::Library && self.library_preview_id.as_deref() == Some(media_id) {
+            return Some(DetailsPresentation::LibraryPreview);
+        }
+
+        None
     }
 }
 
@@ -182,6 +194,7 @@ impl NavigationController {
                 routes: vec![Route::Tab(tab)],
                 revision: 0,
                 discover_preview_id: None,
+                library_preview_id: None,
             })),
             forward_history: Arc::new(Mutex::new(Vec::new())),
         }
@@ -225,6 +238,7 @@ impl NavigationController {
                 };
                 state.routes = history_entry.routes;
                 state.discover_preview_id = history_entry.discover_preview_id;
+                state.library_preview_id = history_entry.library_preview_id;
                 true
             }
             _ => {
@@ -306,17 +320,22 @@ fn reduce(state: &mut NavigationSnapshot, intent: NavigationIntent) -> bool {
                 .is_discovery()
                 .then(|| state.discover_preview_id.clone())
                 .flatten();
-            if state.routes == routes && state.discover_preview_id == preview {
+            let lib_preview = (tab == Tab::Library)
+                .then(|| state.library_preview_id.clone())
+                .flatten();
+            if state.routes == routes && state.discover_preview_id == preview && state.library_preview_id == lib_preview {
                 return false;
             }
             state.routes = routes;
             state.discover_preview_id = preview;
+            state.library_preview_id = lib_preview;
             true
         }
         NavigationIntent::OpenSearch { query } => {
             state.routes.truncate(usize::from(!state.routes.is_empty()));
             state.routes.push(Route::Search { query });
             state.discover_preview_id = None;
+            state.library_preview_id = None;
             true
         }
         NavigationIntent::SelectDiscoverPreview { media_id } => {
@@ -326,6 +345,15 @@ fn reduce(state: &mut NavigationSnapshot, intent: NavigationIntent) -> bool {
                 return false;
             }
             state.discover_preview_id = Some(media_id);
+            true
+        }
+        NavigationIntent::SelectLibraryPreview { media_id } => {
+            if state.root_tab() != Tab::Library
+                || state.library_preview_id.as_deref() == Some(media_id.as_str())
+            {
+                return false;
+            }
+            state.library_preview_id = Some(media_id);
             true
         }
         NavigationIntent::OpenAddonDetails { transport_url } => {

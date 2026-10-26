@@ -35,11 +35,12 @@ export component TrailerHoverPopup inherits Rectangle {
     callback toggle-muted();
     callback play-requested();
     callback toggle-library-requested();
+    callback seek-relative(float);
     callback pointer-entered();
     callback pointer-left();
 
     private property <int> pulse-tick: 0;
-    property <length> popup-width: min(26 * root.unit, max(18 * root.unit, root.width - 4 * root.unit));
+    property <length> popup-width: min(42 * root.unit, max(26 * root.unit, root.width * 0.45));
     property <length> video-height: root.popup-width * Theme.landscape-shape-ratio;
     property <length> info-height: 12.5 * root.unit;
     property <length> popup-height: root.video-height + root.info-height;
@@ -76,6 +77,14 @@ export component TrailerHoverPopup inherits Rectangle {
             width: parent.width;
             height: parent.height;
             clicked => { root.play-requested(); }
+            scroll-event(event) => {
+                if (event.delta-y > 0px) {
+                    root.seek-relative(5.0);
+                } else if (event.delta-y < 0px) {
+                    root.seek-relative(-5.0);
+                }
+                accept
+            }
         }
 
         // The popup covers the card that opened it, so it has to take over the

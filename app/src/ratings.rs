@@ -25,6 +25,13 @@ static RATINGS_CACHE: LazyLock<Cache<String, Arc<MediaRatings>>> = LazyLock::new
 });
 
 static CURRENT_MEDIA_ID: OnceLock<Mutex<String>> = OnceLock::new();
+static CURRENT_PREVIEW_MEDIA_ID: OnceLock<Mutex<String>> = OnceLock::new();
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PreviewSource {
+    Discover,
+    Library,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct MediaRatings {
@@ -37,6 +44,15 @@ pub struct MediaRatings {
 
 pub fn clear_current_media() {
     if let Ok(mut id) = CURRENT_MEDIA_ID
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+    {
+        id.clear();
+    }
+}
+
+pub fn clear_current_preview_media() {
+    if let Ok(mut id) = CURRENT_PREVIEW_MEDIA_ID
         .get_or_init(|| Mutex::new(String::new()))
         .lock()
     {
@@ -144,6 +160,119 @@ fn project_if_current(ui_weak: &slint::Weak<MainWindow>, target_id: &str, rating
             ui.set_detail_letterboxd_rating(lb.into());
             ui.set_detail_anilist_rating(ani.into());
             ui.set_detail_kitsu_rating(kit.into());
+        }
+    });
+}
+
+pub fn fetch_and_project_preview(
+    ui_weak: slint::Weak<MainWindow>,
+    media_id: String,
+    title: String,
+    year: Option<String>,
+    is_series: bool,
+    source: PreviewSource,
+) {
+    let current_slot = CURRENT_PREVIEW_MEDIA_ID.get_or_init(|| Mutex::new(String::new()));
+    if let Ok(mut current) = current_slot.lock() {
+        *current = media_id.clone();
+    }
+
+    // Reset current rating UI immediately and set ratings_loading = true
+    let weak_init = ui_weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = weak_init.upgrade() {
+            match source {
+                PreviewSource::Discover => {
+                    ui.set_discover_preview_rt_rating("".into());
+                    ui.set_discover_preview_metacritic_rating("".into());
+                    ui.set_discover_preview_ratings_loading(true);
+                }
+                PreviewSource::Library => {
+                    ui.set_library_preview_rt_rating("".into());
+                    ui.set_library_preview_metacritic_rating("".into());
+                    ui.set_library_preview_ratings_loading(true);
+                }
+            }
+        }
+    });
+
+    if title.trim().is_empty() {
+        let weak_empty = ui_weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak_empty.upgrade() {
+                match source {
+                    PreviewSource::Discover => ui.set_discover_preview_ratings_loading(false),
+                    PreviewSource::Library => ui.set_library_preview_ratings_loading(false),
+                }
+            }
+        });
+        return;
+    }
+
+    tokio::spawn(async move {
+        let cache_key = format!("preview:{}:{}:{is_series}", media_id, title);
+        if let Some(cached) = RATINGS_CACHE.get(&cache_key).await {
+            project_preview_if_current(&ui_weak, &media_id, &cached, source);
+            return;
+        }
+
+        let mut ratings = MediaRatings::default();
+        let (rt_res, mc_res) = tokio::join!(
+            fetch_rotten_tomatoes_rating(&title, year.as_deref(), is_series),
+            fetch_metacritic_rating(&title, is_series),
+        );
+        ratings.rotten_tomatoes = rt_res;
+        ratings.metacritic = mc_res;
+
+        let ratings_arc = Arc::new(ratings);
+        RATINGS_CACHE.insert(cache_key, ratings_arc.clone()).await;
+        project_preview_if_current(&ui_weak, &media_id, &ratings_arc, source);
+    });
+}
+
+fn project_preview_if_current(
+    ui_weak: &slint::Weak<MainWindow>,
+    target_id: &str,
+    ratings: &MediaRatings,
+    source: PreviewSource,
+) {
+    // 1. Chequeo temprano en Tokio
+    {
+        let current_slot = CURRENT_PREVIEW_MEDIA_ID.get_or_init(|| Mutex::new(String::new()));
+        if let Ok(current) = current_slot.lock() {
+            if *current != target_id {
+                return;
+            }
+        }
+    }
+
+    let weak = ui_weak.clone();
+    let target = target_id.to_string();
+    let rt = ratings.rotten_tomatoes.clone().unwrap_or_default();
+    let mc = ratings.metacritic.clone().unwrap_or_default();
+
+    let _ = slint::invoke_from_event_loop(move || {
+        // 2. Chequeo atómico en el hilo de UI antes de actualizar propiedades
+        let current_slot = CURRENT_PREVIEW_MEDIA_ID.get_or_init(|| Mutex::new(String::new()));
+        if let Ok(current) = current_slot.lock() {
+            if *current != target {
+                return;
+            }
+        }
+
+        if let Some(ui) = weak.upgrade() {
+            match source {
+                PreviewSource::Discover => {
+                    ui.set_discover_preview_rt_rating(rt.into());
+                    ui.set_discover_preview_metacritic_rating(mc.into());
+                    ui.set_discover_preview_ratings_loading(false);
+                }
+                PreviewSource::Library => {
+                    ui.set_library_preview_rt_rating(rt.into());
+                    ui.set_library_preview_metacritic_rating(mc.into());
+                    ui.set_library_preview_ratings_loading(false);
+                }
+            }
         }
     });
 }
@@ -329,7 +458,14 @@ async fn fetch_metacritic_rating(title: &str, is_tv: bool) -> Option<String> {
 
     // Fallback: regex on c-siteReviewScore
     if let Some(pos) = html.find("c-siteReviewScore") {
-        let slice = &html[pos..pos + 120.min(html.len() - pos)];
+        let max_end = pos + 120.min(html.len() - pos);
+        let end_idx = html
+            .char_indices()
+            .map(|(idx, _)| idx)
+            .take_while(|&idx| idx <= max_end)
+            .last()
+            .unwrap_or(pos);
+        let slice = &html[pos..end_idx];
         if let Some(start) = slice.find("<span>") {
             let num_slice = &slice[start + 6..];
             if let Some(end) = num_slice.find("</span>") {

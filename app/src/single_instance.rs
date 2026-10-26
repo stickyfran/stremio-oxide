@@ -26,6 +26,7 @@ pub struct PrimaryInstance {
     pub initial_command: Option<AppCommand>,
     pub commands: UnboundedReceiver<AppCommand>,
     pub start_hidden: bool,
+    pub listener_task: tokio::task::JoinHandle<()>,
 }
 
 pub enum InstanceStartup {
@@ -46,9 +47,32 @@ pub async fn acquire(args: impl IntoIterator<Item = OsString>) -> anyhow::Result
     let listener = match std::net::TcpListener::bind(INSTANCE_ADDRESS) {
         Ok(listener) => listener,
         Err(error) if error.kind() == ErrorKind::AddrInUse => {
-            let command = initial_command.unwrap_or(AppCommand::Activate);
-            forward(command).await?;
-            return Ok(InstanceStartup::Forwarded);
+            let command = initial_command.clone().unwrap_or(AppCommand::Activate);
+            match forward(command).await {
+                Ok(()) => return Ok(InstanceStartup::Forwarded),
+                Err(forward_error) => {
+                    tracing::warn!(
+                        %forward_error,
+                        "failed to forward command to existing instance; probing if socket clears"
+                    );
+                    let mut bound = None;
+                    for _ in 0..6 {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        if let Ok(l) = std::net::TcpListener::bind(INSTANCE_ADDRESS) {
+                            bound = Some(l);
+                            break;
+                        }
+                    }
+                    match bound {
+                        Some(l) => l,
+                        None => {
+                            return Err(anyhow::anyhow!(
+                                "stale or unresponsive instance detected on {INSTANCE_ADDRESS}: {forward_error}"
+                            ));
+                        }
+                    }
+                }
+            }
         }
         Err(error) => {
             return Err(anyhow::anyhow!(
@@ -60,12 +84,13 @@ pub async fn acquire(args: impl IntoIterator<Item = OsString>) -> anyhow::Result
     listener.set_nonblocking(true)?;
     let listener = TcpListener::from_std(listener)?;
     let (commands_tx, commands_rx) = mpsc::unbounded_channel();
-    tokio::spawn(accept_commands(listener, commands_tx));
+    let listener_task = tokio::spawn(accept_commands(listener, commands_tx));
 
     Ok(InstanceStartup::Primary(PrimaryInstance {
         initial_command,
         commands: commands_rx,
         start_hidden: arguments.start_hidden,
+        listener_task,
     }))
 }
 

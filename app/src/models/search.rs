@@ -279,13 +279,25 @@ pub fn sync_results(
         }
     }
 
-    // Update rows in-place when the section count is stable so the ListView
-    // keeps its current viewport-y. A full model replacement resets scroll
-    // position, which causes a visible snap-back during lazy catalog loading.
+    // Update rows in-place so the ListView keeps its current viewport-y.
+    // A full model replacement resets scroll position, which causes a visible
+    // snap-back during lazy catalog loading.
     let existing = ui.get_search_sections();
-    if existing.row_count() == sections.len() {
-        for (index, section) in sections.into_iter().enumerate() {
-            existing.set_row_data(index, section);
+    if let Some(vec_model) = existing.as_any().downcast_ref::<VecModel< crate::BoardSection >>() {
+        let existing_len = vec_model.row_count();
+        let new_len = sections.len();
+        let common_len = existing_len.min(new_len);
+        let mut iter = sections.into_iter();
+        for index in 0..common_len {
+            let section = iter.next().expect("common_len bounded by new_len");
+            vec_model.set_row_data(index, section);
+        }
+        if new_len > existing_len {
+            vec_model.extend(iter);
+        } else if new_len < existing_len {
+            for index in (new_len..existing_len).rev() {
+                vec_model.remove(index);
+            }
         }
     } else {
         ui.set_search_sections(ModelRc::new(VecModel::from(sections)));

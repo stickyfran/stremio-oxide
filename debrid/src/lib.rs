@@ -10,7 +10,7 @@ use reqwest::{Client, Method, RequestBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(4);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(7);
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const CACHE_CAPACITY: u64 = 4_096;
 const MAX_IDLE_CONNECTIONS_PER_HOST: usize = 2;
@@ -124,6 +124,8 @@ pub enum DebridError {
     InvalidResponse,
     #[error("source cannot be resolved by this provider")]
     Unsupported,
+    #[error("content is not cached on debrid")]
+    NotCached,
 }
 
 #[async_trait]
@@ -172,6 +174,7 @@ impl HttpDebridProvider {
             .map_err(|_| DebridError::Timeout)?
             .map_err(map_transport_error)?;
         match response.status() {
+            StatusCode::NO_CONTENT => Ok(serde_json::Value::Null),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(DebridError::Unauthorized),
             status if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS => {
                 Err(DebridError::Unavailable)
@@ -188,6 +191,89 @@ impl HttpDebridProvider {
         self.client
             .request(method, format!("{}{path}", self.kind.base_url()))
             .bearer_auth(token)
+    }
+
+    async fn resolve_real_debrid_magnet(
+        &self,
+        token: &str,
+        magnet: &str,
+    ) -> Result<ResolvedLink, DebridError> {
+        let add_res = self
+            .send(
+                self.authorized_request(Method::POST, "/torrents/addMagnet", token)
+                    .form(&[("magnet", magnet)]),
+            )
+            .await?;
+        let torrent_id = add_res
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or(DebridError::InvalidResponse)?;
+
+        let mut info = self
+            .send(self.authorized_request(
+                Method::GET,
+                &format!("/torrents/info/{torrent_id}"),
+                token,
+            ))
+            .await?;
+
+        let status = info
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        if status == "waiting_files_selection" {
+            self.send(
+                self.authorized_request(
+                    Method::POST,
+                    &format!("/torrents/selectFiles/{torrent_id}"),
+                    token,
+                )
+                .form(&[("files", "all")]),
+            )
+            .await?;
+
+            info = self
+                .send(self.authorized_request(
+                    Method::GET,
+                    &format!("/torrents/info/{torrent_id}"),
+                    token,
+                ))
+                .await?;
+        }
+
+        let final_status = info
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        if final_status == "downloaded" {
+            let links = info
+                .get("links")
+                .and_then(|v| v.as_array())
+                .ok_or(DebridError::InvalidResponse)?;
+            let link = links
+                .first()
+                .and_then(|v| v.as_str())
+                .ok_or(DebridError::InvalidResponse)?;
+
+            let unrestrict_res = self
+                .send(
+                    self.authorized_request(Method::POST, "/unrestrict/link", token)
+                        .form(&[("link", link)]),
+                )
+                .await?;
+            parse_resolved_link(&unrestrict_res).ok_or(DebridError::InvalidResponse)
+        } else {
+            let _ = self
+                .send(self.authorized_request(
+                    Method::DELETE,
+                    &format!("/torrents/delete/{torrent_id}"),
+                    token,
+                ))
+                .await;
+            Err(DebridError::NotCached)
+        }
     }
 }
 
@@ -253,19 +339,46 @@ impl DebridProvider for HttpDebridProvider {
             return Err(DebridError::Unsupported);
         }
         let token = self.token().await?;
-        let (path, field) = match self.kind {
-            ProviderKind::RealDebrid => ("/unrestrict/link", "link"),
-            ProviderKind::AllDebrid => ("/link/unlock", "link"),
-            ProviderKind::Premiumize => ("/transfer/directdl", "src"),
-            ProviderKind::DebridLink => ("/downloader/add", "url"),
-            ProviderKind::TorBox => ("/torrents/requestdl", "token"),
+        if self.kind == ProviderKind::RealDebrid && source.starts_with("magnet:") {
+            return self.resolve_real_debrid_magnet(&token, source).await;
+        }
+        let value = match self.kind {
+            ProviderKind::RealDebrid => {
+                self.send(
+                    self.authorized_request(Method::POST, "/unrestrict/link", &token)
+                        .form(&[("link", source)]),
+                )
+                .await?
+            }
+            ProviderKind::AllDebrid => {
+                self.send(
+                    self.authorized_request(Method::POST, "/link/unlock", &token)
+                        .form(&[("link", source)]),
+                )
+                .await?
+            }
+            ProviderKind::Premiumize => {
+                self.send(
+                    self.authorized_request(Method::POST, "/transfer/directdl", &token)
+                        .form(&[("src", source)]),
+                )
+                .await?
+            }
+            ProviderKind::DebridLink => {
+                self.send(
+                    self.authorized_request(Method::POST, "/downloader/add", &token)
+                        .form(&[("url", source)]),
+                )
+                .await?
+            }
+            ProviderKind::TorBox => {
+                self.send(
+                    self.authorized_request(Method::GET, "/torrents/requestdl", &token)
+                        .query(&[("token", token.as_str()), ("link", source)]),
+                )
+                .await?
+            }
         };
-        let value = self
-            .send(
-                self.authorized_request(Method::POST, path, &token)
-                    .form(&[(field, source)]),
-            )
-            .await?;
         parse_resolved_link(&value).ok_or(DebridError::InvalidResponse)
     }
 }
@@ -328,6 +441,22 @@ fn parse_availability(
             .and_then(|items| items.first())
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
+        ProviderKind::AllDebrid => {
+            // {"status": "success", "data": {"magnets": [{"magnet": "...", "instant": true}]}}
+            data.get("magnets")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("instant"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        }
+        ProviderKind::DebridLink => {
+            // {"success": true, "value": {"<hash>": {...}}}
+            value
+                .get("value")
+                .and_then(|v| v.get(hash).or_else(|| v.get(&hash.to_ascii_lowercase())))
+                .is_some()
+        }
         _ => data
             .get("cached")
             .or_else(|| data.get("instant"))

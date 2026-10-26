@@ -315,7 +315,7 @@ pub async fn list_items() -> Result<Vec<LocalMediaItem>, LocalLibraryError> {
                 .get::<Option<i64>>(9)
                 .map_err(|_| LocalLibraryError::Database)?
                 .and_then(|value| u32::try_from(value).ok()),
-            subtitles: discover_subtitles(&path),
+            subtitles: Vec::new(),
             metadata: serde_json::from_str(&metadata_json).unwrap_or_default(),
         });
     }
@@ -323,7 +323,62 @@ pub async fn list_items() -> Result<Vec<LocalMediaItem>, LocalLibraryError> {
 }
 
 pub async fn item_by_id(id: &str) -> Result<Option<LocalMediaItem>, LocalLibraryError> {
-    Ok(list_items().await?.into_iter().find(|item| item.id == id))
+    let conn = crate::db::get_conn()
+        .await
+        .map_err(|_| LocalLibraryError::Database)?;
+    let mut rows = conn
+        .query(
+            "SELECT id, root_id, path, size_bytes, modified_at, fingerprint,
+                    media_type, title, season, episode, metadata_json
+             FROM local_media_items WHERE id = ?",
+            [id],
+        )
+        .await
+        .map_err(|_| LocalLibraryError::Database)?;
+    if let Some(row) = rows.next().await.map_err(|_| LocalLibraryError::Database)? {
+        let path = PathBuf::from(
+            row.get::<String>(2)
+                .map_err(|_| LocalLibraryError::Database)?,
+        );
+        let media_type = match row
+            .get::<String>(6)
+            .map_err(|_| LocalLibraryError::Database)?
+            .as_str()
+        {
+            "movie" => LocalMediaType::Movie,
+            "episode" => LocalMediaType::Episode,
+            _ => LocalMediaType::Unknown,
+        };
+        let metadata_json = row
+            .get::<String>(10)
+            .map_err(|_| LocalLibraryError::Database)?;
+        let subtitles = discover_subtitles(&path);
+        Ok(Some(LocalMediaItem {
+            id: row.get(0).map_err(|_| LocalLibraryError::Database)?,
+            root_id: row.get(1).map_err(|_| LocalLibraryError::Database)?,
+            path: path.clone(),
+            size_bytes: row
+                .get::<i64>(3)
+                .map_err(|_| LocalLibraryError::Database)?
+                .max(0) as u64,
+            modified_at: row.get(4).map_err(|_| LocalLibraryError::Database)?,
+            fingerprint: row.get(5).map_err(|_| LocalLibraryError::Database)?,
+            media_type,
+            title: row.get(7).map_err(|_| LocalLibraryError::Database)?,
+            season: row
+                .get::<Option<i64>>(8)
+                .map_err(|_| LocalLibraryError::Database)?
+                .and_then(|value| u32::try_from(value).ok()),
+            episode: row
+                .get::<Option<i64>>(9)
+                .map_err(|_| LocalLibraryError::Database)?
+                .and_then(|value| u32::try_from(value).ok()),
+            subtitles,
+            metadata: serde_json::from_str(&metadata_json).unwrap_or_default(),
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 pub async fn project(ui_weak: slint::Weak<crate::MainWindow>) {

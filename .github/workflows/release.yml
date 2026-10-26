@@ -13,7 +13,7 @@ env:
 jobs:
   windows:
     name: Windows x64
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-latest
     env:
       VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
@@ -192,9 +192,189 @@ jobs:
             artifacts/stremio-native-v*-x86_64-pc-windows-msvc.zip
           if-no-files-found: error
 
+  windows-arm64:
+    name: Windows ARM64
+    runs-on: windows-latest
+    env:
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      TARGET_ARCH: arm64
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+          targets: aarch64-pc-windows-msvc
+      - name: Provide libclang for autocxx bindings
+        shell: pwsh
+        run: |
+          $roots = @(
+            'C:\Program Files\LLVM\bin',
+            'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin',
+            'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin'
+          )
+          function Find-LibClang {
+            foreach ($root in $roots) {
+              if (Test-Path (Join-Path $root 'libclang.dll')) { return $root }
+            }
+            return $null
+          }
+          $llvmBin = Find-LibClang
+          if (-not $llvmBin) {
+            choco install llvm --no-progress --yes
+            $llvmBin = Find-LibClang
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Export GitHub Actions cache environment for vcpkg
+        uses: actions/github-script@v9
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_installed
+          key: Windows-vcpkg-arm64-static-md-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+          restore-keys: |
+            Windows-vcpkg-arm64-static-md-release-v1-
+      - name: Prepare vcpkg with retries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'vcpkg'
+          $commit = '84bab45d415d22042bd0b9081aea57f362da3f35'
+
+          function Invoke-WithRetry {
+            param([string] $What, [scriptblock] $Action)
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              & $Action
+              if ($LASTEXITCODE -eq 0) { return }
+              Write-Output "$What failed with exit $LASTEXITCODE (attempt $attempt of 5)"
+              Start-Sleep -Seconds (5 * $attempt)
+            }
+            throw "$What did not succeed after 5 attempts"
+          }
+
+          if (-not (Test-Path (Join-Path $dir '.git'))) {
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Invoke-WithRetry 'vcpkg clone' {
+              git clone https://github.com/microsoft/vcpkg.git -n $dir
+            }
+          }
+          Invoke-WithRetry 'vcpkg checkout' { git -C $dir checkout --force $commit }
+          if (-not (Test-Path (Join-Path $dir 'vcpkg.exe'))) {
+            Invoke-WithRetry 'vcpkg bootstrap' {
+              & (Join-Path $dir 'bootstrap-vcpkg.bat')
+            }
+          }
+          Write-Output "vcpkg ready at $commit"
+      - name: Install static libtorrent for ARM64
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: "84bab45d415d22042bd0b9081aea57f362da3f35"
+          vcpkgDirectory: "${{ github.workspace }}/vcpkg"
+          doNotUpdateVcpkg: true
+          vcpkgJsonGlob: "vcpkg.json"
+          runVcpkgInstall: true
+        env:
+          VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+          VCPKG_DEFAULT_TRIPLET: arm64-windows-static-md-release
+          VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
+          VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
+      - name: Save vcpkg cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg_installed
+          key: Windows-vcpkg-arm64-static-md-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+      - name: Download and unpack mpv dev runtime for ARM64
+        shell: pwsh
+        run: |
+          $mpvDir = Join-Path $env:GITHUB_WORKSPACE 'mpv-arm64'
+          New-Item -ItemType Directory -Force $mpvDir | Out-Null
+          try {
+            $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/zhongfly/mpv-winbuild/releases/latest' -Headers @{ 'User-Agent' = 'GitHubActions' }
+            $asset = $release.assets | Where-Object { $_.name -like 'mpv-dev-aarch64-*.7z' } | Select-Object -First 1
+            $archiveUrl = $asset.browser_download_url
+          } catch {
+            Write-Output "Falling back to release URL"
+            $archiveUrl = 'https://github.com/zhongfly/mpv-winbuild/releases/download/20260419-git-8cfefef/mpv-dev-aarch64-20260419-git-8cfefef.7z'
+          }
+          Write-Output "Downloading mpv ARM64 dev archive from $archiveUrl"
+          Invoke-WebRequest -Uri $archiveUrl -OutFile 'mpv-arm64.7z'
+          7z x 'mpv-arm64.7z' -o"$mpvDir" -y
+          "STREMIO_MPV_DIR=$mpvDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-pc-windows-msvc
+      - name: Build release
+        run: cargo build --locked --release --package stremio-native --target aarch64-pc-windows-msvc
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+          VCPKGRS_TRIPLET: arm64-windows-static-md-release
+          PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/arm64-windows-static-md-release/lib/pkgconfig
+      - name: Copy target artifacts for packaging
+        shell: pwsh
+        run: |
+          $src = "target/aarch64-pc-windows-msvc/release"
+          $dst = "target/release"
+          if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Force $dst | Out-Null }
+          Copy-Item "$src\stremio-native.exe" -Destination "$dst\" -Force
+          Copy-Item "$env:STREMIO_MPV_DIR\libmpv-2.dll" -Destination "$dst\" -Force
+          $licDst = "$dst\licenses\mpv"
+          New-Item -ItemType Directory -Force $licDst | Out-Null
+          if (Test-Path "licenses/mpv") { Copy-Item "licenses/mpv\*" -Destination $licDst -Recurse -Force }
+      - name: Stage app-local MSVC runtime
+        shell: pwsh
+        run: ./scripts/stage_windows_msvc_runtime.ps1 -BuildRoot ./target/release -Architecture arm64
+      - name: Provide Inno Setup for the installer
+        shell: pwsh
+        run: |
+          $roots = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6",
+            "$env:ProgramFiles\Inno Setup 6"
+          )
+          function Find-Iscc {
+            foreach ($root in $roots) {
+              $candidate = Join-Path $root 'ISCC.exe'
+              if (Test-Path $candidate) { return $candidate }
+            }
+            return $null
+          }
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            choco install innosetup --no-progress --yes
+            $iscc = Find-Iscc
+          }
+          "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build installer and updater archive
+        shell: cmd
+        env:
+          TARGET_ARCH: arm64
+        run: |
+          set "SKIP_BUILD=1"
+          call setup\create_setup.cmd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-native-windows-arm64
+          path: |
+            target/release/stremio-native.exe
+            target/release/libmpv-2.dll
+            target/release/msvc-runtime
+            target/release/licenses/mpv
+            artifacts/StremioSetup-v*-arm64.exe
+            artifacts/stremio-native-v*-aarch64-pc-windows-msvc.zip
+          if-no-files-found: error
+
   linux:
     name: Linux x64
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
@@ -268,10 +448,88 @@ jobs:
           path: target/debian/*.deb
           if-no-files-found: error
 
+  linux-arm64:
+    name: Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+      VCPKG_DEFAULT_TRIPLET: arm64-linux-static-release
+      VCPKGRS_TRIPLET: arm64-linux-static-release
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
+      VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
+      PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/arm64-linux-static-release/lib/pkgconfig
+      LIBTORRENT_STATIC: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-arm64
+      - name: Restore apt cache
+        id: apt-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: /var/cache/apt/archives
+          key: linux-arm64-apt-deps-v2
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libegl1-mesa-dev
+      - name: Save apt cache
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /var/cache/apt/archives
+          key: linux-arm64-apt-deps-v2
+      - name: Restore libtorrent cache
+        id: libtorrent-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_installed
+          key: Linux-vcpkg-arm64-linux-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+          restore-keys: |
+            Linux-vcpkg-arm64-linux-static-release-v1-
+      - name: Install static libtorrent 2.1.1
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: "84bab45d415d22042bd0b9081aea57f362da3f35"
+          vcpkgDirectory: "${{ github.workspace }}/vcpkg"
+          vcpkgJsonGlob: "vcpkg.json"
+          runVcpkgInstall: true
+      - name: Save libtorrent cache
+        if: steps.libtorrent-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg_installed
+          key: Linux-vcpkg-arm64-linux-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+      - name: Build release
+        run: cargo build --locked --release --package stremio-native
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@v2.85.4
+        with:
+          tool: cargo-deb
+      - name: Build DEB Package
+        run: cargo deb --package stremio-native --no-build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-native-linux-arm64
+          path: target/release/stremio-native
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-native-linux-arm64-deb
+          path: target/debian/*.deb
+          if-no-files-found: error
+
   arch:
     name: Arch Linux x64
     needs: linux
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     container: archlinux:latest
     steps:
       - uses: actions/checkout@v7
@@ -295,7 +553,7 @@ jobs:
           pkgrel=1
           pkgdesc="High-performance native Stremio client built with Rust and Slint"
           arch=('x86_64')
-          url="https://github.com/stremio-native/stremio-native"
+          url="https://github.com/stickyfran/stremio-oxide"
           license=('GPL-3.0')
           depends=('openssl' 'mpv' 'gtk3' 'libayatana-appindicator' 'fontconfig' 'freetype2' 'libxkbcommon' 'libxcursor' 'libx11' 'wayland')
           options=('!strip' '!debug')
@@ -325,7 +583,7 @@ jobs:
   fedora:
     name: Fedora x64
     needs: linux
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     container: fedora:latest
     steps:
       - uses: actions/checkout@v7
@@ -360,7 +618,7 @@ jobs:
           Release:        1%{?dist}
           Summary:        High-performance native Stremio client built with Rust and Slint
           License:        GPLv3
-          URL:            https://github.com/stremio-native/stremio-native
+          URL:            https://github.com/stickyfran/stremio-oxide
           Source0:        stremio-native
           Requires:       openssl mpv-libs gtk3 libayatana-appindicator-gtk3 fontconfig freetype libxkbcommon libXcursor libX11 libwayland-client
 
@@ -394,11 +652,39 @@ jobs:
           path: rpmbuild/RPMS/x86_64/*.rpm
           if-no-files-found: error
 
+  macos:
+    name: macOS (Apple Silicon / Intel)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+      - name: Install dependencies
+        run: |
+          brew install mpv pkg-config cmake ninja
+      - name: Build release
+        run: |
+          cargo build --locked --release --package stremio-native
+      - name: Package macOS binary
+        run: |
+          mkdir -p package-macos
+          cp target/release/stremio-native package-macos/stremio-oxide
+          chmod +x package-macos/stremio-oxide
+          tar -czvf stremio-oxide-macos.tar.gz -C package-macos stremio-oxide
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-oxide-macos
+          path: stremio-oxide-macos.tar.gz
+          if-no-files-found: error
+
   release:
     name: Publish tagged release
-    needs: [windows, linux, arch, fedora]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, windows-arm64, linux, linux-arm64, arch, fedora, macos]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:
@@ -418,28 +704,38 @@ jobs:
           copy_latest() {
             local pattern="$1"
             local source
-            source="$(find artifacts -type f -name "$pattern" | sort -V | tail -n 1)"
-            if [[ -z "$source" ]]; then
-              echo "Missing required release asset: $pattern" >&2
-              exit 1
+            source="$(find artifacts -type f -name "$pattern" | sort -V | tail -n 1 || true)"
+            if [[ -n "$source" ]]; then
+              cp "$source" release/
+            else
+              echo "Optional release asset not found: $pattern"
             fi
-            cp "$source" release/
           }
 
           copy_latest "StremioSetup-v*-x64.exe"
+          copy_latest "StremioSetup-v*-arm64.exe"
           copy_latest "stremio-native-v*-x86_64-pc-windows-msvc.zip"
-          copy_latest "*.deb"
+          copy_latest "stremio-native-v*-aarch64-pc-windows-msvc.zip"
+          copy_latest "*amd64*.deb"
+          copy_latest "*arm64*.deb"
           copy_latest "stremio-native-[0-9]*.pkg.tar.zst"
           copy_latest "*.rpm"
+          copy_latest "stremio-oxide-macos.tar.gz"
 
-          linux_binary="$(find artifacts/stremio-native-linux-x64 -type f -name stremio-native | head -n 1)"
-          if [[ -z "$linux_binary" ]]; then
-            echo "Missing required Linux release binary" >&2
-            exit 1
+          tag_name="${GITHUB_REF_NAME:-v1.0.0}"
+          linux_x64="$(find artifacts/stremio-native-linux-x64 -type f -name stremio-native | head -n 1 || true)"
+          if [[ -n "$linux_x64" ]]; then
+            asset="release/stremio-oxide-${tag_name}-x86_64-unknown-linux-gnu"
+            cp "$linux_x64" "$asset"
+            chmod +x "$asset"
           fi
-          linux_asset="release/stremio-native-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu"
-          cp "$linux_binary" "$linux_asset"
-          chmod +x "$linux_asset"
+
+          linux_arm64="$(find artifacts/stremio-native-linux-arm64 -type f -name stremio-native | head -n 1 || true)"
+          if [[ -n "$linux_arm64" ]]; then
+            asset="release/stremio-oxide-${tag_name}-aarch64-unknown-linux-gnu"
+            cp "$linux_arm64" "$asset"
+            chmod +x "$asset"
+          fi
 
           (cd release && sha256sum * > SHA256SUMS.txt)
           find release -maxdepth 1 -type f -printf '%f\n' | sort

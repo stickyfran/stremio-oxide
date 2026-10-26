@@ -43,13 +43,27 @@ const REQUIRED_IMAGE_IDLE_TTL: Duration = Duration::from_secs(60);
 const DISK_CAPACITY_BYTES: u64 = 1536 * 1024 * 1024;
 const DISK_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_DECODE_WIDTH: u32 = 1920;
-const MAX_DECODE_HEIGHT: u32 = 1920;
-const MAX_CONCURRENT_DOWNLOADS: usize = 8;
-const MAX_CONCURRENT_DISK_READS: usize = 4;
-const MAX_CONCURRENT_DECODES: usize = 3;
-const MAX_FETCH_WORKERS: usize = 16;
+const MAX_DECODE_WIDTH: u32 = 1280;
+const MAX_DECODE_HEIGHT: u32 = 720;
+const MAX_CONCURRENT_DOWNLOADS: usize = 12;
+const MAX_CONCURRENT_DISK_READS: usize = 8;
+const MAX_CONCURRENT_DECODES: usize = 6;
+const MAX_FETCH_WORKERS: usize = 20;
+const MAX_QUEUED_FETCH_JOBS: usize = 48;
 const MAX_RETRY_ATTEMPTS: u32 = 3;
+
+pub fn optimize_poster_url(raw_url: &str) -> String {
+    if raw_url.contains("image.tmdb.org/t/p/") {
+        return raw_url
+            .replace("/original/", "/w342/")
+            .replace("/w500/", "/w342/")
+            .replace("/w780/", "/w342/");
+    }
+    if raw_url.contains("images.metahub.space/poster/medium/") {
+        return raw_url.replace("/medium/", "/small/");
+    }
+    raw_url.to_string()
+}
 
 struct FetchJob {
     url: String,
@@ -111,6 +125,9 @@ pub fn request_image(url: &str) {
 }
 
 fn get_image(url: &str, request_on_miss: bool) -> slint::Image {
+    let optimized_url_str = optimize_poster_url(url);
+    let url = optimized_url_str.as_str();
+
     if let Some(buffer) = required_image_cache().get(url) {
         crate::performance::counters().record_image_memory_hit();
         return slint::Image::from_rgba8(buffer);
@@ -215,7 +232,21 @@ fn decode_semaphore() -> &'static Arc<Semaphore> {
 fn schedule_fetch(url: String) {
     let now = Instant::now();
     let previous_attempts = match download_state().get(&url) {
-        Some(DownloadState::InProgress) => return,
+        Some(DownloadState::InProgress) => {
+            // If the URL is still queued (not yet picked up by a worker),
+            // promote it to the back of the LIFO queue so currently visible
+            // items take priority over scrolled-past requests.
+            let mut queue = fetch_queue()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(pos) = queue.jobs.iter().position(|job| job.url == url)
+                && pos + 1 < queue.jobs.len()
+                && let Some(job) = queue.jobs.remove(pos)
+            {
+                queue.jobs.push_back(job);
+            }
+            return;
+        }
         Some(DownloadState::Failed { retry_at, .. }) if retry_at > now => return,
         Some(DownloadState::Failed { attempts, .. }) => attempts,
         None => 0,
@@ -224,7 +255,7 @@ fn schedule_fetch(url: String) {
     download_state().insert(url.clone(), DownloadState::InProgress);
     start_disk_maintenance_once();
 
-    let workers_to_start = {
+    let (workers_to_start, evicted_urls) = {
         let mut queue = fetch_queue()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -232,11 +263,20 @@ fn schedule_fetch(url: String) {
             url,
             previous_attempts,
         });
+        let mut evicted_urls = Vec::new();
+        while queue.jobs.len() > MAX_QUEUED_FETCH_JOBS {
+            if let Some(stale) = queue.jobs.pop_front() {
+                evicted_urls.push(stale.url);
+            }
+        }
         let available_workers = MAX_FETCH_WORKERS.saturating_sub(queue.active_workers);
         let workers_to_start = available_workers.min(queue.jobs.len());
         queue.active_workers += workers_to_start;
-        workers_to_start
+        (workers_to_start, evicted_urls)
     };
+    for evicted_url in evicted_urls {
+        download_state().invalidate(&evicted_url);
+    }
     for _ in 0..workers_to_start {
         tokio::spawn(fetch_worker());
     }
@@ -252,7 +292,10 @@ async fn fetch_worker() {
             let mut queue = fetch_queue()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match queue.jobs.pop_front() {
+            // Pop from the back (LIFO) so the most recently requested posters
+            // — i.e. the cards currently visible in the viewport — are fetched
+            // ahead of off-screen rows that were scrolled past.
+            match queue.jobs.pop_back() {
                 Some(job) => job,
                 None => {
                     queue.active_workers = queue.active_workers.saturating_sub(1);
@@ -483,7 +526,7 @@ fn decode_image(bytes: &[u8]) -> Result<ImageEntry, String> {
         }
     }
 
-    let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
     let image = if image.width() > MAX_DECODE_WIDTH || image.height() > MAX_DECODE_HEIGHT {
         image.resize(
             MAX_DECODE_WIDTH,
@@ -681,7 +724,7 @@ fn notify_ui_refresh(url: String) {
     }
 
     tokio::spawn(async {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
         dispatch_ui_refresh();
     });
 }
@@ -742,6 +785,7 @@ mod tests {
 
     #[test]
     fn cache_path_is_stable_and_sharded() {
+        let _ = crate::paths::initialize();
         let first = cache_path("https://example.com/poster.jpg");
         let second = cache_path("https://example.com/poster.jpg");
         assert_eq!(first, second);

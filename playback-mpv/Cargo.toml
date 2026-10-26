@@ -9,6 +9,7 @@ glow.workspace = true
 libloading = "0.8.9"
 thiserror.workspace = true
 tracing.workspace = true
+ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling"] }
 
 [build-dependencies]
 pkg-config = "0.3.34"

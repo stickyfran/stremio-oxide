@@ -43,9 +43,6 @@ import { SearchPage } from "pages/search.slint";
 import { DownloadsPage, DownloadItem } from "pages/downloads.slint";
 import { AppDebugMenu, DebugPageOption, DebugStateOption } from "components/app_debug_menu.slint";
 
-import { Fonts } from "imported_fonts.slint";
-import "./assets/fonts/PlusJakartaSans.ttf";
-
 export struct PluginAction {
     id: string,
     label: string,
@@ -101,9 +98,9 @@ export { CrashDialog } from "crash_dialog.slint";
 
 
 export component AppTray inherits SystemTrayIcon {
-    icon: @image-url("assets/images/app_icon.png");
-    title: "Stremio";
-    tooltip: "Stremio";
+    icon: @image-url("assets/images/app_icon_window.png");
+    title: "Stremio Oxide";
+    tooltip: "Stremio Oxide";
 
     in property <string> version: "";
     in property <int> update-state: 0;
@@ -122,13 +119,13 @@ export component AppTray inherits SystemTrayIcon {
 
     Menu {
         MenuItem {
-            title: "Stremio";
-            icon: @image-url("assets/images/app_icon.png");
+            title: "Stremio Oxide";
+            icon: @image-url("assets/images/app_icon_window.png");
             enabled: false;
         }
         MenuSeparator { }
         MenuItem {
-            title: @tr("Open Stremio");
+            title: @tr("Open Stremio Oxide");
             activated => { root.open-window(); }
         }
         MenuItem {
@@ -177,12 +174,13 @@ export component AppTray inherits SystemTrayIcon {
 }
 
 export component MainWindow inherits Window {
-    title: "Stremio";
-    icon: @image-url("assets/images/app_icon.png");
+    title: root.player-pip-active ? "Stremio Oxide - PiP" : "Stremio Oxide";
+    icon: @image-url("assets/images/app_icon_window.png");
     preferred-width: 1280px;
     preferred-height: 720px;
-    min-width: 1000px;
-    min-height: 600px;
+    min-width: root.player-pip-active ? 120px : 1000px;
+    min-height: root.player-pip-active ? 68px : 600px;
+    no-frame: root.player-pip-active;
     background: Theme.background;
     default-font-family: Theme.font-family;
     default-font-size: Theme.root-font-size;
@@ -356,8 +354,8 @@ export component MainWindow inherits Window {
 
     private property <int> effective-active-tab: root.debug-preview-enabled
         ? (root.debug-preview-page >= 0 && root.debug-preview-page <= 6
-            ? root.debug-preview-page : (root.debug-preview-page == 9 ? 7 : (root.debug-preview-page == 10 ? 10 : 0)))
-        : (root.theme-studio-open ? 10 : root.active-tab);
+            ? root.debug-preview-page : (root.debug-preview-page == 9 ? 7 : (root.debug-preview-page == 10 ? 100 : 0)))
+        : (root.theme-studio-open ? 100 : root.active-tab);
     private property <bool> effective-show-details: root.debug-preview-enabled
         ? root.debug-preview-page == 7
         : root.show-details;
@@ -477,6 +475,51 @@ export component MainWindow inherits Window {
     in-out property <bool> discover-preview-has-trailer: false;
     in-out property <image> discover-preview-poster;
     in-out property <string> discover-preview-poster-url: "";
+    in-out property <string> discover-preview-rt-rating: "";
+    in-out property <string> discover-preview-metacritic-rating: "";
+    in-out property <bool> discover-preview-ratings-loading: false;
+
+    // Library preview drawer parameters
+    in-out property <bool> library-preview-enabled: true;
+    in-out property <bool> library-has-preview: false;
+    in-out property <string> library-preview-title: "";
+    in-out property <image> library-preview-logo;
+    in-out property <string> library-preview-logo-url: "";
+    in-out property <string> library-preview-description: "";
+    in-out property <string> library-preview-rating: "";
+    in-out property <string> library-preview-year: "";
+    in-out property <string> library-preview-runtime: "";
+    in-out property <[string]> library-preview-genres: [];
+    in-out property <[string]> library-preview-cast: [];
+    in-out property <[string]> library-preview-directors: [];
+    in-out property <bool> library-preview-is-in-library: true;
+    in-out property <bool> library-preview-is-watched: false;
+    in-out property <bool> library-preview-has-trailer: false;
+    in-out property <image> library-preview-poster;
+    in-out property <string> library-preview-poster-url: "";
+    in-out property <string> library-preview-rt-rating: "";
+    in-out property <string> library-preview-metacritic-rating: "";
+    in-out property <bool> library-preview-ratings-loading: false;
+
+    callback library-toggle-preview-enabled();
+
+    // Shared video trailer preview parameters for the right drawer
+    in-out property <image> preview-drawer-video-frame;
+    in-out property <bool> preview-drawer-has-video-frame: false;
+    in-out property <bool> preview-drawer-video-loading: false;
+    in-out property <bool> preview-drawer-video-playing: false;
+    in-out property <bool> preview-drawer-video-muted: true;
+    in-out property <bool> preview-drawer-autoplay-enabled: false;
+    in-out property <float> preview-drawer-video-progress: 0.0;
+    in-out property <string> preview-drawer-video-time-label: "";
+
+    callback preview-drawer-toggle-playback();
+    callback preview-drawer-toggle-muted();
+    callback preview-drawer-toggle-autoplay();
+    callback preview-drawer-maximize();
+    callback preview-drawer-seek-relative(float);
+    callback preview-drawer-seek-progress(float);
+    callback preview-drawer-close();
 
     // Hover trailer preview popup. The backend owns everything except the
     // anchor geometry, which only the hovered card knows.
@@ -506,6 +549,7 @@ export component MainWindow inherits Window {
     callback hover-preview-requested(string, string);
     callback hover-preview-dismissed();
     callback hover-preview-toggle-muted();
+    callback hover-preview-seek(float);
     callback hover-preview-play();
     callback hover-preview-toggle-library();
 
@@ -570,9 +614,13 @@ export component MainWindow inherits Window {
     changed hover-preview-route-visible => {
         if (!root.hover-preview-route-visible) {
             root.hover-preview-close();
+            root.preview-drawer-close();
         }
     }
-    changed effective-active-tab => { root.hover-preview-close(); }
+    changed effective-active-tab => {
+        root.hover-preview-close();
+        root.preview-drawer-close();
+    }
 
     // Detailed view parameters
     in-out property <string> detail-title: "";
@@ -636,6 +684,10 @@ export component MainWindow inherits Window {
     in-out property <image> player-video-frame;
     in-out property <bool> player-has-video-frame: false;
     in-out property <bool> player-loading: false;
+    in-out property <string> player-loading-stage-title: "";
+    in-out property <string> player-loading-stage-detail: "";
+    in-out property <bool> player-loading-stalled: false;
+    in-out property <bool> player-debrid-uncached: false;
     in-out property <bool> player-buffering: false;
     in-out property <float> player-buffering-percent: 0.0;
     in-out property <bool> player-paused: true;
@@ -1061,9 +1113,15 @@ export component MainWindow inherits Window {
     callback player-reveal-last-capture();
     callback player-cycle-hdr-mode();
     callback player-toggle-pip();
+    callback player-start-pip-drag();
+    callback player-start-pip-resize(int);
+    callback player-scale-pip(float);
+    callback player-toggle-subtitles();
+    callback player-cycle-audio();
     callback player-retry-playback();
     callback player-choose-another-stream();
     callback player-return-to-details();
+    callback player-continue-as-torrent();
     callback player-seek-hover(float);
     callback player-seek-leave();
     callback player-copy-stream-link();
@@ -1201,9 +1259,13 @@ export component MainWindow inherits Window {
         }
         KeyBinding {
             keys: @keys(Escape);
-            enabled: !root.effective-show-player
-                && (root.shortcuts-modal-open || root.gamepad-modal-open);
+            enabled: (!root.effective-show-player && (root.shortcuts-modal-open || root.gamepad-modal-open))
+                || (root.effective-show-player && root.player-pip-active);
             activated => {
+                if (root.player-pip-active) {
+                    root.player-toggle-pip();
+                    return;
+                }
                 root.shortcuts-modal-open = false;
                 root.gamepad-modal-open = false;
                 app-shortcuts.focus();
@@ -1773,6 +1835,25 @@ export component MainWindow inherits Window {
                         preview-has-trailer: discover-preview-has-trailer;
                         preview-trailer-selection-id: detail-trailer-selection-id;
                         preview-poster: discover-preview-poster;
+                        preview-rt-rating: root.discover-preview-rt-rating;
+                        preview-metacritic-rating: root.discover-preview-metacritic-rating;
+                        preview-ratings-loading: root.discover-preview-ratings-loading;
+                        preview-video-frame: root.preview-drawer-video-frame;
+                        preview-has-video-frame: root.preview-drawer-has-video-frame;
+                        preview-video-loading: root.preview-drawer-video-loading;
+                        preview-video-playing: root.preview-drawer-video-playing;
+                        preview-video-muted: root.preview-drawer-video-muted;
+                        preview-autoplay-enabled: root.preview-drawer-autoplay-enabled;
+                        preview-video-progress <=> root.preview-drawer-video-progress;
+                        preview-video-time-label: root.preview-drawer-video-time-label;
+
+                        toggle-trailer-playback => { root.preview-drawer-toggle-playback(); }
+                        toggle-video-muted => { root.preview-drawer-toggle-muted(); }
+                        toggle-autoplay => { root.preview-drawer-toggle-autoplay(); }
+                        maximize-trailer => { root.preview-drawer-maximize(); }
+                        seek-video-relative(offset) => { root.preview-drawer-seek-relative(offset); }
+                        seek-video-progress(progress) => { root.preview-drawer-seek-progress(progress); }
+                        close-preview-drawer => { root.preview-drawer-close(); }
                         type-open: root.debug-preview-enabled && root.debug-preview-page == 1
                             && root.debug-preview-state == "type-dropdown";
                         catalog-open: root.debug-preview-enabled && root.debug-preview-page == 1
@@ -1853,6 +1934,48 @@ export component MainWindow inherits Window {
                         local-play(id) => { library-local-play(id); }
                         poster-requested(url) => { request-poster(url); }
                         scroll-y <=> library-scroll-y;
+
+                        preview-enabled <=> root.library-preview-enabled;
+                        has-preview: root.library-has-preview;
+                        preview-title: root.library-preview-title;
+                        preview-logo: root.library-preview-logo;
+                        preview-poster: root.library-preview-poster;
+                        preview-description: root.library-preview-description;
+                        preview-rating: root.library-preview-rating;
+                        preview-year: root.library-preview-year;
+                        preview-runtime: root.library-preview-runtime;
+                        preview-genres: root.library-preview-genres;
+                        preview-cast: root.library-preview-cast;
+                        preview-directors: root.library-preview-directors;
+                        preview-is-in-library: root.library-preview-is-in-library;
+                        preview-is-watched: root.library-preview-is-watched;
+                        preview-has-trailer: root.library-preview-has-trailer;
+                        preview-trailer-selection-id: detail-trailer-selection-id;
+                        preview-rt-rating: root.library-preview-rt-rating;
+                        preview-metacritic-rating: root.library-preview-metacritic-rating;
+                        preview-ratings-loading: root.library-preview-ratings-loading;
+                        preview-video-frame: root.preview-drawer-video-frame;
+                        preview-has-video-frame: root.preview-drawer-has-video-frame;
+                        preview-video-loading: root.preview-drawer-video-loading;
+                        preview-video-playing: root.preview-drawer-video-playing;
+                        preview-video-muted: root.preview-drawer-video-muted;
+                        preview-autoplay-enabled: root.preview-drawer-autoplay-enabled;
+                        preview-video-progress <=> root.preview-drawer-video-progress;
+                        preview-video-time-label: root.preview-drawer-video-time-label;
+
+                        toggle-preview-enabled => { root.library-toggle-preview-enabled(); }
+                        play-preview => { play-preview(); }
+                        toggle-library-preview => { toggle-library-preview(); }
+                        toggle-watched-preview => { details-toggle-watched(); }
+                        play-trailer-preview(selection-id) => { play-stream(selection-id); }
+                        toggle-trailer-playback => { root.preview-drawer-toggle-playback(); }
+                        toggle-video-muted => { root.preview-drawer-toggle-muted(); }
+                        toggle-autoplay => { root.preview-drawer-toggle-autoplay(); }
+                        maximize-trailer => { root.preview-drawer-maximize(); }
+                        seek-video-relative(offset) => { root.preview-drawer-seek-relative(offset); }
+                        seek-video-progress(progress) => { root.preview-drawer-seek-progress(progress); }
+                        close-preview-drawer => { root.preview-drawer-close(); }
+                        metadata-filter-selected(value) => { discover-metadata-filter-selected(value); }
                     }
 
                     if (root.effective-active-tab == 3) : AddonsPage {
@@ -2101,7 +2224,7 @@ export component MainWindow inherits Window {
                         open-theme-studio => { root.theme-studio-open = true; }
                     }
 
-                    if (root.effective-active-tab == 10) : ThemePage {
+                    if (root.effective-active-tab == 100) : ThemePage {
                         width: parent.width;
                         height: parent.height;
                         unit: root.ui-unit;
@@ -2222,6 +2345,7 @@ export component MainWindow inherits Window {
             anchor-width: root.hover-preview-anchor-width;
             anchor-height: root.hover-preview-anchor-height;
             toggle-muted => { root.hover-preview-toggle-muted(); }
+            seek-relative(offset) => { root.hover-preview-seek(offset); }
             toggle-library-requested => { root.hover-preview-toggle-library(); }
             play-requested => {
                 root.hover-preview-play();
@@ -2417,6 +2541,10 @@ export component MainWindow inherits Window {
             loading: root.debug-preview-enabled && root.debug-preview-page == 8
                 ? root.debug-preview-state == "player-loading"
                 : player-loading;
+            loading-stage-title: player-loading-stage-title;
+            loading-stage-detail: player-loading-stage-detail;
+            loading-stalled: player-loading-stalled;
+            debrid-uncached: player-debrid-uncached;
             buffering: root.debug-preview-enabled && root.debug-preview-page == 8
                 ? root.debug-preview-state == "buffering"
                 : player-buffering;
@@ -2456,12 +2584,12 @@ export component MainWindow inherits Window {
             active-episode-idx <=> root.player-active-episode-idx;
             has-next-episode: player-has-next-episode;
             next-episode-title: root.player-next-episode-title;
-            series-name: root.player-series-name;
-            next-series-name: root.player-next-series-name;
-            series-runtime: root.player-series-runtime;
-            series-release-year: root.player-series-release-year;
-            series-description: root.player-series-description;
-            series-logo: root.player-series-logo;
+            series-name: root.player-series-name != "" ? root.player-series-name : (root.detail-title != "" ? root.detail-title : (root.discover-preview-title != "" ? root.discover-preview-title : (root.library-preview-title != "" ? root.library-preview-title : root.player-title)));
+            next-series-name: root.player-next-series-name != "" ? root.player-next-series-name : (root.detail-title != "" ? root.detail-title : (root.discover-preview-title != "" ? root.discover-preview-title : (root.library-preview-title != "" ? root.library-preview-title : root.player-title)));
+            series-runtime: root.player-series-runtime != "" ? root.player-series-runtime : (root.detail-runtime != "" ? root.detail-runtime : (root.discover-preview-runtime != "" ? root.discover-preview-runtime : root.library-preview-runtime));
+            series-release-year: root.player-series-release-year != "" ? root.player-series-release-year : (root.detail-year != "" ? root.detail-year : (root.discover-preview-year != "" ? root.discover-preview-year : root.library-preview-year));
+            series-description: root.player-series-description != "" ? root.player-series-description : (root.detail-description != "" ? root.detail-description : (root.discover-preview-description != "" ? root.discover-preview-description : root.library-preview-description));
+            series-logo: root.player-series-logo.width > 0 ? root.player-series-logo : (root.detail-logo.width > 0 ? root.detail-logo : (root.discover-preview-logo.width > 0 ? root.discover-preview-logo : root.library-preview-logo));
             active-season-watched: root.player-active-season-watched;
             next-episode-poster: root.player-next-episode-poster;
             next-popup-duration-seconds: root.settings-next-video-popup-duration.to-float();
@@ -2561,9 +2689,15 @@ export component MainWindow inherits Window {
             reveal-last-capture => { player-reveal-last-capture(); }
             cycle-hdr-mode => { player-cycle-hdr-mode(); }
             toggle-pip => { player-toggle-pip(); }
+            start-pip-drag => { player-start-pip-drag(); }
+            start-pip-resize(edge) => { player-start-pip-resize(edge); }
+            scale-pip(delta) => { player-scale-pip(delta); }
+            toggle-subtitles => { player-toggle-subtitles(); }
+            cycle-audio => { player-cycle-audio(); }
             retry-playback => { player-retry-playback(); }
             choose-another-stream => { player-choose-another-stream(); }
             return-to-details => { player-return-to-details(); }
+            continue-as-torrent => { player-continue-as-torrent(); }
             switch-stream(selection-id) => { root.play-stream(selection-id); }
             skip-segment => { player-skip-segment(); }
             copy-stream-link => { player-copy-stream-link(); }

@@ -1,0 +1,253 @@
+name: Build All Systems
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  CARGO_HTTP_MULTIPLEXING: false
+
+jobs:
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+      VCPKG_DEFAULT_TRIPLET: x64-linux-v3-static-release
+      VCPKGRS_TRIPLET: x64-linux-v3-static-release
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
+      VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
+      PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-linux-v3-static-release/lib/pkgconfig
+      LIBTORRENT_STATIC: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+      - uses: Swatinem/rust-cache@v2
+      - name: Restore apt cache
+        id: apt-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: /var/cache/apt/archives
+          key: linux-apt-deps-v2
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libgl1-mesa-dev libegl1-mesa-dev
+      - name: Save apt cache
+        if: steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /var/cache/apt/archives
+          key: linux-apt-deps-v2
+      - name: Restore libtorrent cache
+        id: libtorrent-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_installed
+          key: Linux-vcpkg-x64-linux-v3-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+          restore-keys: |
+            Linux-vcpkg-x64-linux-v3-static-release-v1-
+      - name: Install static libtorrent 2.1.1
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: "84bab45d415d22042bd0b9081aea57f362da3f35"
+          vcpkgDirectory: "${{ github.workspace }}/vcpkg"
+          doNotUpdateVcpkg: true
+          vcpkgJsonGlob: "vcpkg.json"
+          runVcpkgInstall: true
+      - name: Save libtorrent cache
+        if: steps.libtorrent-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg_installed
+          key: Linux-vcpkg-x64-linux-v3-static-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+      - name: Build release
+        run: cargo build --locked --release --package stremio-native
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@v2.85.4
+        with:
+          tool: cargo-deb
+      - name: Build DEB Package
+        run: cargo deb --package stremio-native --no-build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-oxide-linux-x64
+          path: |
+            target/release/stremio-native
+            target/debian/*.deb
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    env:
+      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+          targets: x86_64-pc-windows-msvc
+      - name: Provide libclang for autocxx bindings
+        shell: pwsh
+        run: |
+          $roots = @(
+            'C:\Program Files\LLVM\bin',
+            'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin',
+            'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin'
+          )
+          function Find-LibClang {
+            foreach ($root in $roots) {
+              if (Test-Path (Join-Path $root 'libclang.dll')) { return $root }
+            }
+            return $null
+          }
+          $llvmBin = Find-LibClang
+          if (-not $llvmBin) {
+            choco install llvm --no-progress --yes
+            $llvmBin = Find-LibClang
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Export GitHub Actions cache environment for vcpkg
+        uses: actions/github-script@v9
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_installed
+          key: Windows-vcpkg-x86-64-v3-static-md-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+          restore-keys: |
+            Windows-vcpkg-x86-64-v3-static-md-release-v1-
+      - name: Prepare vcpkg with retries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $dir = Join-Path $env:GITHUB_WORKSPACE 'vcpkg'
+          $commit = '84bab45d415d22042bd0b9081aea57f362da3f35'
+          function Invoke-WithRetry {
+            param([string] $What, [scriptblock] $Action)
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              & $Action
+              if ($LASTEXITCODE -eq 0) { return }
+              Start-Sleep -Seconds (5 * $attempt)
+            }
+            throw "$What did not succeed after 5 attempts"
+          }
+          if (-not (Test-Path (Join-Path $dir '.git'))) {
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Invoke-WithRetry 'vcpkg clone' { git clone https://github.com/microsoft/vcpkg.git -n $dir }
+          }
+          Invoke-WithRetry 'vcpkg checkout' { git -C $dir checkout --force $commit }
+          if (-not (Test-Path (Join-Path $dir 'vcpkg.exe'))) {
+            Invoke-WithRetry 'vcpkg bootstrap' { & (Join-Path $dir 'bootstrap-vcpkg.bat') }
+          }
+      - name: Install optimized static libtorrent
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: "84bab45d415d22042bd0b9081aea57f362da3f35"
+          vcpkgDirectory: "${{ github.workspace }}/vcpkg"
+          doNotUpdateVcpkg: true
+          vcpkgJsonGlob: "vcpkg.json"
+          runVcpkgInstall: true
+        env:
+          VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+          VCPKG_DEFAULT_TRIPLET: x64-windows-v3-static-md-release
+          VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/triplets
+          VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
+      - name: Save vcpkg cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg_installed
+          key: Windows-vcpkg-x86-64-v3-static-md-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release
+        run: cargo build --locked --release --package stremio-native
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
+          VCPKGRS_TRIPLET: x64-windows-v3-static-md-release
+          PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-windows-v3-static-md-release/lib/pkgconfig
+      - name: Stage app-local MSVC runtime
+        shell: pwsh
+        run: ./scripts/stage_windows_msvc_runtime.ps1 -BuildRoot ./target/release
+      - name: Provide Inno Setup for the installer
+        shell: pwsh
+        run: |
+          $roots = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6",
+            "$env:ProgramFiles\Inno Setup 6"
+          )
+          function Find-Iscc {
+            foreach ($root in $roots) {
+              $candidate = Join-Path $root 'ISCC.exe'
+              if (Test-Path $candidate) { return $candidate }
+            }
+            return $null
+          }
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            choco install innosetup --no-progress --yes
+            $iscc = Find-Iscc
+          }
+          "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build installer and updater archive
+        shell: cmd
+        run: |
+          set "SKIP_BUILD=1"
+          call setup\create_setup.cmd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-oxide-windows-x64
+          path: |
+            target/release/stremio-native.exe
+            target/release/libmpv-2.dll
+            target/release/msvc-runtime
+            artifacts/StremioSetup-v*-x64.exe
+            artifacts/stremio-native-v*-x86_64-pc-windows-msvc.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS (Apple Silicon / Intel)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-31
+      - name: Install dependencies
+        run: |
+          brew install mpv pkg-config cmake ninja
+      - name: Build release
+        run: cargo build --locked --release --package stremio-native
+      - name: Package macOS binary
+        run: |
+          mkdir -p package-macos
+          cp target/release/stremio-native package-macos/stremio-oxide
+          chmod +x package-macos/stremio-oxide
+          tar -czvf stremio-oxide-macos.tar.gz -C package-macos stremio-oxide
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stremio-oxide-macos
+          path: stremio-oxide-macos.tar.gz
+          if-no-files-found: error
