@@ -1,5 +1,4 @@
 //! Persistent secondary libmpv worker for timeline thumbnail previews.
-#![allow(dead_code)]
 
 use std::{
     collections::VecDeque,
@@ -15,7 +14,7 @@ use std::{
 
 use crate::ffi::{
     EVENT_END_FILE, EVENT_FILE_LOADED, EVENT_NONE, EVENT_PLAYBACK_RESTART, EVENT_SHUTDOWN,
-    FORMAT_BYTE_ARRAY, FORMAT_INT64, FORMAT_NODE_MAP, FORMAT_STRING, MpvClient, MpvError,
+    FORMAT_BYTE_ARRAY, FORMAT_INT64, FORMAT_NODE_MAP, FORMAT_STRING, MpvApi, MpvClient, MpvError,
     MpvEventEndFile, MpvNode, MpvNodeList,
 };
 
@@ -239,18 +238,26 @@ impl ThumbnailRuntime {
         config: ThumbnailConfig,
         event_sink: impl Fn(ThumbnailEvent) + Send + Sync + 'static,
     ) -> Result<Self, MpvError> {
-        let _started_at = Instant::now();
+        let started_at = Instant::now();
         validate_config(&config)?;
+        let api = MpvApi::pinned_runtime()?;
+        let client = MpvClient::create(api)?;
+        configure_client(&client, &config)?;
+        client.initialize()?;
 
         let shared = Arc::new(SharedMailbox::default());
+        client.set_wakeup_callback(
+            Some(wakeup_thumbnail),
+            Arc::as_ptr(&shared).cast_mut().cast::<c_void>(),
+        );
         let controller = ThumbnailController {
             shared: shared.clone(),
         };
         let sink: Arc<dyn Fn(ThumbnailEvent) + Send + Sync> = Arc::new(event_sink);
         let worker = thread::Builder::new()
-            .name("ffmpeg-thumbnail".to_owned())
+            .name("mpv-thumbnail".to_owned())
             .spawn(move || {
-                ffmpeg_worker_main(shared, config, sink);
+                worker_main(client, shared, config, sink, started_at.elapsed());
             })
             .map_err(|error| MpvError::InvalidNode(format!("could not start worker: {error}")))?;
 
@@ -418,225 +425,6 @@ struct WorkerState {
     cache: FrameCache,
     last_seek_started: Option<Instant>,
     hdr_filter_warning_emitted: bool,
-}
-
-struct KeyframeThumbnailer {
-    input_ctx: ffmpeg_next::format::context::Input,
-    decoder: ffmpeg_next::codec::decoder::Video,
-    stream_index: usize,
-    scaler: ffmpeg_next::software::scaling::Context,
-    duration: f64,
-}
-
-impl KeyframeThumbnailer {
-    fn open(stream_url: &str) -> Result<Self, ffmpeg_next::Error> {
-        let _ = ffmpeg_next::init();
-        let mut opts = ffmpeg_next::Dictionary::new();
-        opts.set("multiple_requests", "1");
-        opts.set("reconnect", "1");
-        opts.set("reconnect_streamed", "1");
-        opts.set("reconnect_delay_max", "2");
-        // Timeouts de red en microsegundos (5 segundos) para evitar congelar el thread en avformat_open_input / read
-        opts.set("rw_timeout", "5000000");
-        opts.set("timeout", "5000000");
-
-        let input_ctx = ffmpeg_next::format::input_with_dictionary(stream_url, opts)?;
-        let video_stream = input_ctx
-            .streams()
-            .best(ffmpeg_next::media::Type::Video)
-            .ok_or(ffmpeg_next::Error::StreamNotFound)?;
-        let stream_index = video_stream.index();
-        let duration = if video_stream.duration() > 0 {
-            video_stream.duration() as f64 * f64::from(video_stream.time_base())
-        } else if input_ctx.duration() > 0 {
-            input_ctx.duration() as f64 / ffmpeg_next::ffi::AV_TIME_BASE as f64
-        } else {
-            0.0
-        };
-
-        let codec_params = video_stream.parameters();
-        let context = ffmpeg_next::codec::context::Context::from_parameters(codec_params)?;
-        let mut decoder = context.decoder().video()?;
-
-        decoder.skip_loop_filter(ffmpeg_next::codec::discard::Discard::All);
-        decoder.skip_frame(ffmpeg_next::codec::discard::Discard::NonKey);
-
-        let target_width = 160u32;
-        let target_height = 90u32;
-        let scaler = ffmpeg_next::software::scaling::Context::get(
-            decoder.format(),
-            decoder.width(),
-            decoder.height(),
-            ffmpeg_next::format::Pixel::RGBA,
-            target_width,
-            target_height,
-            ffmpeg_next::software::scaling::flag::Flags::FAST_BILINEAR,
-        )?;
-
-        Ok(Self {
-            input_ctx,
-            decoder,
-            stream_index,
-            scaler,
-            duration,
-        })
-    }
-
-    fn extract_frame(&mut self, timestamp_secs: f64) -> Result<Vec<u8>, ffmpeg_next::Error> {
-        let stream = self
-            .input_ctx
-            .stream(self.stream_index)
-            .ok_or(ffmpeg_next::Error::StreamNotFound)?;
-        let time_base = stream.time_base();
-        let target_pts = (timestamp_secs / f64::from(time_base)) as i64;
-
-        self.input_ctx.seek(target_pts, ..target_pts)?;
-        self.decoder.flush();
-
-        let mut decoded = ffmpeg_next::frame::Video::empty();
-        let mut packets_read = 0;
-        const MAX_PACKETS_TO_SCAN: usize = 120;
-        for (stream, packet) in self.input_ctx.packets() {
-            packets_read += 1;
-            if packets_read > MAX_PACKETS_TO_SCAN {
-                break;
-            }
-            if stream.index() == self.stream_index {
-                if self.decoder.send_packet(&packet).is_err() {
-                    continue;
-                }
-                if self.decoder.receive_frame(&mut decoded).is_ok() {
-                    let mut scaled = ffmpeg_next::frame::Video::empty();
-                    self.scaler.run(&decoded, &mut scaled)?;
-
-                    let width = 160usize;
-                    let height = 90usize;
-                    let stride = scaled.stride(0);
-                    let data = scaled.data(0);
-                    let mut rgba = Vec::with_capacity(width * height * 4);
-                    for y in 0..height {
-                        let row_start = y * stride;
-                        rgba.extend_from_slice(&data[row_start..row_start + width * 4]);
-                    }
-                    return Ok(rgba);
-                }
-            }
-        }
-        Err(ffmpeg_next::Error::Unknown)
-    }
-
-    fn duration(&self) -> f64 {
-        self.duration
-    }
-}
-
-fn ffmpeg_worker_main(
-    shared: Arc<SharedMailbox>,
-    _config: ThumbnailConfig,
-    sink: Arc<dyn Fn(ThumbnailEvent) + Send + Sync>,
-) {
-    sink(ThumbnailEvent::WorkerReady);
-
-    let mut current_source: Option<(u64, KeyframeThumbnailer)> = None;
-    let mut pending_source: Option<(u64, ThumbnailSource)> = None;
-
-    loop {
-        let mut mailbox = lock_mailbox(&shared);
-        while mailbox.controls.is_empty() && mailbox.latest_request.is_none() && !mailbox.closed {
-            mailbox = shared.condvar.wait(mailbox).unwrap_or_else(|p| p.into_inner());
-        }
-
-        if mailbox.closed {
-            break;
-        }
-
-        let control = mailbox.controls.pop_front();
-        let request = mailbox.latest_request.take();
-        drop(mailbox);
-
-        if let Some(ctrl) = control {
-            match ctrl {
-                Control::Load(generation, source) => {
-                    current_source = None;
-                    if source.url.contains("/resolve/") {
-                        tracing::info!(generation, url = %source.url, "skipping ffmpeg thumbnail worker for one-shot debrid resolve endpoint");
-                        pending_source = None;
-                        sink(ThumbnailEvent::SourceUnavailable {
-                            generation,
-                            reason: ThumbnailUnavailableReason::NotSeekable,
-                        });
-                    } else {
-                        pending_source = Some((generation, source));
-                        sink(ThumbnailEvent::SourceReady { generation, duration: 0.0 });
-                    }
-                }
-                Control::Clear => {
-                    // Requests cleared
-                }
-                Control::Unload(_) => {
-                    current_source = None;
-                    pending_source = None;
-                }
-                Control::Shutdown => {
-                    break;
-                }
-            }
-        }
-
-        if let Some(req) = request {
-            if current_source.as_ref().map(|(g, _)| *g) != Some(req.request.generation) {
-                if let Some((source_gen, source)) = pending_source.take() {
-                    if source_gen == req.request.generation {
-                        tracing::info!(generation = source_gen, url = %source.url, "ffmpeg thumbnail worker lazily opening source on hover");
-                        match KeyframeThumbnailer::open(&source.url) {
-                            Ok(worker) => {
-                                let duration = worker.duration();
-                                sink(ThumbnailEvent::SourceReady { generation: source_gen, duration });
-                                current_source = Some((source_gen, worker));
-                            }
-                            Err(err) => {
-                                tracing::warn!(generation = source_gen, error = %err, "ffmpeg thumbnail failed to open source");
-                                current_source = None;
-                                sink(ThumbnailEvent::RequestFailed {
-                                    generation: source_gen,
-                                    request_id: req.request.request_id,
-                                    reason: ThumbnailUnavailableReason::LoadFailed(err.to_string()),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let Some((generation, ref mut worker)) = current_source {
-                if generation == req.request.generation {
-                    match worker.extract_frame(req.request.seconds) {
-                        Ok(rgba) => {
-                            sink(ThumbnailEvent::Frame(ThumbnailFrame {
-                                generation,
-                                request_id: req.request.request_id,
-                                requested_seconds: req.request.seconds,
-                                decoded_seconds: req.request.seconds,
-                                width: 160,
-                                height: 90,
-                                quality: ThumbnailQuality::Exact,
-                                rgba: rgba.into(),
-                            }));
-                        }
-                        Err(err) => {
-                            sink(ThumbnailEvent::RequestFailed {
-                                generation,
-                                request_id: req.request.request_id,
-                                reason: ThumbnailUnavailableReason::SeekFailed(err.to_string()),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    sink(ThumbnailEvent::Shutdown);
 }
 
 fn worker_main(
