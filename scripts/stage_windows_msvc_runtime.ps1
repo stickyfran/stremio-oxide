@@ -87,6 +87,16 @@ function Find-Dumpbin {
 $resolvedBuildRoot = [System.IO.Path]::GetFullPath($BuildRoot)
 $application = Join-Path $resolvedBuildRoot "stremio-native.exe"
 $mpv = Join-Path $resolvedBuildRoot "libmpv-2.dll"
+
+if (-not (Test-Path -LiteralPath $mpv -PathType Leaf)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:STREMIO_MPV_DIR)) {
+        $candidate = Join-Path $env:STREMIO_MPV_DIR "libmpv-2.dll"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            Copy-Item -LiteralPath $candidate -Destination $mpv -Force
+        }
+    }
+}
+
 foreach ($required in @($application, $mpv)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Missing release binary: $required"

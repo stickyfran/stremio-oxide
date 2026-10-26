@@ -41,8 +41,8 @@ jobs:
           key: linux-apt-deps-v2
       - name: Install native dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libegl1-mesa-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential clang cmake ninja-build pkg-config libssl-dev libclang-dev libgtk-3-dev libayatana-appindicator3-dev libmpv-dev libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev libegl1-mesa-dev
       - name: Save apt cache
         if: steps.apt-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -312,6 +312,17 @@ jobs:
           VCPKGRS_TRIPLET: x64-windows-v3-static-md-release
           PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-windows-v3-static-md-release/lib/pkgconfig
           STREMIO_MPV_DIR: ${{ github.workspace }}/mpv-x64
+      - name: Copy runtime dependencies for Windows x64
+        shell: pwsh
+        run: |
+          $dst = "target/release"
+          if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Force $dst | Out-Null }
+          if (-not [string]::IsNullOrWhiteSpace($env:STREMIO_MPV_DIR) -and (Test-Path "$env:STREMIO_MPV_DIR\libmpv-2.dll")) {
+            Copy-Item "$env:STREMIO_MPV_DIR\libmpv-2.dll" -Destination "$dst\" -Force
+          }
+          $licDst = "$dst\licenses\mpv"
+          New-Item -ItemType Directory -Force $licDst | Out-Null
+          if (Test-Path "licenses/mpv") { Copy-Item "licenses/mpv\*" -Destination $licDst -Recurse -Force }
       - name: Stage app-local MSVC runtime
         shell: pwsh
         run: ./scripts/stage_windows_msvc_runtime.ps1 -BuildRoot ./target/release
