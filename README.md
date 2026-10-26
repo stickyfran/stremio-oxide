@@ -11,6 +11,12 @@ Cliente de escritorio nativo para Stremio en Rust con interfaz declarativa Slint
 - Persistencia local ACID en SQLite (WAL) para catalogo, historial y configuracion.
 - Integracion con el sistema operativo: Picture-in-Picture (PiP), controles multimedia (MPRIS/SMTC), bandeja del sistema (SNI/Win32) y gestion de geometria de ventana.
 
+## Plataformas y Arquitecturas
+
+- Linux: x86_64 y ARM64 (aarch64) en binario independiente y paquetes DEB.
+- Windows: x86_64 y ARM64 (aarch64) con instaladores Inno Setup y paquetes portables.
+- macOS: Apple Silicon (ARM64) e Intel x86_64.
+
 ## Requisitos de Compilacion
 
 - Rust 1.80+ (edicion 2021/2024).
