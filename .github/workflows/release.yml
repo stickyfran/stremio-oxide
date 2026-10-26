@@ -722,7 +722,7 @@ jobs:
           copy_latest "*.rpm"
           copy_latest "stremio-oxide-macos.tar.gz"
 
-          tag_name="${GITHUB_REF_NAME:-v1.0.0}"
+          tag_name="${GITHUB_REF_NAME:-v0.99}"
           linux_x64="$(find artifacts/stremio-native-linux-x64 -type f -name stremio-native | head -n 1 || true)"
           if [[ -n "$linux_x64" ]]; then
             asset="release/stremio-oxide-${tag_name}-x86_64-unknown-linux-gnu"

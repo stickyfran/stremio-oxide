@@ -1,6 +1,6 @@
 {
   "name": "stremio-native",
-  "version-string": "1.0.1",
+  "version-string": "0.99.0",
   "dependencies": [
     {
       "name": "libtorrent",
