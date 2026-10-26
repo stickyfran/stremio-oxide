@@ -962,8 +962,6 @@ pub struct NativePlaybackBridge {
 
 pub struct NativePlayback {
     runtime: PlaybackRuntime,
-    thumbnail_runtime: Option<ThumbnailRuntime>,
-    preview_runtime: Option<PreviewRuntime>,
     bridge: NativePlaybackBridge,
     event_task: tokio::task::JoinHandle<()>,
 }
@@ -1039,53 +1037,57 @@ impl NativePlayback {
             app_config.thumbnail_previews_enabled,
             ui.as_weak(),
         );
-        let thumbnail_events = thumbnails.clone();
-        let thumbnail_runtime = match ThumbnailRuntime::start(
-            ThumbnailConfig {
-                hardware_decoding,
-                ..ThumbnailConfig::default()
-            },
-            move |event| {
-                thumbnail_events.handle_event(event);
-            },
-        ) {
-            Ok(runtime) => {
-                thumbnails.attach_controller(runtime.controller());
-                Some(runtime)
+        thumbnails.set_starter(move |preview| {
+            let thumbnail_events = preview.clone();
+            match ThumbnailRuntime::start(
+                ThumbnailConfig {
+                    hardware_decoding,
+                    ..ThumbnailConfig::default()
+                },
+                move |event| {
+                    thumbnail_events.handle_event(event);
+                },
+            ) {
+                Ok(runtime) => {
+                    preview.attach_controller(runtime.controller());
+                    Some(runtime)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "timeline thumbnail decoder could not be initialized");
+                    preview.worker_failed(error.to_string());
+                    None
+                }
             }
-            Err(error) => {
-                tracing::warn!(%error, "timeline thumbnail decoder could not be initialized");
-                thumbnails.worker_failed(error.to_string());
-                None
-            }
-        };
+        });
         let previews = crate::preview_player::PreviewPlayer::new(
             app_config.hover_trailer_previews_enabled,
             app_config.trailer_autoplay,
             ui.as_weak(),
         );
         crate::preview_player::set_global(previews.clone());
-        let preview_events = previews.clone();
-        let preview_runtime = match PreviewRuntime::start(
-            PreviewConfig {
-                hardware_decoding,
-                ytdl_path: resolve_ytdl_path(),
-                ..PreviewConfig::default()
-            },
-            move |event| {
-                preview_events.handle_event(event);
-            },
-        ) {
-            Ok(runtime) => {
-                previews.attach_controller(runtime.controller());
-                Some(runtime)
+        previews.set_starter(move |player| {
+            let preview_events = player.clone();
+            match PreviewRuntime::start(
+                PreviewConfig {
+                    hardware_decoding,
+                    ytdl_path: resolve_ytdl_path(),
+                    ..PreviewConfig::default()
+                },
+                move |event| {
+                    preview_events.handle_event(event);
+                },
+            ) {
+                Ok(runtime) => {
+                    player.attach_controller(runtime.controller());
+                    Some(runtime)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "hover trailer preview decoder could not be initialized");
+                    player.worker_failed(error.to_string());
+                    None
+                }
             }
-            Err(error) => {
-                tracing::warn!(%error, "hover trailer preview decoder could not be initialized");
-                previews.worker_failed(error.to_string());
-                None
-            }
-        };
+        });
         let desired_shader_preset =
             crate::shaders::preset_from_config(app_config.active_shader_preset);
         let shader_coordinator = Arc::new(Mutex::new(
@@ -1235,8 +1237,6 @@ impl NativePlayback {
         bridge.install_callbacks(ui, core, navigation);
         Ok(Self {
             runtime,
-            thumbnail_runtime,
-            preview_runtime,
             bridge,
             event_task,
         })
@@ -1250,14 +1250,8 @@ impl NativePlayback {
         self.bridge.cancel_statistics_poll();
         self.bridge.cancel_background_tasks();
         let _ = self.bridge.discord_rpc.disconnect();
-        let thumbnail_result = self
-            .thumbnail_runtime
-            .map(ThumbnailRuntime::shutdown)
-            .transpose();
-        let preview_result = self
-            .preview_runtime
-            .map(PreviewRuntime::shutdown)
-            .transpose();
+        let thumbnail_result = self.bridge.thumbnails.shutdown();
+        let preview_result = self.bridge.previews.shutdown();
         let result = self.runtime.shutdown().map_err(Into::into);
         self.event_task.abort();
         thumbnail_result.context("thumbnail worker did not shut down cleanly")?;

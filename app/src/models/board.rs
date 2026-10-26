@@ -437,3 +437,9 @@ fn section_data_fingerprint(section: &BoardSection) -> SyncFingerprint {
     }
     fp.finish()
 }
+
+pub fn clear_sync_state() {
+    if let Some(state) = LAST_SYNC_STATE.get() {
+        *state.lock().unwrap() = None;
+    }
+}

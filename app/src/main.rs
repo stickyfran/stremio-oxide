@@ -537,7 +537,7 @@ async fn finish_startup(
     let storage_task = tokio::spawn(load_startup_storage());
     let playback_files_task = tokio::spawn(mpv_integration::prepare_playback_files());
     tokio::spawn(async {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
             crate::event_loop::trim_process_memory();
@@ -649,6 +649,7 @@ async fn finish_startup(
                 navigation_tab.dispatch_and_project(&ui, NavigationIntent::SelectTab(selected_tab));
                 ui.set_loading(false);
                 sync_tab_from_model(selected_tab, &rt, &ui, &ui_weak_tab, &navigation_tab);
+                crate::event_loop::trim_process_memory();
                 match selected_tab {
                     Tab::Movies => ui.invoke_discover_type_changed("movie".into()),
                     Tab::Shows => ui.invoke_discover_type_changed("series".into()),
@@ -2109,6 +2110,7 @@ fn sync_tab_from_model(
 
     match tab {
         Tab::Board => {
+            crate::models::board::clear_sync_state();
             let snapshot = runtime.model().ok().map(|model| {
                 (
                     model.continue_watching_preview.clone(),

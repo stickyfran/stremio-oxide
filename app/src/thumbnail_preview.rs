@@ -14,10 +14,14 @@ use playback_mpv::{
 const LEGACY_SCRIPT_HEADER: &str =
     "-- thumbfast.lua: Thumbnail preview generator for libmpv embeddings";
 
+type ThumbnailStarter = Box<dyn FnOnce(&ThumbnailPreview) -> Option<playback_mpv::ThumbnailRuntime> + Send>;
+
 #[derive(Clone)]
 pub struct ThumbnailPreview {
     coordinator: Arc<Mutex<ThumbnailCoordinator>>,
     controller: Arc<Mutex<Option<ThumbnailController>>>,
+    runtime: Arc<Mutex<Option<playback_mpv::ThumbnailRuntime>>>,
+    starter: Arc<Mutex<Option<ThumbnailStarter>>>,
     ui: slint::Weak<MainWindow>,
 }
 
@@ -26,8 +30,43 @@ impl ThumbnailPreview {
         Self {
             coordinator: Arc::new(Mutex::new(ThumbnailCoordinator::new(enabled))),
             controller: Arc::new(Mutex::new(None)),
+            runtime: Arc::new(Mutex::new(None)),
+            starter: Arc::new(Mutex::new(None)),
             ui,
         }
+    }
+
+    pub fn set_starter(
+        &self,
+        starter: impl FnOnce(&ThumbnailPreview) -> Option<playback_mpv::ThumbnailRuntime> + Send + 'static,
+    ) {
+        *self.starter.lock().unwrap_or_else(|p| p.into_inner()) = Some(Box::new(starter));
+    }
+
+    pub fn ensure_started(&self) {
+        {
+            let coordinator = lock_coordinator(&self.coordinator);
+            if !coordinator.enabled {
+                return;
+            }
+        }
+        let starter = {
+            let mut guard = self.starter.lock().unwrap_or_else(|p| p.into_inner());
+            guard.take()
+        };
+        if let Some(starter) = starter {
+            if let Some(runtime) = starter(self) {
+                *self.runtime.lock().unwrap_or_else(|p| p.into_inner()) = Some(runtime);
+            }
+        }
+    }
+
+    pub fn shutdown(&self) -> Result<(), playback_mpv::MpvError> {
+        let runtime = self.runtime.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(runtime) = runtime {
+            runtime.shutdown()?;
+        }
+        Ok(())
     }
 
     pub fn attach_controller(&self, controller: ThumbnailController) {
@@ -205,6 +244,7 @@ impl ThumbnailPreview {
 
     #[cfg_attr(feature = "profiling", hotpath::measure)]
     pub fn prewarm(&self, source: ThumbnailSource) {
+        self.ensure_started();
         let should_load = {
             let mut coordinator = lock_coordinator(&self.coordinator);
             if !coordinator.enabled
@@ -228,6 +268,7 @@ impl ThumbnailPreview {
     }
 
     pub fn hover(&self, progress: f32, duration: f64) {
+        self.ensure_started();
         let command = {
             let mut coordinator = lock_coordinator(&self.coordinator);
             if !coordinator.enabled
@@ -309,6 +350,9 @@ impl ThumbnailPreview {
     }
 
     pub fn set_enabled(&self, enabled: bool, current_source: Option<ThumbnailSource>) {
+        if enabled {
+            self.ensure_started();
+        }
         let (load, projection) = {
             let mut coordinator = lock_coordinator(&self.coordinator);
             coordinator.enabled = enabled;

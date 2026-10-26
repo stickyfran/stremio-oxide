@@ -24,8 +24,7 @@ enum DownloadState {
 }
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-static IMAGE_CACHE: OnceLock<Cache<String, ImageEntry>> = OnceLock::new();
-static REQUIRED_IMAGE_CACHE: OnceLock<Cache<String, ImageEntry>> = OnceLock::new();
+static MEMORY_IMAGE_CACHE: OnceLock<Cache<String, ImageEntry>> = OnceLock::new();
 static DOWNLOAD_STATE: OnceLock<Cache<String, DownloadState>> = OnceLock::new();
 static FETCH_QUEUE: OnceLock<Mutex<FetchQueue>> = OnceLock::new();
 static NETWORK_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -37,12 +36,13 @@ static READY_CACHE_DIRS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 static REFRESH_PENDING: AtomicBool = AtomicBool::new(false);
 static MAINTENANCE_STARTED: AtomicBool = AtomicBool::new(false);
 
-const MEMORY_CAPACITY_BYTES: u64 = 32 * 1024 * 1024;
-const REQUIRED_IMAGE_CAPACITY_BYTES: u64 = 64 * 1024 * 1024;
-const REQUIRED_IMAGE_IDLE_TTL: Duration = Duration::from_secs(60);
+const MEMORY_CAPACITY_BYTES: u64 = 48 * 1024 * 1024;
+const MEMORY_IDLE_TTL: Duration = Duration::from_secs(5 * 60);
 const DISK_CAPACITY_BYTES: u64 = 1536 * 1024 * 1024;
 const DISK_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_POSTER_WIDTH: u32 = 360;
+const MAX_POSTER_HEIGHT: u32 = 540;
 const MAX_DECODE_WIDTH: u32 = 1280;
 const MAX_DECODE_HEIGHT: u32 = 720;
 const MAX_CONCURRENT_DOWNLOADS: usize = 12;
@@ -128,15 +128,8 @@ fn get_image(url: &str, request_on_miss: bool) -> slint::Image {
     let optimized_url_str = optimize_poster_url(url);
     let url = optimized_url_str.as_str();
 
-    if let Some(buffer) = required_image_cache().get(url) {
+    if let Some(buffer) = memory_image_cache().get(url) {
         crate::performance::counters().record_image_memory_hit();
-        return slint::Image::from_rgba8(buffer);
-    }
-    if let Some(buffer) = image_cache().get(url) {
-        crate::performance::counters().record_image_memory_hit();
-        if request_on_miss {
-            required_image_cache().insert(url.to_owned(), buffer.clone());
-        }
         return slint::Image::from_rgba8(buffer);
     }
 
@@ -147,25 +140,9 @@ fn get_image(url: &str, request_on_miss: bool) -> slint::Image {
     slint::Image::default()
 }
 
-/// Holds the currently requested decoded working set. It starts empty and
-/// grows beyond the 32 MiB base cache only while images continue to be used.
-fn required_image_cache() -> &'static Cache<String, ImageEntry> {
-    REQUIRED_IMAGE_CACHE.get_or_init(|| {
-        Cache::builder()
-            .max_capacity(REQUIRED_IMAGE_CAPACITY_BYTES)
-            .weigher(|_key: &String, value: &ImageEntry| {
-                value
-                    .width()
-                    .saturating_mul(value.height())
-                    .saturating_mul(4)
-            })
-            .time_to_idle(REQUIRED_IMAGE_IDLE_TTL)
-            .build()
-    })
-}
-
-fn image_cache() -> &'static Cache<String, ImageEntry> {
-    IMAGE_CACHE.get_or_init(|| {
+/// Unified in-memory decoded image cache with TinyLFU eviction and bounded capacity.
+fn memory_image_cache() -> &'static Cache<String, ImageEntry> {
+    MEMORY_IMAGE_CACHE.get_or_init(|| {
         Cache::builder()
             .max_capacity(MEMORY_CAPACITY_BYTES)
             .weigher(|_key: &String, value: &ImageEntry| {
@@ -174,7 +151,7 @@ fn image_cache() -> &'static Cache<String, ImageEntry> {
                     .saturating_mul(value.height())
                     .saturating_mul(4)
             })
-            .time_to_idle(Duration::from_secs(10 * 60))
+            .time_to_idle(MEMORY_IDLE_TTL)
             .build()
     })
 }
@@ -318,8 +295,7 @@ async fn process_fetch(job: FetchJob) {
 
     match result {
         Ok(buffer) => {
-            required_image_cache().insert(job.url.clone(), buffer.clone());
-            image_cache().insert(job.url.clone(), buffer);
+            memory_image_cache().insert(job.url.clone(), buffer);
             download_state().invalidate(&job.url);
             notify_ui_refresh(job.url);
         }
@@ -481,6 +457,23 @@ async fn decode(bytes: Vec<u8>) -> Result<(ImageEntry, Vec<u8>), String> {
     .map_err(|error| format!("image decoder stopped: {error}"))?
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageRole {
+    Poster,
+    Logo,
+    Backdrop,
+}
+
+impl ImageRole {
+    pub fn max_dimensions(self) -> (u32, u32) {
+        match self {
+            Self::Poster => (MAX_POSTER_WIDTH, MAX_POSTER_HEIGHT),
+            Self::Logo => (640, 360),
+            Self::Backdrop => (MAX_DECODE_WIDTH, MAX_DECODE_HEIGHT),
+        }
+    }
+}
+
 fn decode_image(bytes: &[u8]) -> Result<ImageEntry, String> {
     use image::ImageDecoder as _;
 
@@ -490,10 +483,25 @@ fn decode_image(bytes: &[u8]) -> Result<ImageEntry, String> {
     let decoder = reader.into_decoder().map_err(|error| error.to_string())?;
     let (width, height) = decoder.dimensions();
 
-    // Decode posters straight into Slint's backing allocation instead of building
-    // an intermediate `DynamicImage` and copying out of it. Posters are already
-    // small, so only the oversized fallback below needs to resize.
-    if width <= MAX_DECODE_WIDTH && height <= MAX_DECODE_HEIGHT {
+    // Landscape images (e.g. 16:9 backdrops, episode thumbnails, wide logos) use
+    // Backdrop dimensions (1280x720) so they don't blur on full-screen details/board.
+    // Portrait and square images use Poster dimensions (360x540).
+    let role = if width > height {
+        ImageRole::Backdrop
+    } else {
+        ImageRole::Poster
+    };
+    decode_from_decoder(decoder, role)
+}
+
+
+fn decode_from_decoder<D: image::ImageDecoder>(decoder: D, role: ImageRole) -> Result<ImageEntry, String> {
+    let (max_width, max_height) = role.max_dimensions();
+    let (width, height) = decoder.dimensions();
+
+    // Decode posters and UI images straight into Slint's backing allocation instead of building
+    // an intermediate `DynamicImage` and copying out of it.
+    if width <= max_width && height <= max_height {
         match decoder.color_type() {
             image::ColorType::Rgba8 => {
                 let mut decoded = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
@@ -527,10 +535,10 @@ fn decode_image(bytes: &[u8]) -> Result<ImageEntry, String> {
     }
 
     let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
-    let image = if image.width() > MAX_DECODE_WIDTH || image.height() > MAX_DECODE_HEIGHT {
+    let image = if image.width() > max_width || image.height() > max_height {
         image.resize(
-            MAX_DECODE_WIDTH,
-            MAX_DECODE_HEIGHT,
+            max_width,
+            max_height,
             image::imageops::FilterType::Triangle,
         )
     } else {
@@ -777,9 +785,8 @@ fn finish_ui_refresh() {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_RESPONSE_BYTES, MEMORY_CAPACITY_BYTES, REQUIRED_IMAGE_CAPACITY_BYTES,
-        REQUIRED_IMAGE_IDLE_TTL, cache_path, decode_image, required_image_cache,
-        sanitized_url_for_log,
+        MAX_POSTER_HEIGHT, MAX_POSTER_WIDTH, MAX_RESPONSE_BYTES, MEMORY_CAPACITY_BYTES,
+        MEMORY_IDLE_TTL, cache_path, decode_image, memory_image_cache, sanitized_url_for_log,
     };
     use image::ImageEncoder as _;
 
@@ -798,18 +805,19 @@ mod tests {
     }
 
     #[test]
-    fn decoded_cache_has_a_small_base_and_temporary_growth_window() {
-        assert_eq!(MEMORY_CAPACITY_BYTES, 32 * 1024 * 1024);
-        assert_eq!(REQUIRED_IMAGE_CAPACITY_BYTES, 64 * 1024 * 1024);
-        assert!(!REQUIRED_IMAGE_IDLE_TTL.is_zero());
+    fn decoded_cache_has_a_bounded_capacity() {
+        assert_eq!(MEMORY_CAPACITY_BYTES, 48 * 1024 * 1024);
+        assert!(!MEMORY_IDLE_TTL.is_zero());
+        assert_eq!(MAX_POSTER_WIDTH, 360);
+        assert_eq!(MAX_POSTER_HEIGHT, 540);
     }
 
     #[test]
-    fn required_decoded_image_cache_uses_the_balanced_policy() {
-        let policy = required_image_cache().policy();
+    fn memory_decoded_image_cache_uses_the_balanced_policy() {
+        let policy = memory_image_cache().policy();
 
-        assert_eq!(policy.max_capacity(), Some(REQUIRED_IMAGE_CAPACITY_BYTES));
-        assert_eq!(policy.time_to_idle(), Some(REQUIRED_IMAGE_IDLE_TTL));
+        assert_eq!(policy.max_capacity(), Some(MEMORY_CAPACITY_BYTES));
+        assert_eq!(policy.time_to_idle(), Some(MEMORY_IDLE_TTL));
     }
 
     #[test]

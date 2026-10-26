@@ -62,7 +62,7 @@ const STREAM_INIT_TIMEOUT: Duration = Duration::from_secs(14);
 const STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(60);
 const CREATE_METADATA_GRACE: Duration = Duration::from_millis(1500);
 const MULTI_USER_ENGINE_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(2 * 60);
-const ENGINE_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
+const ENGINE_CLEANUP_INTERVAL: Duration = Duration::from_secs(10);
 const CACHE_REAPER_INTERVAL: Duration = Duration::from_secs(60);
 
 // ── Streaming window tuning ───────────────────────────────────────────────────

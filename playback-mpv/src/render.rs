@@ -504,6 +504,218 @@ impl Drop for OpenGlStateGuard<'_> {
     }
 }
 
+struct FrameOpenGlState {
+    capabilities: OpenGlCapabilities,
+    draw_framebuffer: Option<glow::NativeFramebuffer>,
+    read_framebuffer: Option<glow::NativeFramebuffer>,
+    program: Option<glow::NativeProgram>,
+    vertex_array: Option<glow::NativeVertexArray>,
+    array_buffer: Option<glow::NativeBuffer>,
+    element_array_buffer: Option<glow::NativeBuffer>,
+    active_texture: u32,
+    texture0: Option<glow::NativeTexture>,
+    sampler0: Option<glow::NativeSampler>,
+    viewport: [c_int; 4],
+    scissor_box: [c_int; 4],
+    clear_color: [f32; 4],
+    color_mask: [bool; 4],
+    depth_write_mask: bool,
+    blend_equation_rgb: u32,
+    blend_equation_alpha: u32,
+    blend_source_rgb: u32,
+    blend_destination_rgb: u32,
+    blend_source_alpha: u32,
+    blend_destination_alpha: u32,
+    blend: bool,
+    cull_face: bool,
+    depth_test: bool,
+    scissor_test: bool,
+    stencil_test: bool,
+}
+
+impl FrameOpenGlState {
+    fn capture(gl: &glow::Context, context_capabilities: OpenGlContextCapabilities) -> Self {
+        let mut viewport = [0; 4];
+        let mut scissor_box = [0; 4];
+        let mut clear_color = [0.0; 4];
+        unsafe {
+            let capabilities = context_capabilities.state;
+            gl.get_parameter_i32_slice(glow::VIEWPORT, &mut viewport);
+            gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut scissor_box);
+            gl.get_parameter_f32_slice(glow::COLOR_CLEAR_VALUE, &mut clear_color);
+            let active_texture = gl.get_parameter_i32(glow::ACTIVE_TEXTURE) as u32;
+            gl.active_texture(glow::TEXTURE0);
+            let texture0 = native_texture(gl.get_parameter_i32(glow::TEXTURE_BINDING_2D));
+            let sampler0 = capabilities
+                .sampler_objects
+                .then(|| native_sampler(gl.get_parameter_i32(glow::SAMPLER_BINDING)))
+                .flatten();
+            gl.active_texture(active_texture);
+
+            let (draw_framebuffer, read_framebuffer) = if capabilities.separate_framebuffers {
+                (
+                    native_framebuffer(gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING)),
+                    native_framebuffer(gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING)),
+                )
+            } else {
+                let framebuffer =
+                    native_framebuffer(gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING));
+                (framebuffer, framebuffer)
+            };
+            Self {
+                capabilities,
+                draw_framebuffer,
+                read_framebuffer,
+                program: native_program(gl.get_parameter_i32(glow::CURRENT_PROGRAM)),
+                vertex_array: capabilities
+                    .vertex_array_objects
+                    .then(|| native_vertex_array(gl.get_parameter_i32(glow::VERTEX_ARRAY_BINDING)))
+                    .flatten(),
+                array_buffer: native_buffer(gl.get_parameter_i32(glow::ARRAY_BUFFER_BINDING)),
+                element_array_buffer: native_buffer(
+                    gl.get_parameter_i32(glow::ELEMENT_ARRAY_BUFFER_BINDING),
+                ),
+                active_texture,
+                texture0,
+                sampler0,
+                viewport,
+                scissor_box,
+                clear_color,
+                color_mask: gl.get_parameter_bool_array(glow::COLOR_WRITEMASK),
+                depth_write_mask: gl.get_parameter_bool(glow::DEPTH_WRITEMASK),
+                blend_equation_rgb: gl.get_parameter_i32(glow::BLEND_EQUATION_RGB) as u32,
+                blend_equation_alpha: gl.get_parameter_i32(glow::BLEND_EQUATION_ALPHA) as u32,
+                blend_source_rgb: gl.get_parameter_i32(glow::BLEND_SRC_RGB) as u32,
+                blend_destination_rgb: gl.get_parameter_i32(glow::BLEND_DST_RGB) as u32,
+                blend_source_alpha: gl.get_parameter_i32(glow::BLEND_SRC_ALPHA) as u32,
+                blend_destination_alpha: gl.get_parameter_i32(glow::BLEND_DST_ALPHA) as u32,
+                blend: gl.is_enabled(glow::BLEND),
+                cull_face: gl.is_enabled(glow::CULL_FACE),
+                depth_test: gl.is_enabled(glow::DEPTH_TEST),
+                scissor_test: gl.is_enabled(glow::SCISSOR_TEST),
+                stencil_test: gl.is_enabled(glow::STENCIL_TEST),
+            }
+        }
+    }
+
+    fn restore(self, gl: &glow::Context) {
+        unsafe {
+            if self.capabilities.separate_framebuffers {
+                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, self.draw_framebuffer);
+                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, self.read_framebuffer);
+            } else {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, self.draw_framebuffer);
+            }
+            gl.viewport(
+                self.viewport[0],
+                self.viewport[1],
+                self.viewport[2],
+                self.viewport[3],
+            );
+            gl.scissor(
+                self.scissor_box[0],
+                self.scissor_box[1],
+                self.scissor_box[2],
+                self.scissor_box[3],
+            );
+            gl.use_program(self.program);
+            if self.capabilities.vertex_array_objects {
+                gl.bind_vertex_array(self.vertex_array);
+            }
+            gl.bind_buffer(glow::ARRAY_BUFFER, self.array_buffer);
+            if !self.capabilities.core_profile || self.vertex_array.is_some() {
+                gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, self.element_array_buffer);
+            }
+            // Clear texture units 1..4 that mpv might have bound during video decoding/filtering
+            for unit_offset in 1..4 {
+                gl.active_texture(glow::TEXTURE0 + unit_offset);
+                gl.bind_texture(glow::TEXTURE_2D, None);
+                if self.capabilities.sampler_objects {
+                    gl.bind_sampler(unit_offset, None);
+                }
+            }
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, self.texture0);
+            if self.capabilities.sampler_objects {
+                gl.bind_sampler(0, self.sampler0);
+            }
+            gl.active_texture(self.active_texture);
+            gl.blend_equation_separate(self.blend_equation_rgb, self.blend_equation_alpha);
+            gl.blend_func_separate(
+                self.blend_source_rgb,
+                self.blend_destination_rgb,
+                self.blend_source_alpha,
+                self.blend_destination_alpha,
+            );
+            gl.clear_color(
+                self.clear_color[0],
+                self.clear_color[1],
+                self.clear_color[2],
+                self.clear_color[3],
+            );
+            gl.color_mask(
+                self.color_mask[0],
+                self.color_mask[1],
+                self.color_mask[2],
+                self.color_mask[3],
+            );
+            gl.depth_mask(self.depth_write_mask);
+            restore_capability(gl, glow::BLEND, self.blend);
+            restore_capability(gl, glow::CULL_FACE, self.cull_face);
+            restore_capability(gl, glow::DEPTH_TEST, self.depth_test);
+            restore_capability(gl, glow::SCISSOR_TEST, self.scissor_test);
+            restore_capability(gl, glow::STENCIL_TEST, self.stencil_test);
+        }
+    }
+}
+
+struct FrameOpenGlStateGuard<'a> {
+    gl: &'a glow::Context,
+    state: Option<FrameOpenGlState>,
+}
+
+impl<'a> FrameOpenGlStateGuard<'a> {
+    fn new(gl: &'a glow::Context, capabilities: OpenGlContextCapabilities) -> Self {
+        Self {
+            gl,
+            state: Some(FrameOpenGlState::capture(gl, capabilities)),
+        }
+    }
+}
+
+impl Drop for FrameOpenGlStateGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            state.restore(self.gl);
+        }
+    }
+}
+
+fn prepare_for_mpv_frame(gl: &glow::Context, context_capabilities: OpenGlContextCapabilities) {
+    unsafe {
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        if context_capabilities.state.sampler_objects {
+            gl.bind_sampler(0, None);
+        }
+        gl.use_program(None);
+        if context_capabilities.state.vertex_array_objects {
+            gl.bind_vertex_array(None);
+        }
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        if !context_capabilities.state.core_profile {
+            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
+        }
+        gl.disable(glow::BLEND);
+        gl.disable(glow::CULL_FACE);
+        gl.disable(glow::DEPTH_TEST);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.disable(glow::STENCIL_TEST);
+        gl.color_mask(true, true, true, true);
+        gl.depth_mask(true);
+    }
+}
+
 unsafe fn capture_stencil_face(gl: &glow::Context, back: bool) -> StencilFaceState {
     let parameters = if back {
         [
@@ -1057,8 +1269,8 @@ impl RenderContext {
         if !self._redraw.pending.swap(false, Ordering::AcqRel) {
             return Ok(false);
         }
-        let state_guard = OpenGlStateGuard::new(&self.gl, self.capabilities);
-        prepare_for_mpv(&self.gl, self.capabilities);
+        let state_guard = FrameOpenGlStateGuard::new(&self.gl, self.capabilities);
+        prepare_for_mpv_frame(&self.gl, self.capabilities);
         // SAFETY: Called on the render-context owner thread while Slint's
         // OpenGL context is current.
         let update_flags = unsafe { (self.client.api.render_update)(self.context.as_ptr()) };
@@ -1103,8 +1315,8 @@ impl RenderContext {
             return Ok(RenderOutcome::NoFrame);
         }
 
-        let state_guard = OpenGlStateGuard::new(&self.gl, self.capabilities);
-        prepare_for_mpv(&self.gl, self.capabilities);
+        let state_guard = FrameOpenGlStateGuard::new(&self.gl, self.capabilities);
+        prepare_for_mpv_frame(&self.gl, self.capabilities);
         if update_requested {
             // SAFETY: Called on the render-context owner thread while Slint's
             // OpenGL context is current.

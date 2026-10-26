@@ -45,9 +45,9 @@ pub struct PreviewConfig {
 impl Default for PreviewConfig {
     fn default() -> Self {
         Self {
-            max_width: 854,
-            max_height: 480,
-            frame_interval: Duration::from_millis(50),
+            max_width: 640,
+            max_height: 360,
+            frame_interval: Duration::from_millis(66),
             load_timeout: Duration::from_secs(20),
             hardware_decoding: true,
             loop_playback: true,
@@ -59,11 +59,11 @@ impl Default for PreviewConfig {
 
 /// Trailers arrive as YouTube links, so the popup needs `ytdl_hook` too. Frames
 /// are delivered no larger than [`PreviewConfig::max_width`] by
-/// [`PreviewConfig::max_height`], so anything above 480p would be decoded only
+/// [`PreviewConfig::max_height`], so anything above 360p would be decoded only
 /// to be scaled away — and a smaller rendition starts noticeably sooner, which
 /// matters far more for a popup that opens on hover.
 const PREVIEW_YTDL_FORMAT: &str =
-    "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo[height<=720]+bestaudio/best";
+    "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo[height<=480]+bestaudio/best";
 
 /// A trailer assigned to the preview worker.
 #[derive(Clone, Debug)]

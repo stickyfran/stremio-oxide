@@ -516,20 +516,14 @@ pub fn sync(
         })
         .unwrap_or((true, String::new()));
 
-    let watched_ids: std::collections::HashSet<String> = runtime
-        .model()
-        .ok()
-        .map(|model| {
-            model
-                .ctx
-                .library
-                .items
-                .values()
-                .filter(|lib_item| lib_item.watched())
-                .map(|lib_item| lib_item.id.clone())
-                .collect()
-        })
-        .unwrap_or_default();
+    let model_guard = runtime.model().ok();
+
+    let is_watched = |id: &str| {
+        model_guard
+            .as_ref()
+            .and_then(|model| model.ctx.library.items.get(id))
+            .is_some_and(|lib_item| lib_item.watched())
+    };
 
     let mut fingerprint = Fingerprint::new();
     fingerprint.usize(columns);
@@ -561,7 +555,7 @@ pub fn sync(
         fingerprint.optional_str(item.poster.as_ref().map(url::Url::as_str));
         fingerprint.optional_str(item.release_info.as_deref());
         fingerprint.optional_str(item.behavior_hints.default_video_id.as_deref());
-        fingerprint.bool(watched_ids.contains(&item.id));
+        fingerprint.bool(is_watched(&item.id));
     }
     if !sync_fingerprint_changed(&LAST_SYNC_STATE, fingerprint.finish()) {
         return;
@@ -636,7 +630,7 @@ pub fn sync(
         let mut visible_items = Vec::with_capacity(raw_items.len());
         for item in &raw_items {
             let mut card = catalog_media_card(item);
-            if watched_ids.contains(&item.id) {
+            if is_watched(&item.id) {
                 card.show_checkmark = true;
             }
             visible_items.push(card);

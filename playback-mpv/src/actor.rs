@@ -445,10 +445,25 @@ fn load_file_options(url: &str, start_at: Option<f64>) -> Option<String> {
     if needs_ytdl(url) {
         options.push("cache=yes".to_owned());
     }
+    if is_local_or_loopback(url) {
+        options.push("demuxer-max-bytes=16777216".to_owned()); // 16 MiB
+        options.push("demuxer-max-back-bytes=8388608".to_owned()); // 8 MiB
+    }
     if let Some(start_at) = start_at.filter(|time| time.is_finite() && *time > 0.0) {
         options.push(format!("start={start_at:.3}"));
     }
     (!options.is_empty()).then(|| options.join(","))
+}
+
+fn is_local_or_loopback(url: &str) -> bool {
+    url.starts_with("http://127.0.0.1")
+        || url.starts_with("http://localhost")
+        || url.starts_with("http://[::1]")
+        || url.starts_with("https://127.0.0.1")
+        || url.starts_with("https://localhost")
+        || url.starts_with("https://[::1]")
+        || url.starts_with("file://")
+        || (!url.contains("://") && !url.is_empty())
 }
 
 /// Formats an explicit extractor path as an MPV `script-opts` entry.

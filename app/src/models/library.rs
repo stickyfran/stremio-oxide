@@ -389,28 +389,30 @@ pub fn sync<F: LibraryFilter>(
         .map(|q| q.clone())
         .unwrap_or_default();
     let normalized_query = query.to_lowercase();
-    let (authenticated, notification_counts, saved_stream_keys) = runtime
-        .model()
-        .ok()
-        .map(|model| {
-            let counts = model
-                .ctx
-                .notifications
-                .items
-                .iter()
-                .map(|(id, items)| (id.clone(), items.len()))
-                .collect::<std::collections::HashMap<_, _>>();
-            let saved_stream_keys = model
-                .ctx
-                .streams
-                .items
-                .keys()
-                .cloned()
-                .collect::<std::collections::HashSet<_>>();
-            (model.ctx.profile.auth.is_some(), counts, saved_stream_keys)
-        })
-        .unwrap_or_default();
+    let model_guard = runtime.model().ok();
+    let authenticated = model_guard
+        .as_ref()
+        .map(|m| m.ctx.profile.auth.is_some())
+        .unwrap_or(false);
     ui.set_library_authenticated(authenticated);
+
+    let get_notification_count = |id: &str| {
+        model_guard
+            .as_ref()
+            .and_then(|m| m.ctx.notifications.items.get(id))
+            .map_or(0, |items| items.len())
+    };
+
+    let has_saved_stream = |meta_id: &str, video_id: &str| {
+        model_guard
+            .as_ref()
+            .is_some_and(|m| {
+                m.ctx.streams.items.contains_key(&StreamsItemKey {
+                    meta_id: meta_id.to_string(),
+                    video_id: video_id.to_string(),
+                })
+            })
+    };
 
     // 1. Filter raw items based on query
     let (raw_items, columns) = {
@@ -453,12 +455,7 @@ pub fn sync<F: LibraryFilter>(
         fingerprint.u64(item.progress().to_bits());
         fingerprint.str(&item.name);
         fingerprint.optional_str(item.poster.as_ref().map(url::Url::as_str));
-        fingerprint.usize(
-            notification_counts
-                .get(&item.id)
-                .copied()
-                .unwrap_or_default(),
-        );
+        fingerprint.usize(get_notification_count(&item.id));
     }
     if !sync_fingerprint_changed(&LAST_SYNC_STATE, fingerprint.finish()) {
         return;
@@ -499,19 +496,9 @@ pub fn sync<F: LibraryFilter>(
                 show_checkmark: item.watched(),
                 show_progress: progress > 0.0,
                 progress_value: (progress / 100.0).clamp(0.0, 1.0) as f32,
-                new_videos: i32::try_from(
-                    notification_counts
-                        .get(&item.id)
-                        .copied()
-                        .unwrap_or_default()
-                        .min(99),
-                )
-                .unwrap_or(99),
+                new_videos: i32::try_from(get_notification_count(&item.id).min(99)).unwrap_or(99),
                 can_play: item.state.video_id.as_ref().is_some_and(|video_id| {
-                    saved_stream_keys.contains(&StreamsItemKey {
-                        meta_id: item.id.clone(),
-                        video_id: video_id.clone(),
-                    })
+                    has_saved_stream(&item.id, video_id)
                 }),
             });
         }

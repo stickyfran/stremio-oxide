@@ -58,7 +58,7 @@ pub async fn init_db(database_path: &Path) -> anyhow::Result<()> {
         PRAGMA synchronous = NORMAL;
         PRAGMA foreign_keys = ON;
         PRAGMA temp_store = MEMORY;
-        PRAGMA cache_size = -10000;
+        PRAGMA cache_size = -4000;
 
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,

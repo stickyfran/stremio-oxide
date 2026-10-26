@@ -528,39 +528,80 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
         .iter()
         .filter_map(|url| cached_image(url).map(|image| (url.as_str(), image)))
         .collect::<HashMap<_, _>>();
+    let active_tab = ui.get_active_tab();
+    let show_details = ui.get_show_details();
+    let show_player = ui.get_show_player();
     let mut updated = 0;
 
-    updated += patch_cards(&ui.get_board_continue_watching(), &images);
-    let sections = ui.get_board_sections();
-    for index in 0..sections.row_count() {
-        if let Some(section) = sections.row_data(index) {
-            updated += patch_cards(&section.items, &images);
+    // When on player or details, only patch player/details images
+    if !show_player && !show_details {
+        match active_tab {
+            0 => {
+                // Board
+                updated += patch_cards(&ui.get_board_continue_watching(), &images);
+                let sections = ui.get_board_sections();
+                for index in 0..sections.row_count() {
+                    if let Some(section) = sections.row_data(index) {
+                        updated += patch_cards(&section.items, &images);
+                    }
+                }
+            }
+            // Discover (1) and curated category tabs (8: Movies, 9: Shows, 10: Anime, 11: Kids)
+            1 | 8 | 9 | 10 | 11 => {
+                let discover = ui.get_discover_rows();
+                for index in 0..discover.row_count() {
+                    if let Some(row) = discover.row_data(index) {
+                        updated += patch_cards(&row.cols, &images);
+                    }
+                }
+            }
+            2 => {
+                // Library
+                let library = ui.get_library_rows();
+                for index in 0..library.row_count() {
+                    if let Some(row) = library.row_data(index) {
+                        updated += patch_cards(&row.cols, &images);
+                    }
+                }
+            }
+            3 => {
+                // Addons
+                updated += patch_addons(&ui.get_addons_list(), &images);
+            }
+            5 => {
+                // Calendar
+                let calendar = ui.get_calendar_rows();
+                for row_index in 0..calendar.row_count() {
+                    let Some(row) = calendar.row_data(row_index) else {
+                        continue;
+                    };
+                    for cell_index in 0..row.cells.row_count() {
+                        let Some(cell) = row.cells.row_data(cell_index) else {
+                            continue;
+                        };
+                        updated += patch_calendar_items(&cell.items, &images);
+                    }
+                }
+            }
+            6 => {
+                // Search
+                let search = ui.get_search_sections();
+                for index in 0..search.row_count() {
+                    if let Some(section) = search.row_data(index) {
+                        updated += patch_cards(&section.items, &images);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
-    let discover = ui.get_discover_rows();
-    for index in 0..discover.row_count() {
-        if let Some(row) = discover.row_data(index) {
-            updated += patch_cards(&row.cols, &images);
-        }
+    // Search suggestions dropdown can overlay any tab when typing in the top bar
+    let suggestions = ui.get_search_suggestions();
+    if suggestions.row_count() > 0 {
+        updated += patch_search_suggestions(&suggestions, &images);
     }
 
-    let library = ui.get_library_rows();
-    for index in 0..library.row_count() {
-        if let Some(row) = library.row_data(index) {
-            updated += patch_cards(&row.cols, &images);
-        }
-    }
-
-    let search = ui.get_search_sections();
-    for index in 0..search.row_count() {
-        if let Some(section) = search.row_data(index) {
-            updated += patch_cards(&section.items, &images);
-        }
-    }
-
-    updated += patch_search_suggestions(&ui.get_search_suggestions(), &images);
-    updated += patch_addons(&ui.get_addons_list(), &images);
     updated += patch_episode_items(&ui.get_detail_episodes(), &images);
     updated += patch_episode_items(&ui.get_player_episodes(), &images);
 
@@ -600,19 +641,6 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
     if let Some(logo) = lookup_image(&images, player_series_logo_url.as_str()) {
         ui.set_player_series_logo(logo.clone());
         updated += 1;
-    }
-
-    let calendar = ui.get_calendar_rows();
-    for row_index in 0..calendar.row_count() {
-        let Some(row) = calendar.row_data(row_index) else {
-            continue;
-        };
-        for cell_index in 0..row.cells.row_count() {
-            let Some(cell) = row.cells.row_data(cell_index) else {
-                continue;
-            };
-            updated += patch_calendar_items(&cell.items, &images);
-        }
     }
 
     updated

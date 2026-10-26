@@ -35,13 +35,25 @@ pub fn global() -> Option<&'static PreviewPlayer> {
     GLOBAL_PREVIEW_PLAYER.get()
 }
 
+type PreviewStarter = Box<dyn FnOnce(&PreviewPlayer) -> Option<playback_mpv::PreviewRuntime> + Send>;
+
+#[derive(Clone)]
+struct StagedPreviewFrame {
+    generation: u64,
+    pos: f64,
+    dur: f64,
+    buffer: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+}
+
 #[derive(Clone)]
 pub struct PreviewPlayer {
     state: Arc<Mutex<PreviewState>>,
     controller: Arc<Mutex<Option<PreviewController>>>,
+    runtime: Arc<Mutex<Option<playback_mpv::PreviewRuntime>>>,
+    starter: Arc<Mutex<Option<PreviewStarter>>>,
     ui: slint::Weak<MainWindow>,
     last_seek: Arc<Mutex<Instant>>,
-    latest_frame: Arc<Mutex<Option<PreviewFrame>>>,
+    latest_frame: Arc<Mutex<Option<StagedPreviewFrame>>>,
     pending_frame: Arc<AtomicBool>,
 }
 
@@ -50,11 +62,44 @@ impl PreviewPlayer {
         Self {
             state: Arc::new(Mutex::new(PreviewState::new(enabled, autoplay))),
             controller: Arc::new(Mutex::new(None)),
+            runtime: Arc::new(Mutex::new(None)),
+            starter: Arc::new(Mutex::new(None)),
             ui,
             last_seek: Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1))),
             latest_frame: Arc::new(Mutex::new(None)),
             pending_frame: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn set_starter(
+        &self,
+        starter: impl FnOnce(&PreviewPlayer) -> Option<playback_mpv::PreviewRuntime> + Send + 'static,
+    ) {
+        *self.starter.lock().unwrap_or_else(|p| p.into_inner()) = Some(Box::new(starter));
+    }
+
+    pub fn ensure_started(&self) {
+        let has_starter = self.starter.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        if !has_starter {
+            return;
+        }
+        let starter = {
+            let mut guard = self.starter.lock().unwrap_or_else(|p| p.into_inner());
+            guard.take()
+        };
+        if let Some(starter) = starter {
+            if let Some(runtime) = starter(self) {
+                *self.runtime.lock().unwrap_or_else(|p| p.into_inner()) = Some(runtime);
+            }
+        }
+    }
+
+    pub fn shutdown(&self) -> Result<(), playback_mpv::MpvError> {
+        let runtime = self.runtime.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(runtime) = runtime {
+            runtime.shutdown()?;
+        }
+        Ok(())
     }
 
     pub fn attach_controller(&self, controller: PreviewController) {
@@ -114,6 +159,9 @@ impl PreviewPlayer {
 
     /// Opens a session for the hovered item and projects its metadata (legacy popup).
     pub fn begin(&self, ui: &MainWindow, trailer: &TrailerPreview) {
+        if trailer.stream_url.is_some() {
+            self.ensure_started();
+        }
         let (source, projection) = {
             let mut state = lock_state(&self.state);
             state.generation = state.generation.wrapping_add(1);
@@ -156,6 +204,9 @@ impl PreviewPlayer {
 
     /// Opens a session for the right preview drawer.
     pub fn begin_drawer(&self, ui: &MainWindow, trailer: &TrailerPreview) {
+        if trailer.stream_url.is_some() {
+            self.ensure_started();
+        }
         let (source, projection, should_play) = {
             let mut state = lock_state(&self.state);
             state.generation = state.generation.wrapping_add(1);
@@ -238,6 +289,7 @@ impl PreviewPlayer {
 
     /// Flips the play/pause state for the drawer video.
     pub fn toggle_playback(&self) -> bool {
+        self.ensure_started();
         let (new_playing, source_to_play, need_pause) = {
             let mut state = lock_state(&self.state);
             if state.active_id.is_none() {
@@ -408,7 +460,19 @@ impl PreviewPlayer {
             state.duration = frame.duration;
             (frame.position, frame.duration)
         };
-        *self.latest_frame.lock().unwrap() = Some(frame);
+        // Decode and clone the pixel buffer in the background worker thread, not on Slint's UI loop!
+        let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            frame.rgba.as_ref(),
+            frame.width,
+            frame.height,
+        );
+        let staged = StagedPreviewFrame {
+            generation: frame.generation,
+            pos,
+            dur,
+            buffer,
+        };
+        *self.latest_frame.lock().unwrap() = Some(staged);
         if self.pending_frame.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -418,21 +482,16 @@ impl PreviewPlayer {
         let pending_frame = self.pending_frame.clone();
         let _ = slint::invoke_from_event_loop(move || {
             pending_frame.store(false, Ordering::Release);
-            let Some(frame) = latest_frame.lock().unwrap().take() else {
+            let Some(staged) = latest_frame.lock().unwrap().take() else {
                 return;
             };
-            if lock_state(&state).generation != frame.generation {
+            if lock_state(&state).generation != staged.generation {
                 return;
             }
             let Some(ui) = ui.upgrade() else {
                 return;
             };
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                frame.rgba.as_ref(),
-                frame.width,
-                frame.height,
-            );
-            let image = slint::Image::from_rgba8(buffer);
+            let image = slint::Image::from_rgba8(staged.buffer);
             ui.set_hover_preview_frame(image.clone());
             ui.set_hover_preview_loading(false);
             ui.set_hover_preview_has_frame(true);
@@ -442,9 +501,13 @@ impl PreviewPlayer {
             ui.set_preview_drawer_has_video_frame(true);
             ui.set_preview_drawer_video_loading(false);
             ui.set_preview_drawer_video_playing(true);
-            let progress = if dur > 0.0 { (pos / dur) as f32 } else { 0.0 };
-            let pos_sec = pos.max(0.0) as u64;
-            let dur_sec = dur.max(0.0) as u64;
+            let progress = if staged.dur > 0.0 {
+                (staged.pos / staged.dur) as f32
+            } else {
+                0.0
+            };
+            let pos_sec = staged.pos.max(0.0) as u64;
+            let dur_sec = staged.dur.max(0.0) as u64;
             let time_label = format!(
                 "{}:{:02} / {}:{:02}",
                 pos_sec / 60,

@@ -496,7 +496,7 @@ pub(crate) async fn get_db_conn() -> Result<turso::Connection, EnvError> {
     conn.execute_batch(
         "PRAGMA synchronous = NORMAL;
          PRAGMA temp_store = MEMORY;
-         PRAGMA cache_size = -10000;
+         PRAGMA cache_size = -2000;
          PRAGMA busy_timeout = 1000;",
     )
     .await
