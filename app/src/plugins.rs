@@ -28,10 +28,7 @@ impl PluginManager {
             return None;
         }
 
-        let (tx, rx) = hotpath::channel!(
-            tokio::sync::mpsc::channel::<LuaEvent>(128),
-            label = "plugins_events"
-        );
+        let (tx, rx) = tokio::sync::mpsc::channel::<LuaEvent>(128);
 
         std::thread::Builder::new()
             .name("lua-plugins".into())

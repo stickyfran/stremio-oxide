@@ -454,7 +454,7 @@ fn parse_availability(
             // {"success": true, "value": {"<hash>": {...}}}
             value
                 .get("value")
-                .and_then(|v| v.get(hash).or_else(|| v.get(&hash.to_ascii_lowercase())))
+                .and_then(|v| v.get(hash).or_else(|| v.get(hash.to_ascii_lowercase())))
                 .is_some()
         }
         _ => data

@@ -51,7 +51,6 @@ crash-handler.workspace = true
 minidumper.workspace = true
 mimalloc = "0.1.52"
 libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
-ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling"] }
 arboard = { version = "3.6.1", default-features = false }
 hex = "0.4.3"
 open = "5.4.1"
