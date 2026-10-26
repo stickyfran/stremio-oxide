@@ -286,6 +286,23 @@ jobs:
         with:
           path: vcpkg_installed
           key: Windows-vcpkg-x86-64-v3-static-md-release-v1-${{ hashFiles('vcpkg.json', 'triplets/**', 'vcpkg-overlays/**') }}
+      - name: Download and unpack mpv dev runtime for Windows x64
+        shell: pwsh
+        run: |
+          $mpvDir = Join-Path $env:GITHUB_WORKSPACE 'mpv-x64'
+          New-Item -ItemType Directory -Force $mpvDir | Out-Null
+          try {
+            $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/zhongfly/mpv-winbuild/releases/latest' -Headers @{ 'User-Agent' = 'GitHubActions' }
+            $asset = $release.assets | Where-Object { $_.name -like 'mpv-dev-x86_64-v3-*.7z' } | Select-Object -First 1
+            $archiveUrl = $asset.browser_download_url
+          } catch {
+            Write-Output "Falling back to release URL"
+            $archiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261021/mpv-dev-x86_64-v3-20261021-git-e471496c56.7z'
+          }
+          Write-Output "Downloading mpv x64 dev archive from $archiveUrl"
+          Invoke-WebRequest -Uri $archiveUrl -OutFile 'mpv-x64.7z'
+          7z x 'mpv-x64.7z' -o"$mpvDir" -y
+          "STREMIO_MPV_DIR=$mpvDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --locked --release --package stremio-native
@@ -294,6 +311,7 @@ jobs:
           VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg_installed
           VCPKGRS_TRIPLET: x64-windows-v3-static-md-release
           PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-windows-v3-static-md-release/lib/pkgconfig
+          STREMIO_MPV_DIR: ${{ github.workspace }}/mpv-x64
       - name: Stage app-local MSVC runtime
         shell: pwsh
         run: ./scripts/stage_windows_msvc_runtime.ps1 -BuildRoot ./target/release
@@ -347,6 +365,15 @@ jobs:
         with:
           toolchain: nightly-2026-07-31
           targets: aarch64-pc-windows-msvc
+      - name: Provide Visual Studio ARM64 C++ tools
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = (& $vswhere -latest -property installationPath).Trim()
+          $installer = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\setup.exe"
+          Write-Output "Installing Microsoft.VisualStudio.Component.VC.Tools.ARM64..."
+          Start-Process -FilePath $installer -ArgumentList "modify --installPath `"$vsPath`" --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --add Microsoft.VisualStudio.Component.VC.Runtimes.ARM64 --quiet --norestart" -Wait
+          Write-Output "ARM64 Visual C++ components installed."
       - name: Provide libclang for autocxx bindings
         shell: pwsh
         run: |
