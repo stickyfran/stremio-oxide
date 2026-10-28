@@ -25,6 +25,7 @@ use crate::{
 };
 
 const ADD_SUBTITLE_COMMAND_REPLY_ID: u64 = 1;
+const LOADFILE_COMMAND_REPLY_ID: u64 = 2;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AudioTrack {
@@ -1215,6 +1216,7 @@ fn actor_loop(
 ) {
     let mut state = PlaybackState::default();
     let mut running = true;
+    let mut last_emitted_state: Option<PlaybackState> = None;
 
     while running {
         wake.wait(Duration::from_secs(1));
@@ -1238,7 +1240,14 @@ fn actor_loop(
             break;
         }
 
-        drain_events(&client, &mut state, &sink, &mut running, &spatial_audio);
+        drain_events(
+            &client,
+            &mut state,
+            &sink,
+            &mut running,
+            &spatial_audio,
+            &mut last_emitted_state,
+        );
     }
 
     client.set_wakeup_callback(None, std::ptr::null_mut());
@@ -1317,8 +1326,14 @@ fn handle_command(
             set_optional_double(client, "ab-loop-a", None)
                 .and_then(|()| set_optional_double(client, "ab-loop-b", None))
                 .and_then(|()| match file_options {
-                    Some(options) => client.command(&["loadfile", &url, "replace", "-1", &options]),
-                    None => client.command(&["loadfile", &url, "replace"]),
+                    Some(options) => client.command_async(
+                        LOADFILE_COMMAND_REPLY_ID,
+                        &["loadfile", &url, "replace", "-1", &options],
+                    ),
+                    None => client.command_async(
+                        LOADFILE_COMMAND_REPLY_ID,
+                        &["loadfile", &url, "replace"],
+                    ),
                 })
         }
         PlaybackCommand::Stop => {
@@ -1526,6 +1541,10 @@ fn handle_command(
         PlaybackCommand::Shutdown => return false,
     };
     if let Err(error) = result {
+        if fatal_error {
+            state.loading = false;
+            state.loaded = false;
+        }
         sink(if fatal_error {
             PlaybackEvent::Error(error.to_string())
         } else {
@@ -1597,6 +1616,7 @@ fn drain_events(
     sink: &Arc<dyn Fn(PlaybackEvent) + Send + Sync>,
     running: &mut bool,
     spatial_audio: &SpatialAudioRuntime,
+    last_emitted_state: &mut Option<PlaybackState>,
 ) {
     let mut state_dirty = false;
     loop {
@@ -1610,7 +1630,14 @@ fn drain_events(
             EVENT_NONE => break,
             EVENT_COMMAND_REPLY if event.error < 0 => {
                 let error = client.api.operation_error(event.error).to_string();
-                sink(PlaybackEvent::Warning(error));
+                if event.reply_userdata == LOADFILE_COMMAND_REPLY_ID {
+                    state.loading = false;
+                    state.loaded = false;
+                    state_dirty = true;
+                    sink(PlaybackEvent::Error(format!("loadfile failed: {error}")));
+                } else {
+                    sink(PlaybackEvent::Warning(error));
+                }
             }
             EVENT_COMMAND_REPLY => {}
             EVENT_START_FILE => {
@@ -1680,7 +1707,10 @@ fn drain_events(
         }
     }
     if state_dirty {
-        sink(PlaybackEvent::State(Arc::new(state.clone())));
+        let previous = last_emitted_state.replace(state.clone());
+        if previous.as_ref() != Some(&*state) {
+            sink(PlaybackEvent::State(Arc::new(state.clone())));
+        }
     }
 }
 

@@ -142,7 +142,10 @@ fn schedule_debrid_annotations(
             return;
         }
         let views = {
-            let model = runtime.model().expect("model read failed");
+            let Ok(model) = runtime.model() else {
+                tracing::warn!("model read failed; skipping stream selection rebuild");
+                return;
+            };
             playback_selections.rebuild(&model.meta_details, &model.ctx.profile.addons)
         };
         let _ = slint::invoke_from_event_loop(move || {
@@ -378,7 +381,13 @@ pub fn start_event_loop(
                     let state_started = std::time::Instant::now();
                     #[cfg(debug_assertions)]
                     let lock_start = std::time::Instant::now();
-                    let model = runtime.model().expect("model read failed");
+                    let model = match runtime.model() {
+                        Ok(model) => model,
+                        Err(error) => {
+                            tracing::warn!(%error, "model read failed; skipping UI projection");
+                            continue;
+                        }
+                    };
                     let discord_enabled = model.ctx.profile.settings.discord_rpc_enabled;
                     if last_discord_enabled != Some(discord_enabled) {
                         last_discord_enabled = Some(discord_enabled);

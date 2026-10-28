@@ -467,14 +467,31 @@ async fn finish_startup(
         (config.download_bandwidth_limit_bps > 0).then_some(config.download_bandwidth_limit_bps),
     );
     let legacy_tidb_key = (!config.tidb_api_key.is_empty()).then(|| config.tidb_api_key.clone());
-    secure_settings::activate_profile(active_profile_id.as_str(), legacy_tidb_key)
-        .await
-        .context("could not load the profile credential settings")?;
-    if !config.tidb_api_key.is_empty() {
-        config.tidb_api_key.clear();
-        config::save_config_async(&config)
-            .await
-            .context("could not remove a migrated provider key from local storage")?;
+    match secure_settings::activate_profile(active_profile_id.as_str(), legacy_tidb_key).await {
+        Ok(()) => {
+            if !config.tidb_api_key.is_empty() {
+                config.tidb_api_key.clear();
+                config::save_config_async(&config)
+                    .await
+                    .context("could not remove a migrated provider key from local storage")?;
+            }
+        }
+        Err(
+            error @ (credential_store::CredentialError::Locked
+            | credential_store::CredentialError::Unavailable
+            | credential_store::CredentialError::Missing),
+        ) => {
+            // A minimal Wayland session may not have gnome-keyring/kwallet
+            // running. The app must still start; keep the legacy key in the
+            // config so it can be migrated once the vault is available.
+            tracing::warn!(
+                %error,
+                "OS credential vault unavailable; starting without provider credentials"
+            );
+        }
+        Err(error) => {
+            return Err(error).context("could not load the profile credential settings");
+        }
     }
     apply_theme(&ui, &config);
     ui.set_settings_hardware_acceleration(config.hardware_acceleration);

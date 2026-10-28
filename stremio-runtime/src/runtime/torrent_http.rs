@@ -1,6 +1,23 @@
 static STREAM_REQUEST_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
 
+/// Keeps a torrent marked as actively streamed for exactly as long as the
+/// request (or its response body) is alive.
+///
+/// `Drop` only performs a synchronous atomic decrement. It never spawns a task,
+/// so it is safe during runtime shutdown and on threads without a Tokio
+/// context.
+struct StreamLease {
+    torrents: Arc<TorrentService>,
+    info_hash: String,
+}
+
+impl Drop for StreamLease {
+    fn drop(&mut self) {
+        self.torrents.stream_finished(&self.info_hash);
+    }
+}
+
 async fn probe() -> Json<Value> {
     Json(json!({
         "error": null,
@@ -236,6 +253,13 @@ async fn stream_common(
     // Registrar el stream de inmediato para evitar que `cleanup_inactive` elimine el torrent
     // durante los 30-70 segundos de resolución de metadatos y búsqueda de chunks
     state.torrents.stream_started(&normalized_info_hash).await;
+    // From this point on every early return (HEAD, timeout, 416, read error)
+    // releases the stream via `Drop`; the successful body owns the lease until
+    // the client disconnects.
+    let stream_lease = StreamLease {
+        torrents: Arc::clone(&state.torrents),
+        info_hash: normalized_info_hash.clone(),
+    };
     let handle = match handle {
         Some(handle) => handle,
         None => {
@@ -390,13 +414,23 @@ async fn stream_common(
     }
 
     let total_len = file.length;
-    let range = headers
-        .get(RANGE)
-        .and_then(|header| header.to_str().ok())
-        .and_then(|range| parse_range(range, total_len));
-
-    let (status, start, end) = match range {
-        Some(range) => (StatusCode::PARTIAL_CONTENT, range.0, range.1),
+    let range_header = headers.get(RANGE).and_then(|header| header.to_str().ok());
+    let (status, start, end) = match range_header {
+        Some(raw_range) => match parse_range(raw_range, total_len) {
+            Some(range) => (StatusCode::PARTIAL_CONTENT, range.0, range.1),
+            None => {
+                let mut response =
+                    (StatusCode::RANGE_NOT_SATISFIABLE, Body::empty()).into_response();
+                response.headers_mut().insert(
+                    CONTENT_RANGE,
+                    header_value(&format!("bytes */{total_len}"))?,
+                );
+                response
+                    .headers_mut()
+                    .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+                return Ok(response);
+            }
+        },
         None => (StatusCode::OK, 0, total_len.saturating_sub(1)),
     };
 
@@ -662,12 +696,8 @@ async fn stream_common(
         "[TIMING] response body starting"
     );
 
-    let torrents = state.torrents.clone();
-    let hash = normalized_info_hash.clone();
     let on_drop = move || {
-        tokio::spawn(async move {
-            torrents.stream_finished(&hash).await;
-        });
+        drop(stream_lease);
     };
 
     let remaining_len = body_len.saturating_sub(first_read as u64);

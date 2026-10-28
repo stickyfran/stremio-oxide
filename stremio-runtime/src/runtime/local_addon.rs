@@ -295,6 +295,7 @@ async fn local_addon_local_meta(state: &AppState, media_type: &str, id: &str) ->
     let Some(entry) = entries.values().find(|entry| entry.item_id == id).cloned() else {
         return json!({ "meta": null });
     };
+    drop(entries);
     let mut meta = map_local_addon_entry_to_meta(&state.client, &entry, media_type)
         .await
         .unwrap_or_else(|| {
@@ -369,10 +370,17 @@ async fn local_addon_stream(state: &AppState, media_type: &str, id: &str) -> Val
         }
     }
 
-    let handles = state.torrents.handles.read().await;
-    for handle in handles.values() {
+    let handles = state
+        .torrents
+        .handles
+        .read()
+        .await
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    for handle in handles {
         let info_hash = handle.info_hash().as_string();
-        for (file_idx, file) in files_for_handle(handle).into_iter().enumerate() {
+        for (file_idx, file) in files_for_handle(&handle).into_iter().enumerate() {
             let Some(parsed) = parse_video_filename(&file.name) else {
                 continue;
             };

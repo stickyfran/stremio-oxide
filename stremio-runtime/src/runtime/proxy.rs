@@ -23,9 +23,7 @@ fn proxy_opts_parse(raw: &str) -> anyhow::Result<ProxyOpts> {
     let destination = destination.context("missing d")?;
     let destination_url = url::Url::parse(&destination).context("parsing d")?;
     let destination_origin = url_origin(&destination_url)?;
-    let destination_base = url::Url::parse(&destination_origin)
-        .expect("origin URL should always parse")
-        .to_owned();
+    let destination_base = url::Url::parse(&destination_origin).context("parsing proxy origin")?;
 
     Ok(ProxyOpts {
         destination_origin,
@@ -60,6 +58,11 @@ fn url_origin(url: &url::Url) -> anyhow::Result<String> {
     let Some(host) = url.host_str() else {
         anyhow::bail!("URL missing host")
     };
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
     let mut origin = format!("{}://{}", url.scheme(), host);
     if let Some(port) = url.port() {
         origin.push(':');
@@ -72,10 +75,15 @@ fn host_header_value(url: &url::Url) -> anyhow::Result<HeaderValue> {
     let Some(host) = url.host_str() else {
         anyhow::bail!("URL missing host")
     };
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
     let value = if let Some(port) = url.port() {
         format!("{host}:{port}")
     } else {
-        host.to_string()
+        host
     };
     HeaderValue::from_str(&value).context("building Host header")
 }

@@ -115,13 +115,11 @@ sequenceDiagram
 
 El módulo `playback-mpv` interactúa directamente con el pipeline de renderizado:
 
-1. **Presentación de Video y Composición Zero-Copy:**
-   - **Modo Primario (Hardware Overlay Planes - Wayland / Windows):**
-     - En Wayland se utiliza una subsuperficie desincronizada (`wl_subsurface_set_desync`) y en Windows DirectComposition. MPV inyecta los fotogramas decodificados directamente al plano inferior del compositor vía DMA-BUF / swapchain nativo sin pasar por el árbol de renderizado de Slint.
-     - Cuando los controles de la interfaz (OSD) están ocultos o inactivos, Slint duerme por completo (0 % CPU/GPU en la UI) y el video fluye a la tasa nativa (24/60/120 FPS) con latencia cero-copy.
-   - **Modo Fallback (X11 / FBO Compartido):**
-     - Slint y `libmpv` comparten el contexto OpenGL (`mpv_render_context_create`).
-     - Únicamente bajo este fallback se utiliza `MPV_EVENT_RENDER_UPDATE` sobre un Framebuffer Object (FBO) compartido con un pool reciclable de texturas y re-enlace explícito de estado OpenGL.
+1. **Presentación de Video y Composición (FBO compartido):**
+   - El diseño definitivo es **FBO compartido**: Slint y `libmpv` comparten el contexto OpenGL (`mpv_render_context_create`) y MPV renderiza en un par de texturas privadas de doble búfer, que Slint muestrea como una imagen más.
+   - `MPV_EVENT_RENDER_UPDATE` se procesa en el hilo de UI; el FBO evita conflictos de z-order, mantiene el OSD (blur, bordes redondeados, animaciones) en el mismo árbol de composición y funciona igual en X11, Wayland y Windows.
+   - El doble búfer evita que Slint muestree la textura que MPV está escribiendo. No hay `glFinish`/`glReadPixels` en el camino caliente.
+   - **Trabajo futuro (no implementado):** overlay por `wl_subsurface`/DMA-BUF en Wayland o DirectComposition en Windows. Hoy no existe ninguna ruta de subsuperficie en el código; el FBO es el modo único y estable.
 2. **Shaders y Post-procesamiento:**
    - Soporte para perfiles de shaders GLSL dinámicos (Anime4K, FSR) inyectados directamente al pipeline de MPV mediante `mpv_set_property_string(..., "glsl-shaders", ...)`.
 3. **Decodificación por Hardware:**
@@ -133,7 +131,7 @@ El módulo `playback-mpv` interactúa directamente con el pipeline de renderizad
 
 ### Almacenamiento Local (Turso / SQLite):
 - Ruta base en Linux: `~/.local/share/stremio-native/`
-- La base de datos `stremio.db` corre con `journal_mode = WAL`, `synchronous = NORMAL`, `pragma cache_size = -4000` (4 MB de caché privada) y `mmap_size = 16777216` (16 MB de Memory-Mapped I/O). Este dimensionamiento garantiza lecturas en microsegundos manteniendo el RSS reportado por el sistema operativo dentro del presupuesto estricto de memoria (< 90–110 MB).
+- La base de datos `stremio.db` corre con `journal_mode = WAL`, `synchronous = NORMAL`, `mmap_size = 30000000` (~30 MB de Memory-Mapped I/O) y `cache_size = -4000` (4 MB) en `app/src/db.rs`, y `cache_size = -2000` (2 MB) en la conexión compartida de `core-env`. Este dimensionamiento mantiene lecturas rápidas y el RSS dentro del presupuesto de memoria.
 - Almacena perfiles de usuario, catálogo de addons instalados, historial de búsqueda, caché de progreso de episodios y configuración general (`app_config`).
 
 ### Persistencia de Geometría de Ventana:

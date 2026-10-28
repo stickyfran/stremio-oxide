@@ -467,6 +467,8 @@ async fn write_response(
     .await
     .map_err(|error| error.to_string())?;
 
+    drop(conn);
+
     if WRITES_SINCE_MAINTENANCE.fetch_add(1, Ordering::Relaxed) % MAINTENANCE_WRITE_INTERVAL
         == MAINTENANCE_WRITE_INTERVAL - 1
         && let Err(error) = maintain().await

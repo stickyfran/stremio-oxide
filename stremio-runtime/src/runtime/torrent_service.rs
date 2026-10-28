@@ -20,12 +20,11 @@ impl TorrentService {
         initial_peers.extend(parse_peer_addrs(&request.peers));
 
         let default_output_folder = self.cache_dir.join(&info_hash);
-        let output_folder = request
-            .path
-            .as_ref()
-            .filter(|p| !p.trim().is_empty())
-            .cloned()
-            .or_else(|| Some(default_output_folder.to_string_lossy().into_owned()));
+        let output_folder = Some(
+            requested_output_folder(&self.cache_dir, request.path.as_deref(), default_output_folder)
+                .to_string_lossy()
+                .into_owned(),
+        );
 
         if let Some(connections) = request.connections {
             debug!(
@@ -207,19 +206,25 @@ impl TorrentService {
 
     async fn remove(&self, info_hash: &str) -> anyhow::Result<()> {
         let info_hash = normalize_info_hash(info_hash)?;
+        // Delete from the engine first. If this fails the torrent is still
+        // visible in `handles`, so callers can retry instead of leaking an
+        // invisible live torrent.
+        self.session
+            .delete(TorrentIdOrHash::parse(&info_hash)?, false)
+            .await
+            .with_context(|| format!("deleting torrent {info_hash}"))?;
         self.handles.write().await.remove(&info_hash);
         self.last_active.write().await.remove(&info_hash);
-        self.active_streams.write().await.remove(&info_hash);
+        self.active_streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&info_hash);
         self.selected_files.write().await.remove(&info_hash);
         self.owner_torrents
             .write()
             .await
             .retain(|_, hash| hash != &info_hash);
         self.torrent_owners.write().await.remove(&info_hash);
-        self.session
-            .delete(TorrentIdOrHash::parse(&info_hash)?, false)
-            .await
-            .with_context(|| format!("deleting torrent {info_hash}"))?;
         Ok(())
     }
 
@@ -359,20 +364,39 @@ impl TorrentService {
 
     async fn stream_started(&self, info_hash: &str) {
         self.touch(info_hash).await;
-        let mut active = self.active_streams.write().await;
-        *active.entry(info_hash.to_string()).or_insert(0) += 1;
+        let mut active = self
+            .active_streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let counter = active.entry(info_hash.to_string()).or_default();
+        counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
-    async fn stream_finished(&self, info_hash: &str) {
-        self.touch(info_hash).await;
-        let mut active = self.active_streams.write().await;
-        match active.get_mut(info_hash) {
-            Some(count) if *count > 1 => *count -= 1,
-            Some(_) => {
-                active.remove(info_hash);
-            }
-            None => {}
+    /// Releases one stream reference without requiring a Tokio runtime.
+    ///
+    /// This is intentionally synchronous: it is called from `Drop`, which can
+    /// run during runtime shutdown or on a thread without a Tokio context.
+    fn stream_finished(&self, info_hash: &str) {
+        let mut active = self
+            .active_streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let remove = match active.get(info_hash) {
+            Some(counter) => counter.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) <= 1,
+            None => false,
+        };
+        if remove {
+            active.remove(info_hash);
         }
+    }
+
+    fn active_stream_count(&self, info_hash: &str) -> usize {
+        self.active_streams
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(info_hash)
+            .map(|counter| counter.load(std::sync::atomic::Ordering::Acquire))
+            .unwrap_or(0)
     }
 
     async fn cleanup_inactive(&self) {
@@ -385,13 +409,7 @@ impl TorrentService {
             .collect::<Vec<_>>();
 
         for hash in keys {
-            let active = self
-                .active_streams
-                .read()
-                .await
-                .get(&hash)
-                .copied()
-                .unwrap_or(0);
+            let active = self.active_stream_count(&hash);
             if active > 0 {
                 continue;
             }
@@ -550,7 +568,13 @@ impl TorrentService {
             .keys()
             .cloned()
             .collect::<HashSet<_>>();
-        active.extend(self.active_streams.read().await.keys().cloned());
+        active.extend(
+            self.active_streams
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .keys()
+                .cloned(),
+        );
         active
     }
 }
@@ -948,7 +972,7 @@ fn stats_for_handle(
         downloaded,
         uploaded: stats.uploaded_bytes,
         download_speed,
-        upload_speed: download_speed.max(upload_speed),
+        upload_speed,
         sources: official_sources(&source_urls, unique_peers.min(400) as usize),
         peer_search_running: !stats.finished,
         opts: official_stats_opts(&source_urls, &info_hash, cache_dir),
@@ -1104,9 +1128,15 @@ fn resolve_file_index(
     filters: &[String],
 ) -> anyhow::Result<usize> {
     if let Ok(value) = idx.parse::<isize>() {
-        if let Some(idx) = valid_idx(value) {
-            return Ok(idx);
+        if value < 0 {
+            anyhow::bail!("torrent file index must be non-negative");
         }
+        let files = files_for_handle(handle);
+        let index = value as usize;
+        if index >= files.len() {
+            anyhow::bail!("torrent file index {index} is out of range");
+        }
+        return Ok(index);
     }
 
     let files = files_for_handle(handle);
@@ -1217,7 +1247,6 @@ where
         return Ok(T::default());
     }
     serde_json::from_slice(body)
-        .or_else(|_| serde_json::from_slice::<T>(b"{}"))
         .context("parsing JSON body")
         .map_err(AppError::from)
 }
@@ -1237,11 +1266,9 @@ async fn read_torrent_source(state: &AppState, from: &str) -> AppResult<Bytes> {
             .context("reading torrent file HTTP body")
             .map_err(AppError::from);
     }
-    tokio::fs::read(from)
-        .await
-        .with_context(|| format!("reading torrent file {from}"))
-        .map(Bytes::from)
-        .map_err(AppError::from)
+    // Local filesystem paths are intentionally not accepted: this endpoint is
+    // reachable from the local API and must not become an arbitrary file reader.
+    Err(anyhow!("torrent source must be an http(s) URL or a blob").into())
 }
 
 fn decode_hex(input: &str) -> AppResult<Bytes> {
@@ -1319,6 +1346,53 @@ where
         trackers.push(trimmed.to_string());
     }
     trackers
+}
+
+/// Resolves `.`/`..` lexically so a client cannot escape the cache directory
+/// with `cache/../../somewhere`. When the target already exists, canonicalize
+/// it as well so a symlink inside the cache cannot redirect writes outside.
+fn requested_output_folder(cache_dir: &Path, requested: Option<&str>, default: PathBuf) -> PathBuf {
+    let Some(requested) = requested else {
+        return default;
+    };
+    let requested = Path::new(requested);
+    if !requested.is_absolute() {
+        warn!(
+            path = %requested.display(),
+            "ignoring relative torrent output folder; using the cache directory"
+        );
+        return default;
+    }
+
+    let mut candidate = normalize_lexical_path(requested);
+    if let Ok(canonical) = std::fs::canonicalize(&candidate) {
+        candidate = canonical;
+    }
+    let cache_root =
+        std::fs::canonicalize(cache_dir).unwrap_or_else(|_| normalize_lexical_path(cache_dir));
+    if candidate.starts_with(&cache_root) {
+        candidate
+    } else {
+        warn!(
+            path = %requested.display(),
+            "rejecting torrent output folder outside the cache directory"
+        );
+        default
+    }
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn parse_peer_addrs(values: &[String]) -> Vec<SocketAddr> {

@@ -14,15 +14,16 @@ use anyhow::{Context, anyhow};
 use axum::{
     Json, Router,
     body::{Body, Bytes},
-    extract::{ConnectInfo, Path as AxumPath, RawQuery, State},
+    extract::{ConnectInfo, Path as AxumPath, RawQuery, Request, State},
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
         header::{
             ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, ACCEPT_RANGES, CACHE_CONTROL, CONNECTION,
             CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, DATE, ETAG, HOST,
-            IF_RANGE, LAST_MODIFIED, LOCATION, RANGE, SERVER, TRANSFER_ENCODING, USER_AGENT,
+            IF_RANGE, LAST_MODIFIED, LOCATION, ORIGIN, RANGE, SERVER, TRANSFER_ENCODING, USER_AGENT,
         },
     },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get},
 };
@@ -43,7 +44,7 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout};
 use tokio_util::io::ReaderStream;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, Any, CorsLayer},
     trace::TraceLayer,
 };
 use tracing::{debug, error, info, warn};
@@ -153,7 +154,7 @@ struct TorrentService {
     multi_user: bool,
     handles: RwLock<HashMap<String, Arc<librqbit::ManagedTorrent>>>,
     last_active: RwLock<HashMap<String, Instant>>,
-    active_streams: RwLock<HashMap<String, usize>>,
+    active_streams: std::sync::Mutex<HashMap<String, Arc<std::sync::atomic::AtomicUsize>>>,
     pending_magnets: RwLock<HashSet<String>>,
     selected_files: RwLock<HashMap<String, TorrentFileSelections>>,
     owner_torrents: RwLock<HashMap<String, String>>,
@@ -604,7 +605,7 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
         multi_user,
         handles: RwLock::new(HashMap::new()),
         last_active: RwLock::new(HashMap::new()),
-        active_streams: RwLock::new(HashMap::new()),
+        active_streams: std::sync::Mutex::new(HashMap::new()),
         pending_magnets: RwLock::new(HashSet::new()),
         selected_files: RwLock::new(HashMap::new()),
         owner_torrents: RwLock::new(HashMap::new()),
@@ -643,7 +644,14 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
     } else {
         http_start_port()
     };
-    let listener = bind_http_listener(port).await?;
+    // Single-user mode is a local API: never expose it on the LAN even if the
+    // caller passed a wildcard address.
+    let bind_ip = if multi_user {
+        config.http_addr.ip()
+    } else {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    };
+    let listener = bind_http_listener(bind_ip, port).await?;
     let addr = listener.local_addr()?;
     let base_host = server_base_host(multi_user);
     let base_url = format!("http://{}:{}", base_host, addr.port());
@@ -721,7 +729,14 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<ServerHandle> {
 pub async fn run_standalone() -> anyhow::Result<()> {
     let multi_user = std::env::args().any(|arg| arg == "--multi-user");
     let config = ServerConfig {
-        http_addr: SocketAddr::from(([127, 0, 0, 1], http_start_port())),
+        http_addr: SocketAddr::from((
+            if multi_user {
+                [0, 0, 0, 0]
+            } else {
+                [127, 0, 0, 1]
+            },
+            http_start_port(),
+        )),
         config_dir: None,
         cache_dir: None,
         multi_user,
@@ -750,7 +765,9 @@ fn init_logging() {
 
 fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(AllowOrigin::predicate(|origin, _| {
+            origin_is_loopback(origin)
+        }))
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -763,6 +780,7 @@ fn router(state: AppState) -> Router {
         .allow_headers(Any)
         .max_age(Duration::from_secs(1_728_000));
 
+    let allow_lan = state.torrents.multi_user;
     Router::new()
         .route("/", get(root))
         .route("/favicon.ico", get(favicon))
@@ -800,12 +818,79 @@ fn router(state: AppState) -> Router {
         .route("/{info_hash}/{idx}/{*filename}", get(stream_named))
         .fallback(fallback)
         .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn_with_state(allow_lan, local_request_guard))
         .layer(cors)
         .with_state(state)
 }
 
-async fn bind_http_listener(preferred_port: u16) -> anyhow::Result<TcpListener> {
-    let bind_ip = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+fn host_is_loopback(value: &HeaderValue) -> bool {
+    let Ok(host) = value.to_str() else {
+        return false;
+    };
+    let host = host.trim();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.split(']').next())
+        .unwrap_or_else(|| host.split(':').next().unwrap_or(host));
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+fn origin_is_loopback(value: &HeaderValue) -> bool {
+    let Ok(origin) = value.to_str() else {
+        return false;
+    };
+    let Ok(url) = url::Url::parse(origin) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && url
+            .host()
+            .is_some_and(|host| match host {
+                url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                url::Host::Ipv4(address) => address.is_loopback(),
+                url::Host::Ipv6(address) => address.is_loopback(),
+            })
+}
+
+/// Rejects browser cross-origin requests and DNS-rebinding hosts.
+///
+/// `CorsLayer` only controls whether a browser can *read* a response; simple
+/// requests (including `<img src=".../removeAll">`) still execute. This guard
+/// blocks them before they reach a handler.
+async fn local_request_guard(
+    State(allow_lan): State<bool>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let headers = request.headers();
+    if let Some(origin) = headers.get(ORIGIN)
+        && !origin_is_loopback(origin)
+    {
+        warn!(origin = %origin.to_str().unwrap_or("<invalid>"), "rejected cross-origin request");
+        return (StatusCode::FORBIDDEN, "cross-origin requests are not allowed").into_response();
+    }
+    if let Some(site) = headers.get("sec-fetch-site") {
+        let site = site.to_str().unwrap_or("<invalid>");
+        if !matches!(site, "same-origin" | "none") {
+            warn!(%site, "rejected cross-site request");
+            return (StatusCode::FORBIDDEN, "cross-site requests are not allowed")
+                .into_response();
+        }
+    }
+    if !allow_lan
+        && let Some(host) = headers.get(HOST)
+        && !host_is_loopback(host)
+    {
+        warn!(host = %host.to_str().unwrap_or("<invalid>"), "rejected non-loopback Host header");
+        return (StatusCode::FORBIDDEN, "invalid Host header").into_response();
+    }
+    next.run(request).await
+}
+
+async fn bind_http_listener(bind_ip: IpAddr, preferred_port: u16) -> anyhow::Result<TcpListener> {
     match TcpListener::bind((bind_ip, preferred_port)).await {
         Ok(listener) => Ok(listener),
         Err(preferred_error) => {
@@ -1096,12 +1181,34 @@ mod tests {
         assert_eq!(server_base_host(false), "127.0.0.1");
     }
 
+    #[test]
+    fn torrent_output_folder_stays_inside_the_cache() {
+        let cache = PathBuf::from("/tmp/stremio-cache");
+        let default = cache.join("hash");
+
+        assert_eq!(
+            requested_output_folder(&cache, Some("/tmp/stremio-cache/hash/sub"), default.clone()),
+            PathBuf::from("/tmp/stremio-cache/hash/sub")
+        );
+        assert_eq!(
+            requested_output_folder(&cache, Some("/tmp/stremio-cache/../evil"), default.clone()),
+            default
+        );
+        assert_eq!(
+            requested_output_folder(&cache, Some("relative/path"), default.clone()),
+            default
+        );
+    }
+
     #[tokio::test]
     async fn listener_uses_random_port_when_preferred_port_is_occupied() {
         let occupied = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await.unwrap();
         let occupied_port = occupied.local_addr().unwrap().port();
 
-        let listener = bind_http_listener(occupied_port).await.unwrap();
+        let listener =
+            bind_http_listener(IpAddr::V4(Ipv4Addr::LOCALHOST), occupied_port)
+                .await
+                .unwrap();
 
         assert_ne!(listener.local_addr().unwrap().port(), occupied_port);
     }

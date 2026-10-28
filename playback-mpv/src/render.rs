@@ -504,190 +504,73 @@ impl Drop for OpenGlStateGuard<'_> {
     }
 }
 
-struct FrameOpenGlState {
-    capabilities: OpenGlCapabilities,
-    draw_framebuffer: Option<glow::NativeFramebuffer>,
-    read_framebuffer: Option<glow::NativeFramebuffer>,
-    program: Option<glow::NativeProgram>,
-    vertex_array: Option<glow::NativeVertexArray>,
-    array_buffer: Option<glow::NativeBuffer>,
-    element_array_buffer: Option<glow::NativeBuffer>,
-    active_texture: u32,
-    texture0: Option<glow::NativeTexture>,
-    sampler0: Option<glow::NativeSampler>,
-    viewport: [c_int; 4],
-    scissor_box: [c_int; 4],
-    clear_color: [f32; 4],
-    color_mask: [bool; 4],
-    depth_write_mask: bool,
-    blend_equation_rgb: u32,
-    blend_equation_alpha: u32,
-    blend_source_rgb: u32,
-    blend_destination_rgb: u32,
-    blend_source_alpha: u32,
-    blend_destination_alpha: u32,
-    blend: bool,
-    cull_face: bool,
-    depth_test: bool,
-    scissor_test: bool,
-    stencil_test: bool,
-}
-
-impl FrameOpenGlState {
-    fn capture(gl: &glow::Context, context_capabilities: OpenGlContextCapabilities) -> Self {
-        let mut viewport = [0; 4];
-        let mut scissor_box = [0; 4];
-        let mut clear_color = [0.0; 4];
-        unsafe {
-            let capabilities = context_capabilities.state;
-            gl.get_parameter_i32_slice(glow::VIEWPORT, &mut viewport);
-            gl.get_parameter_i32_slice(glow::SCISSOR_BOX, &mut scissor_box);
-            gl.get_parameter_f32_slice(glow::COLOR_CLEAR_VALUE, &mut clear_color);
-            let active_texture = gl.get_parameter_i32(glow::ACTIVE_TEXTURE) as u32;
-            gl.active_texture(glow::TEXTURE0);
-            let texture0 = native_texture(gl.get_parameter_i32(glow::TEXTURE_BINDING_2D));
-            let sampler0 = capabilities
-                .sampler_objects
-                .then(|| native_sampler(gl.get_parameter_i32(glow::SAMPLER_BINDING)))
-                .flatten();
-            gl.active_texture(active_texture);
-
-            let (draw_framebuffer, read_framebuffer) = if capabilities.separate_framebuffers {
-                (
-                    native_framebuffer(gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING)),
-                    native_framebuffer(gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING)),
-                )
-            } else {
-                let framebuffer =
-                    native_framebuffer(gl.get_parameter_i32(glow::FRAMEBUFFER_BINDING));
-                (framebuffer, framebuffer)
-            };
-            Self {
-                capabilities,
-                draw_framebuffer,
-                read_framebuffer,
-                program: native_program(gl.get_parameter_i32(glow::CURRENT_PROGRAM)),
-                vertex_array: capabilities
-                    .vertex_array_objects
-                    .then(|| native_vertex_array(gl.get_parameter_i32(glow::VERTEX_ARRAY_BINDING)))
-                    .flatten(),
-                array_buffer: native_buffer(gl.get_parameter_i32(glow::ARRAY_BUFFER_BINDING)),
-                element_array_buffer: native_buffer(
-                    gl.get_parameter_i32(glow::ELEMENT_ARRAY_BUFFER_BINDING),
-                ),
-                active_texture,
-                texture0,
-                sampler0,
-                viewport,
-                scissor_box,
-                clear_color,
-                color_mask: gl.get_parameter_bool_array(glow::COLOR_WRITEMASK),
-                depth_write_mask: gl.get_parameter_bool(glow::DEPTH_WRITEMASK),
-                blend_equation_rgb: gl.get_parameter_i32(glow::BLEND_EQUATION_RGB) as u32,
-                blend_equation_alpha: gl.get_parameter_i32(glow::BLEND_EQUATION_ALPHA) as u32,
-                blend_source_rgb: gl.get_parameter_i32(glow::BLEND_SRC_RGB) as u32,
-                blend_destination_rgb: gl.get_parameter_i32(glow::BLEND_DST_RGB) as u32,
-                blend_source_alpha: gl.get_parameter_i32(glow::BLEND_SRC_ALPHA) as u32,
-                blend_destination_alpha: gl.get_parameter_i32(glow::BLEND_DST_ALPHA) as u32,
-                blend: gl.is_enabled(glow::BLEND),
-                cull_face: gl.is_enabled(glow::CULL_FACE),
-                depth_test: gl.is_enabled(glow::DEPTH_TEST),
-                scissor_test: gl.is_enabled(glow::SCISSOR_TEST),
-                stencil_test: gl.is_enabled(glow::STENCIL_TEST),
-            }
-        }
-    }
-
-    fn restore(self, gl: &glow::Context) {
-        unsafe {
-            if self.capabilities.separate_framebuffers {
-                gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, self.draw_framebuffer);
-                gl.bind_framebuffer(glow::READ_FRAMEBUFFER, self.read_framebuffer);
-            } else {
-                gl.bind_framebuffer(glow::FRAMEBUFFER, self.draw_framebuffer);
-            }
+/// Restores the small, known subset of OpenGL state that Slint/FemtoVG
+/// assumes when it resumes drawing after libmpv.
+///
+/// This deliberately does not call `glGet*`: querying state forces the driver
+/// to synchronize, and doing it twice per frame is far more expensive than
+/// issuing a few redundant `glBind*`/`glDisable` calls.
+fn restore_slint_gl_state(
+    gl: &glow::Context,
+    context_capabilities: OpenGlContextCapabilities,
+    slint_viewport: [c_int; 4],
+) {
+    unsafe {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        if slint_viewport[2] > 0 && slint_viewport[3] > 0 {
             gl.viewport(
-                self.viewport[0],
-                self.viewport[1],
-                self.viewport[2],
-                self.viewport[3],
+                slint_viewport[0],
+                slint_viewport[1],
+                slint_viewport[2],
+                slint_viewport[3],
             );
-            gl.scissor(
-                self.scissor_box[0],
-                self.scissor_box[1],
-                self.scissor_box[2],
-                self.scissor_box[3],
-            );
-            gl.use_program(self.program);
-            if self.capabilities.vertex_array_objects {
-                gl.bind_vertex_array(self.vertex_array);
-            }
-            gl.bind_buffer(glow::ARRAY_BUFFER, self.array_buffer);
-            if !self.capabilities.core_profile || self.vertex_array.is_some() {
-                gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, self.element_array_buffer);
-            }
-            // Clear texture units 1..4 that mpv might have bound during video decoding/filtering
-            for unit_offset in 1..4 {
-                gl.active_texture(glow::TEXTURE0 + unit_offset);
-                gl.bind_texture(glow::TEXTURE_2D, None);
-                if self.capabilities.sampler_objects {
-                    gl.bind_sampler(unit_offset, None);
-                }
-            }
-            gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, self.texture0);
-            if self.capabilities.sampler_objects {
-                gl.bind_sampler(0, self.sampler0);
-            }
-            gl.active_texture(self.active_texture);
-            gl.blend_equation_separate(self.blend_equation_rgb, self.blend_equation_alpha);
-            gl.blend_func_separate(
-                self.blend_source_rgb,
-                self.blend_destination_rgb,
-                self.blend_source_alpha,
-                self.blend_destination_alpha,
-            );
-            gl.clear_color(
-                self.clear_color[0],
-                self.clear_color[1],
-                self.clear_color[2],
-                self.clear_color[3],
-            );
-            gl.color_mask(
-                self.color_mask[0],
-                self.color_mask[1],
-                self.color_mask[2],
-                self.color_mask[3],
-            );
-            gl.depth_mask(self.depth_write_mask);
-            restore_capability(gl, glow::BLEND, self.blend);
-            restore_capability(gl, glow::CULL_FACE, self.cull_face);
-            restore_capability(gl, glow::DEPTH_TEST, self.depth_test);
-            restore_capability(gl, glow::SCISSOR_TEST, self.scissor_test);
-            restore_capability(gl, glow::STENCIL_TEST, self.stencil_test);
         }
+        gl.use_program(None);
+        if context_capabilities.state.vertex_array_objects {
+            gl.bind_vertex_array(None);
+        }
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        if !context_capabilities.state.core_profile {
+            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
+        }
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        if context_capabilities.state.sampler_objects {
+            gl.bind_sampler(0, None);
+        }
+        gl.disable(glow::BLEND);
+        gl.disable(glow::CULL_FACE);
+        gl.disable(glow::DEPTH_TEST);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.disable(glow::STENCIL_TEST);
+        gl.color_mask(true, true, true, true);
+        gl.depth_mask(true);
     }
 }
 
 struct FrameOpenGlStateGuard<'a> {
     gl: &'a glow::Context,
-    state: Option<FrameOpenGlState>,
+    capabilities: OpenGlContextCapabilities,
+    slint_viewport: [c_int; 4],
 }
 
 impl<'a> FrameOpenGlStateGuard<'a> {
-    fn new(gl: &'a glow::Context, capabilities: OpenGlContextCapabilities) -> Self {
+    fn new(
+        gl: &'a glow::Context,
+        capabilities: OpenGlContextCapabilities,
+        slint_viewport: [c_int; 4],
+    ) -> Self {
         Self {
             gl,
-            state: Some(FrameOpenGlState::capture(gl, capabilities)),
+            capabilities,
+            slint_viewport,
         }
     }
 }
 
 impl Drop for FrameOpenGlStateGuard<'_> {
     fn drop(&mut self) {
-        if let Some(state) = self.state.take() {
-            state.restore(self.gl);
-        }
+        restore_slint_gl_state(self.gl, self.capabilities, self.slint_viewport);
     }
 }
 
@@ -1099,6 +982,17 @@ impl<'a> ResolverBridge<'a> {
         // disabling dithering. Restore Slint's exact state before returning.
         drop(gl_state);
 
+        // Capture the window viewport once. Slint owns the framebuffer size,
+        // and subsequent MPV frames must not leave the video-sized viewport in
+        // place. Refreshed only on texture reallocation (window resize), never
+        // per frame.
+        let mut slint_viewport = [0; 4];
+        // SAFETY: Slint's OpenGL context is current during render-context
+        // construction.
+        unsafe {
+            gl.get_parameter_i32_slice(glow::VIEWPORT, &mut slint_viewport);
+        }
+
         Ok(RenderContext {
             context,
             client: client.clone(),
@@ -1106,6 +1000,7 @@ impl<'a> ResolverBridge<'a> {
             capabilities,
             diagnostics,
             render_targets: None,
+            slint_viewport,
             force_render: false,
             frame_pending: false,
             last_gl_error: None,
@@ -1217,6 +1112,7 @@ pub struct RenderContext {
     capabilities: OpenGlContextCapabilities,
     diagnostics: OpenGlDiagnostics,
     render_targets: Option<OpenGlRenderTargets>,
+    slint_viewport: [c_int; 4],
     force_render: bool,
     frame_pending: bool,
     last_gl_error: Option<u32>,
@@ -1245,6 +1141,15 @@ impl RenderContext {
         {
             return Ok(false);
         }
+        // Reallocation only happens on resize/creation, so this single query is
+        // not on the per-frame path.
+        let mut viewport = [0; 4];
+        // SAFETY: Slint's OpenGL context is current in the rendering callback.
+        unsafe {
+            self.gl
+                .get_parameter_i32_slice(glow::VIEWPORT, &mut viewport);
+        }
+        self.slint_viewport = viewport;
         let targets = create_render_targets(&self.gl, self.capabilities, width, height)?;
         if let Some(previous) = self.render_targets.replace(targets) {
             for target in previous.slots {
@@ -1269,7 +1174,8 @@ impl RenderContext {
         if !self._redraw.pending.swap(false, Ordering::AcqRel) {
             return Ok(false);
         }
-        let state_guard = FrameOpenGlStateGuard::new(&self.gl, self.capabilities);
+        let state_guard =
+            FrameOpenGlStateGuard::new(&self.gl, self.capabilities, self.slint_viewport);
         prepare_for_mpv_frame(&self.gl, self.capabilities);
         // SAFETY: Called on the render-context owner thread while Slint's
         // OpenGL context is current.
@@ -1315,7 +1221,8 @@ impl RenderContext {
             return Ok(RenderOutcome::NoFrame);
         }
 
-        let state_guard = FrameOpenGlStateGuard::new(&self.gl, self.capabilities);
+        let state_guard =
+            FrameOpenGlStateGuard::new(&self.gl, self.capabilities, self.slint_viewport);
         prepare_for_mpv_frame(&self.gl, self.capabilities);
         if update_requested {
             // SAFETY: Called on the render-context owner thread while Slint's

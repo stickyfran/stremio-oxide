@@ -240,26 +240,62 @@ impl AppConfig {
 
 pub async fn init_config() {
     let mut config = AppConfig::default();
-
-    // 1. Try to load from database settings table
     let mut loaded_from_db = false;
-    if let Ok(conn) = crate::db::get_conn().await
-        && let Ok(mut rows) = conn
+    let mut row_missing = false;
+    let mut preserve_row = false;
+    let mut db_available = false;
+
+    // 1. Try to load from database settings table. Only a genuinely absent row
+    // is allowed to seed defaults: a corrupt row, a Busy error or a failed
+    // query must never overwrite the user's configuration.
+    if let Ok(conn) = crate::db::get_conn().await {
+        db_available = true;
+        match conn
             .query("SELECT value FROM settings WHERE key = 'app_config'", ())
             .await
-        && let Ok(Some(row)) = rows.next().await
-        && let Ok(val_str) = row.get::<String>(0)
-        && let Ok(parsed) = serde_json::from_str::<AppConfig>(&val_str)
-    {
-        config = parsed;
-        loaded_from_db = true;
+        {
+            Ok(mut rows) => match rows.next().await {
+                Ok(Some(row)) => match row.get::<String>(0) {
+                    Ok(raw) => match serde_json::from_str::<AppConfig>(&raw) {
+                        Ok(parsed) => {
+                            config = parsed;
+                            loaded_from_db = true;
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                %error,
+                                "app_config is corrupt; preserving the original row"
+                            );
+                            preserve_row = true;
+                            let _ = conn
+                                .execute(
+                                    "INSERT OR REPLACE INTO settings (key, value) \
+                                     VALUES ('app_config.corrupt', ?)",
+                                    [raw],
+                                )
+                                .await;
+                        }
+                    },
+                    Err(error) => {
+                        tracing::error!(%error, "app_config row is not valid text; preserving it");
+                        preserve_row = true;
+                    }
+                },
+                Ok(None) => row_missing = true,
+                Err(error) => {
+                    tracing::warn!(%error, "could not read the app_config row; keeping defaults");
+                }
+            },
+            Err(error) => {
+                tracing::warn!(%error, "could not query app_config; keeping defaults");
+            }
+        }
     }
 
-    // A clean install starts from database-backed defaults. Legacy working-
-    // directory files are intentionally left untouched for manual recovery.
-    if !loaded_from_db
-        && let Ok(conn) = crate::db::get_conn().await
+    if db_available
+        && row_missing
         && let Ok(serialized) = serde_json::to_string(&config)
+        && let Ok(conn) = crate::db::get_conn().await
     {
         let _ = conn
             .execute(
@@ -272,8 +308,10 @@ pub async fn init_config() {
     let migrated = config.migrate();
     if migrated
         && loaded_from_db
-        && let Ok(conn) = crate::db::get_conn().await
+        && !preserve_row
+        && db_available
         && let Ok(serialized) = serde_json::to_string(&config)
+        && let Ok(conn) = crate::db::get_conn().await
     {
         let _ = conn
             .execute(
@@ -344,6 +382,9 @@ pub async fn save_config_async(config: &AppConfig) -> anyhow::Result<()> {
 
 pub fn parse_color(hex: &str) -> Option<slint::Color> {
     let hex = hex.trim_start_matches('#');
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     if hex.len() == 6 {
         let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
@@ -462,5 +503,18 @@ mod tests {
         let serialized = serde_json::to_string(&AppConfig::default()).expect("serialize config");
         assert!(serialized.contains("thumbnail_previews_enabled"));
         assert!(!serialized.contains("thumbfast_enabled"));
+    }
+
+    #[test]
+    fn parse_color_handles_rgb_and_argb() {
+        assert!(parse_color("#123456").is_some());
+        assert!(parse_color("12345678").is_some());
+        assert!(parse_color("#12345").is_none());
+    }
+
+    #[test]
+    fn parse_color_does_not_panic_on_multibyte_input() {
+        // Six bytes, but only five characters: byte slicing used to panic.
+        assert!(parse_color("#é1234").is_none());
     }
 }

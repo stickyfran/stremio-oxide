@@ -1545,14 +1545,22 @@ impl NativePlaybackBridge {
         }
         let route_revision = navigation.snapshot().revision;
         self.sync_statistics_poll(player);
-        if let Some(ui_upgraded) = ui.upgrade() {
+        let title = {
             let model_guard = self.core.model().ok();
             let library = model_guard.as_ref().map(|m| &m.ctx.library);
-            if let Some(formatted_title) = format_player_title(player, library)
-                && ui_upgraded.get_player_title().as_str() != formatted_title
-            {
-                ui_upgraded.set_player_title(formatted_title.into());
-            }
+            format_player_title(player, library)
+        };
+        if let Some(formatted_title) = title {
+            // `sync_player` runs from a Tokio task, where Slint's
+            // `Weak::upgrade()` returns `None`. Upgrade inside the UI thread.
+            let ui_for_title = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_for_title.upgrade()
+                    && ui.get_player_title().as_str() != formatted_title
+                {
+                    ui.set_player_title(formatted_title.as_str().into());
+                }
+            });
         }
         let Some(Loadable::Ready((stream_urls, converted))) = player.stream.as_ref() else {
             self.sync_episode_selector(player, streams, ui);

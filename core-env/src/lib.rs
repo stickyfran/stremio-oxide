@@ -2,15 +2,18 @@ use chrono::{DateTime, Utc};
 use futures::{FutureExt, future};
 use http::Request;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::future::Future;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::{
-    Arc, LazyLock, OnceLock, RwLock,
+    Arc, LazyLock, Mutex, OnceLock, RwLock,
     atomic::{AtomicBool, Ordering},
     mpsc::{Receiver, SyncSender, TrySendError},
 };
+use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use stremio_core::{
     constants::PROFILE_STORAGE_KEY,
@@ -27,6 +30,22 @@ const SEQUENTIAL_QUEUE_CAPACITY: usize = 64;
 const SEQUENTIAL_WORKER_STACK_BYTES: usize = 512 * 1024;
 static SEQUENTIAL_EXECUTOR: OnceLock<SyncSender<SequentialFuture>> = OnceLock::new();
 static SEQUENTIAL_SATURATED: AtomicBool = AtomicBool::new(false);
+
+static PENDING_STORAGE_WRITES: OnceLock<Mutex<HashMap<(String, String), String>>> = OnceLock::new();
+static LAST_STORAGE_FLUSH: OnceLock<Mutex<HashMap<(String, String), Instant>>> = OnceLock::new();
+const STORAGE_DEBOUNCE_INTERVAL: Duration = Duration::from_secs(60);
+
+fn pending_storage() -> &'static Mutex<HashMap<(String, String), String>> {
+    PENDING_STORAGE_WRITES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn last_storage_flush() -> &'static Mutex<HashMap<(String, String), Instant>> {
+    LAST_STORAGE_FLUSH.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn is_debounced_key(key: &str) -> bool {
+    key == "library" || key == "library_recent"
+}
 
 /// Registers the application runtime so core work can be scheduled safely from
 /// native callback threads such as the libmpv actor.
@@ -271,6 +290,14 @@ static DB: OnceLock<RwLock<Option<turso::Database>>> = OnceLock::new();
 static DB_CONNECTION: LazyLock<RwLock<Option<turso::Connection>>> =
     LazyLock::new(|| RwLock::new(None));
 static DB_CONNECTION_INIT: AsyncMutex<()> = AsyncMutex::const_new(());
+/// Serializes protocol-level access to the shared Turso connection.
+///
+/// `turso::Connection::clone()` is an `Arc` clone: two tasks that clone it
+/// share transaction state, so concurrent `BEGIN`/`COMMIT` can interleave and
+/// commit each other's work. Every caller now holds this guard while using the
+/// connection.
+static DB_CONNECTION_ACCESS: LazyLock<Arc<AsyncMutex<()>>> =
+    LazyLock::new(|| Arc::new(AsyncMutex::const_new(())));
 static CREDENTIAL_STORE: OnceLock<Arc<dyn credential_store::CredentialStore>> = OnceLock::new();
 static ACTIVE_PROFILE_ID: LazyLock<RwLock<String>> =
     LazyLock::new(|| RwLock::new("default".to_owned()));
@@ -316,7 +343,7 @@ pub async fn load_profile_scope(
         .map_err(|error| EnvError::Serde(error.to_string()))
 }
 
-fn active_profile_scope() -> String {
+pub fn active_profile_scope() -> String {
     ACTIVE_PROFILE_ID
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -477,14 +504,44 @@ pub fn install_database(database: turso::Database) -> Result<(), DatabaseAlready
         .map_err(|_| DatabaseAlreadyInstalled)
 }
 
-pub(crate) async fn get_db_conn() -> Result<turso::Connection, EnvError> {
+/// A borrowed handle to the shared Turso connection.
+///
+/// The inner guard serializes all protocol-level access so a clone of the
+/// underlying `Connection` cannot interleave transactions with another task.
+pub(crate) struct DbConn {
+    conn: turso::Connection,
+    _guard: OwnedMutexGuard<()>,
+}
+
+impl Deref for DbConn {
+    type Target = turso::Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.conn
+    }
+}
+
+impl DerefMut for DbConn {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.conn
+    }
+}
+
+pub(crate) async fn get_db_conn() -> Result<DbConn, EnvError> {
+    let guard = DB_CONNECTION_ACCESS.clone().lock_owned().await;
     if let Some(conn) = read_database_slot(&DB_CONNECTION) {
-        return Ok(conn);
+        return Ok(DbConn {
+            conn,
+            _guard: guard,
+        });
     }
 
     let _initializing = DB_CONNECTION_INIT.lock().await;
     if let Some(conn) = read_database_slot(&DB_CONNECTION) {
-        return Ok(conn);
+        return Ok(DbConn {
+            conn,
+            _guard: guard,
+        });
     }
 
     let db = DB.get().and_then(read_database_slot).ok_or_else(|| {
@@ -497,6 +554,7 @@ pub(crate) async fn get_db_conn() -> Result<turso::Connection, EnvError> {
         "PRAGMA synchronous = NORMAL;
          PRAGMA temp_store = MEMORY;
          PRAGMA cache_size = -2000;
+         PRAGMA mmap_size = 30000000;
          PRAGMA busy_timeout = 1000;",
     )
     .await
@@ -505,7 +563,10 @@ pub(crate) async fn get_db_conn() -> Result<turso::Connection, EnvError> {
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(conn.clone());
 
-    Ok(conn)
+    Ok(DbConn {
+        conn,
+        _guard: guard,
+    })
 }
 
 fn read_database_slot<T: Clone>(slot: &RwLock<Option<T>>) -> Option<T> {
@@ -514,8 +575,58 @@ fn read_database_slot<T: Clone>(slot: &RwLock<Option<T>>) -> Option<T> {
         .clone()
 }
 
+/// Flushes any debounced in-memory storage writes (e.g. library progress) directly to SQLite.
+pub async fn flush_storage() {
+    let pending_items: Vec<((String, String), String)> = {
+        let pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
+        pending
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    };
+
+    if pending_items.is_empty() {
+        return;
+    }
+
+    let Ok(conn) = get_db_conn().await else {
+        // Keep the queue intact: the connection may become available again and
+        // dropping entries here would silently lose user progress.
+        return;
+    };
+
+    for (cache_key, val) in pending_items {
+        let result = conn
+            .execute(
+                "INSERT INTO profile_core_storage (profile_id, key, value) VALUES (?, ?, ?)
+                 ON CONFLICT(profile_id, key) DO UPDATE SET value = excluded.value WHERE value != excluded.value",
+                (cache_key.0.clone(), cache_key.1.clone(), val.clone()),
+            )
+            .await;
+        match result {
+            Ok(_) => {
+                // Do not remove a newer value that arrived while the write was
+                // in flight.
+                let mut pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
+                if pending.get(&cache_key) == Some(&val) {
+                    pending.remove(&cache_key);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    profile_id = %cache_key.0,
+                    key = %cache_key.1,
+                    %error,
+                    "debounced storage flush failed; keeping the pending value"
+                );
+            }
+        }
+    }
+}
+
 /// Prevents new core-storage database work and releases its retained handles.
 pub async fn shutdown_database() {
+    flush_storage().await;
     let _initializing = DB_CONNECTION_INIT.lock().await;
     DB_CONNECTION
         .write()
@@ -557,27 +668,41 @@ impl Env for DesktopEnv {
         let profile_id = active_profile_scope();
         async move {
             let mut conn = get_db_conn().await?;
-            let mut rows = conn
-                .query(
-                    "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = ?",
-                    (profile_id.as_str(), key.as_str()),
-                )
-                .await
-                .map_err(|e| EnvError::StorageReadError(e.to_string()))?;
-
-            let value_str = if let Some(row) = rows
-                .next()
-                .await
-                .map_err(|e| EnvError::StorageReadError(e.to_string()))?
-            {
-                Some(
-                    row.get::<String>(0)
-                        .map_err(|e| EnvError::StorageReadError(e.to_string()))?,
-                )
+            let cached_value_str = if is_debounced_key(&key) {
+                let cache_key = (profile_id.clone(), key.clone());
+                let pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
+                pending.get(&cache_key).cloned()
             } else {
                 None
             };
-            drop(rows);
+
+            let value_str = if let Some(cached) = cached_value_str {
+                Some(cached)
+            } else {
+                let mut rows = conn
+                    .query(
+                        "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = ?",
+                        (profile_id.as_str(), key.as_str()),
+                    )
+                    .await
+                    .map_err(|e| EnvError::StorageReadError(e.to_string()))?;
+
+                let res = if let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| EnvError::StorageReadError(e.to_string()))?
+                {
+                    Some(
+                        row.get::<String>(0)
+                            .map_err(|e| EnvError::StorageReadError(e.to_string()))?,
+                    )
+                } else {
+                    None
+                };
+                drop(rows);
+                res
+            };
+
             let Some(value_str) = value_str else {
                 return Ok(None);
             };
@@ -618,14 +743,40 @@ impl Env for DesktopEnv {
                 }
                 let val = serde_json::to_string(&value)
                     .map_err(|error| EnvError::Serde(error.to_string()))?;
+
+                if is_debounced_key(&key) {
+                    let cache_key = (profile_id.clone(), key.clone());
+                    let should_flush = {
+                        let mut pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
+                        pending.insert(cache_key.clone(), val.clone());
+                        let mut last = last_storage_flush().lock().unwrap_or_else(|p| p.into_inner());
+                        match last.get(&cache_key) {
+                            Some(instant) if instant.elapsed() < STORAGE_DEBOUNCE_INTERVAL => false,
+                            _ => {
+                                last.insert(cache_key, Instant::now());
+                                true
+                            }
+                        }
+                    };
+
+                    if !should_flush {
+                        return Ok(());
+                    }
+                }
+
                 conn.execute(
                     "INSERT INTO profile_core_storage (profile_id, key, value) VALUES (?, ?, ?)
-                     ON CONFLICT(profile_id, key) DO UPDATE SET value = excluded.value",
+                     ON CONFLICT(profile_id, key) DO UPDATE SET value = excluded.value WHERE value != excluded.value",
                     (profile_id, key, val),
                 )
                 .await
                 .map_err(|e| EnvError::StorageWriteError(e.to_string()))?;
             } else {
+                if is_debounced_key(&key) {
+                    let cache_key = (profile_id.clone(), key.clone());
+                    let mut pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
+                    pending.remove(&cache_key);
+                }
                 conn.execute(
                     "DELETE FROM profile_core_storage WHERE profile_id = ? AND key = ?",
                     (profile_id, key),
