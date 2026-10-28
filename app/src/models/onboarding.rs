@@ -1,63 +1,10 @@
 use crate::MainWindow;
 use crate::config::AppConfig;
-use rodio::{Decoder, MixerDeviceSink, Player, Source};
 use slint::ComponentHandle;
-use std::io::Cursor;
-use std::sync::Mutex;
 
-static ONBOARDING_AUDIO_BYTES: &[u8] = include_bytes!("../../ui/assets/audio/onboarding.mp3");
+pub fn play_music() {}
 
-struct OnboardingAudioPlayer {
-    _stream: MixerDeviceSink,
-    player: Player,
-}
-
-static AUDIO_PLAYER: Mutex<Option<OnboardingAudioPlayer>> = Mutex::new(None);
-
-pub fn play_music() {
-    std::thread::spawn(move || {
-        let cursor = Cursor::new(ONBOARDING_AUDIO_BYTES);
-
-        let stream = match rodio::DeviceSinkBuilder::open_default_sink() {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = ?e, "Could not initialize rodio audio output stream");
-                return;
-            }
-        };
-
-        let player = Player::connect_new(stream.mixer());
-
-        let source = match Decoder::try_from(cursor) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = ?e, "Could not decode embedded onboarding mp3 audio");
-                return;
-            }
-        };
-
-        player.append(source.repeat_infinite());
-        player.set_volume(0.3);
-        player.play();
-
-        let mut lock = AUDIO_PLAYER.lock().unwrap();
-        *lock = Some(OnboardingAudioPlayer {
-            _stream: stream,
-            player,
-        });
-        tracing::info!(
-            "Onboarding background music playing via Rodio from embedded binary assets."
-        );
-    });
-}
-
-pub fn stop_music() {
-    let mut lock = AUDIO_PLAYER.lock().unwrap();
-    if let Some(audio_player) = lock.take() {
-        audio_player.player.stop();
-        tracing::info!("Onboarding background music stopped.");
-    }
-}
+pub fn stop_music() {}
 
 pub fn fetch_github_changelog(ui: &MainWindow) {
     let ui_weak = ui.as_weak();

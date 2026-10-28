@@ -7,7 +7,8 @@ import { ButtonSurface, MenuButton, PillButton, IconAction, IconActionPair } fro
 import { Checkbox } from "components/checkbox.slint";
 import { RadioButton } from "components/radio_button.slint";
 import { NumberInput } from "components/number_input.slint";
-import { StremioTextInput, NativeTextField, SearchBar, SearchField } from "components/text_input.slint";
+import { StremioTextInput, NativeTextField, SearchBar, SearchField, FocusTracker } from "components/text_input.slint";
+export { FocusTracker }
 import { Slider } from "components/slider.slint";
 import { PopupMenuSurface, ModalDialog, BottomSheet, ContextMenuSurface } from "components/overlays.slint";
 import { OnboardingModal } from "components/onboarding.slint";
@@ -364,10 +365,10 @@ export component MainWindow inherits Window {
         : root.show-player;
     private property <bool> show-auth-page: root.debug-preview-enabled
         ? root.debug-preview-page == -1
-        : root.username == "";
+        : (root.auth-initialized && root.username == "");
     private property <bool> show-main-shell: root.debug-preview-enabled
         ? (root.debug-preview-page >= 0 && root.debug-preview-page <= 6) || root.debug-preview-page == 9 || root.debug-preview-page == 10
-        : root.username != "";
+        : (!root.auth-initialized || root.username != "");
 
     // Bindings / API exposed to Rust code
     in-out property <int> active-tab: 0; // 0: Board, 1: Discover, 2: Library, 3: Addons, 4: Settings, 5: Calendar, 6: Search, 7: Downloads
@@ -375,6 +376,7 @@ export component MainWindow inherits Window {
     callback apply-theme-preset(color, color, color, color, color, color);
     callback update-theme-color(string, color);
     callback reset-theme-defaults();
+    in-out property <bool> auth-initialized: false;
     in-out property <string> username: "";
     in-out property <string> avatar-letter: "U";
     in-out property <image> avatar-image;
@@ -1228,22 +1230,22 @@ export component MainWindow inherits Window {
     }
 
     app-shortcuts := FocusScope {
-        KeyBinding { keys: @keys("1"); enabled: !root.effective-show-player; activated => { root.tab-changed(0); } }
-        KeyBinding { keys: @keys("2"); enabled: !root.effective-show-player; activated => { root.tab-changed(1); } }
+        KeyBinding { keys: @keys("1"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(0); } }
+        KeyBinding { keys: @keys("2"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(1); } }
         KeyBinding {
             keys: @keys("3");
-            enabled: !root.effective-show-player;
+            enabled: !root.effective-show-player && !FocusTracker.text-input-focused;
             activated => {
                 root.library-continue-watching-mode = false;
                 root.tab-changed(2);
             }
         }
-        KeyBinding { keys: @keys("4"); enabled: !root.effective-show-player; activated => { root.tab-changed(5); } }
-        KeyBinding { keys: @keys("5"); enabled: !root.effective-show-player; activated => { root.tab-changed(3); } }
-        KeyBinding { keys: @keys("6"); enabled: !root.effective-show-player; activated => { root.tab-changed(4); } }
-        KeyBinding { keys: @keys("7"); enabled: !root.effective-show-player; activated => { root.tab-changed(7); } }
-        KeyBinding { keys: @keys("0"); enabled: !root.effective-show-player; activated => { root.tab-changed(6); } }
-        KeyBinding { keys: @keys(Backspace); enabled: !root.effective-show-player; activated => { root.navigation-back(); } }
+        KeyBinding { keys: @keys("4"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(5); } }
+        KeyBinding { keys: @keys("5"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(3); } }
+        KeyBinding { keys: @keys("6"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(4); } }
+        KeyBinding { keys: @keys("7"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(7); } }
+        KeyBinding { keys: @keys("0"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(6); } }
+        KeyBinding { keys: @keys(Backspace); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.navigation-back(); } }
         KeyBinding { keys: @keys(Control + Backspace); enabled: !root.effective-show-player; activated => { root.navigation-forward(); } }
         KeyBinding {
             keys: @keys(Control + "/");
@@ -1553,6 +1555,7 @@ export component MainWindow inherits Window {
                                             root.profile-menu-open = false;
                                             if (username == "" || username == "Guest") {
                                                 username = "";
+                                                root.auth-initialized = true;
                                             } else {
                                                 root.logout();
                                             }
@@ -1757,7 +1760,7 @@ export component MainWindow inherits Window {
                         play-clicked(id) => {
                             board-play-clicked(id);
                         }
-                        remove-continue-watching(id) => { remove-continue-watching(id); }
+                        remove-continue-watching(id) => { root.remove-continue-watching(id); }
                         see-all-continue-watching() => {
                             root.library-continue-watching-mode = true;
                             board-see-all-continue-watching();
@@ -1918,7 +1921,10 @@ export component MainWindow inherits Window {
                             library-item-selected(id, media-type, video-id);
                         }
                         load-next-page => { library-load-next-page(); }
-                        request-login => { root.username = ""; }
+                        request-login => {
+                            root.username = "";
+                            root.auth-initialized = true;
+                        }
                         remove-item(id) => { library-remove-item(id); }
                         watched-changed(id, watched) => { library-watched-changed(id, watched); }
                         play-item(id) => { library-play-item(id); }

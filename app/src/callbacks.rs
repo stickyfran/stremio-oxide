@@ -39,6 +39,7 @@ pub fn setup_ui_callbacks(
     config: &AppConfig,
     navigation: NavigationController,
     _download_manager: Arc<crate::downloads::DownloadManager>,
+    server_readiness: crate::server_readiness::ServerReadiness,
 ) {
     let ui_weak = ui.as_weak();
     // Hook up submodel setup functions
@@ -85,12 +86,14 @@ pub fn setup_ui_callbacks(
     });
 
     // Play stream action
+    let server_readiness_play = server_readiness.clone();
     ui.on_play_stream({
         let ui_weak = ui_weak.clone();
         let runtime = runtime.clone();
         let playback_selections = playback_selections.clone();
         let native_playback_bridge = native_playback_bridge.clone();
         let navigation = navigation.clone();
+        let server_readiness = server_readiness_play.clone();
         move |selection_id| {
             let switching_in_player = navigation.is_player_visible();
             tracing::info!(
@@ -184,6 +187,7 @@ pub fn setup_ui_callbacks(
 
             let ui_weak = ui_weak.clone();
             let runtime = runtime.clone();
+            let server_readiness = server_readiness.clone();
             tokio::spawn(async move {
                 // Debrid unrestriction only happens after this explicit click.
                 // Any provider failure leaves the original source untouched.
@@ -221,6 +225,18 @@ pub fn setup_ui_callbacks(
                             &selected.stream.source,
                             stremio_core::types::resource::StreamSource::Torrent { .. }
                         );
+                        if is_torrent && !server_readiness.is_ready() {
+                            let _ = slint::invoke_from_event_loop({
+                                let ui_weak = ui_weak.clone();
+                                move || {
+                                    if let Some(ui) = ui_weak.upgrade() {
+                                        ui.set_player_loading_stage_title("Iniciando motor de streaming…".into());
+                                        ui.set_player_loading_stage_detail("Esperando conexión local de libtorrent…".into());
+                                    }
+                                }
+                            });
+                            server_readiness.wait_ready(std::time::Duration::from_secs(5)).await;
+                        }
                         let (stage_title, stage_detail) = if is_torrent {
                             (
                                 "Conectando con enjambre…",
@@ -252,17 +268,37 @@ pub fn setup_ui_callbacks(
     ui.on_player_continue_as_torrent({
         let ui_weak = ui.as_weak();
         let runtime = runtime.clone();
+        let server_readiness = server_readiness.clone();
         move || {
             let maybe_selected = PENDING_TORRENT_FALLBACK.lock().unwrap().take();
             if let Some(selected) = maybe_selected {
-                if let Some(ui) = ui_weak.upgrade() {
-                    ui.set_player_debrid_uncached(false);
-                    ui.set_player_loading_stage_title("Conectando con enjambre…".into());
-                    ui.set_player_loading_stage_detail("Buscando pares e intercambiando metadatos…".into());
-                }
-                runtime.dispatch(RuntimeAction {
-                    field: None,
-                    action: Action::Load(ActionLoad::Player(Box::new(selected))),
+                let ui_weak = ui_weak.clone();
+                let runtime = runtime.clone();
+                let server_readiness = server_readiness.clone();
+                tokio::spawn(async move {
+                    if !server_readiness.is_ready() {
+                        let _ = slint::invoke_from_event_loop({
+                            let ui_weak = ui_weak.clone();
+                            move || {
+                                if let Some(ui) = ui_weak.upgrade() {
+                                    ui.set_player_loading_stage_title("Iniciando motor de streaming…".into());
+                                    ui.set_player_loading_stage_detail("Esperando conexión local de libtorrent…".into());
+                                }
+                            }
+                        });
+                        server_readiness.wait_ready(std::time::Duration::from_secs(5)).await;
+                    }
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_player_debrid_uncached(false);
+                            ui.set_player_loading_stage_title("Conectando con enjambre…".into());
+                            ui.set_player_loading_stage_detail("Buscando pares e intercambiando metadatos…".into());
+                        }
+                        runtime.dispatch(RuntimeAction {
+                            field: None,
+                            action: Action::Load(ActionLoad::Player(Box::new(selected))),
+                        });
+                    });
                 });
             }
         }

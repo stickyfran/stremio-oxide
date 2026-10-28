@@ -1,6 +1,10 @@
 import { Theme } from "../theme.slint";
 import { ButtonSurface } from "button.slint";
 
+export global FocusTracker {
+    in-out property <bool> text-input-focused: false;
+}
+
 // Slint equivalent of the official unstyled TextInput wrapper. Visual styles
 // belong to the reusable consumer, just as they do in stremio-web.
 export component StremioTextInput inherits Rectangle {
@@ -20,6 +24,14 @@ export component StremioTextInput inherits Rectangle {
     out property <bool> has-focus: editor.has-focus;
     callback accepted;
     callback edited;
+
+    changed has-focus => {
+        if (self.has-focus) {
+            FocusTracker.text-input-focused = true;
+        } else {
+            FocusTracker.text-input-focused = false;
+        }
+    }
 
     public function focus-input() { editor.focus(); }
 

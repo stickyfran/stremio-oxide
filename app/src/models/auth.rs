@@ -319,6 +319,7 @@ pub fn setup(ui: &MainWindow, runtime: &Arc<Runtime<DesktopEnv, AppModel>>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
                         ui.set_username("".into());
+                        ui.set_auth_initialized(true);
                     }
                 });
             });
@@ -334,6 +335,7 @@ pub fn setup(ui: &MainWindow, runtime: &Arc<Runtime<DesktopEnv, AppModel>>) {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_username("Guest".into());
                     ui.set_avatar_letter("G".into());
+                    ui.set_auth_initialized(true);
                 }
             });
         }

@@ -2,6 +2,22 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.1 - 2026-10-28
+
+### Performance and Memory Optimization
+
+- Reduced SSD write amplification by debouncing profile and library progress persistence to SQLite.
+- Reduced default disk image cache size to 384 MB.
+- Added dual-stage memory trimming: non-intrusive periodic allocator collection and deep OS working-set reduction on window occlusion and player teardown.
+- Removed embedded onboarding audio asset to reduce executable and runtime memory footprints.
+
+### User Interface and Usability
+
+- Prevented global hotkeys from intercepting keystrokes inside text and numeric input fields.
+- Fixed continue watching card dismissal to properly discard items from the board and library.
+- Updated high-resolution application branding assets across Windows, macOS, and Linux.
+- Added streaming server readiness tracking to prevent playback initialization races.
+
 ## 0.99 - 2026-10-26
 
 ### CPU and RAM Performance Enhancements

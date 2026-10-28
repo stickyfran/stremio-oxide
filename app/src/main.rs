@@ -73,6 +73,8 @@ pub mod secure_settings;
 mod shaders;
 mod shortcuts;
 mod single_instance;
+pub mod server_readiness;
+pub mod startup_metrics;
 mod taskbar_media;
 mod theme_studio;
 mod thumbnail_preview;
@@ -182,8 +184,11 @@ async fn run_app(
     if let Err(error) = lock_handler::init_db_with_lock_handling(paths::get().database()).await {
         tracing::warn!(%error, "failed early database initialization; continuing with defaults");
     }
+    startup_metrics::global().mark_db_init();
     config::init_config().await;
     let initial_config = config::load_config();
+    let early_auth = load_early_auth_state().await;
+    startup_metrics::global().mark_early_auth();
 
     // Icon fonts are registered/embedded at compile time via app.slint imports.
     tracing::info!("Icon fonts registered at compile time.");
@@ -195,6 +200,24 @@ async fn run_app(
     // 5. Initialize Slint MainWindow UI
     let ui = MainWindow::new()?;
     window_style::register_embedded_fonts(ui.window());
+    if let Some(ref email) = early_auth.username {
+        ui.set_username(email.as_str().into());
+        let avatar_letter = email
+            .chars()
+            .next()
+            .unwrap_or('U')
+            .to_string()
+            .to_uppercase();
+        ui.set_avatar_letter(avatar_letter.into());
+        if let Some(ref url_str) = early_auth.avatar_url {
+            if let Ok(url) = url::Url::parse(url_str) {
+                let img = image_cache::get_poster_image(&Some(url), &ui.as_weak());
+                ui.set_avatar_image(img);
+                ui.set_has_avatar_image(true);
+            }
+        }
+    }
+    ui.set_auth_initialized(true);
     tracing::info!("MainWindow created");
 
     // Restore persisted window geometry before initial paint.
@@ -250,6 +273,7 @@ async fn run_app(
     if !start_hidden {
         ui.show()?;
     }
+    startup_metrics::global().mark_window_shown();
 
     let (installer_request, installer_launcher) = updater::installer_handoff();
     let startup_ui = ui.clone_strong();
@@ -345,7 +369,8 @@ async fn run_app(
 }
 
 struct AppSession {
-    server_handle: stremio_runtime::ServerHandle,
+    server_handle: Arc<tokio::sync::Mutex<Option<stremio_runtime::ServerHandle>>>,
+    server_task: tokio::task::JoinHandle<()>,
     native_playback: Option<mpv_integration::NativePlayback>,
     command_task: tokio::task::JoinHandle<()>,
     tray: Option<tray::Tray>,
@@ -366,16 +391,27 @@ impl AppSession {
             Some(playback) => playback.shutdown(),
             None => Ok(()),
         };
-        if let Err(error) = self.server_handle.shutdown() {
-            tracing::warn!(%error, "stremio-runtime was already stopped");
+        let handle_opt = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let mut guard = self.server_handle.lock().await;
+                guard.take()
+            })
+        });
+        if let Some(handle) = handle_opt {
+            if let Err(error) = handle.shutdown() {
+                tracing::warn!(%error, "stremio-runtime was already stopped");
+            }
+            let server_result = tokio::task::block_in_place(|| handle.join());
+            match server_result {
+                Ok(Some(source)) => tracing::info!(?source, "stremio-runtime stopped"),
+                Ok(None) => tracing::info!("stremio-runtime stopped"),
+                Err(error) => tracing::warn!(%error, "error joining stremio-runtime"),
+            }
+        } else {
+            self.server_task.abort();
         }
-        let server_result = tokio::task::block_in_place(|| self.server_handle.join());
 
         playback_result?;
-        match server_result? {
-            Some(source) => tracing::info!(?source, "stremio-runtime stopped"),
-            None => tracing::info!("stremio-runtime stopped"),
-        }
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let _ = config::save_config_async(&config::load_config()).await;
@@ -541,6 +577,14 @@ async fn finish_startup(
         navigation.dispatch_and_project(&ui, NavigationIntent::SelectTab(active_tab));
     }
 
+    let initial_server_url = format!("http://127.0.0.1:{}", config.torrent_port);
+    let (server_notifier, server_readiness) =
+        server_readiness::ServerReadiness::new_channel(initial_server_url.clone());
+    ui.set_server_url(initial_server_url.as_str().into());
+    ui.set_server_status("Starting...".into());
+
+    let server_shared_handle = Arc::new(tokio::sync::Mutex::new(None));
+    let server_shared_handle_task = server_shared_handle.clone();
     let server_cfg = stremio_runtime::ServerConfig {
         http_addr: std::net::SocketAddr::from(([127, 0, 0, 1], config.torrent_port)),
         config_dir: Some(paths::get().streaming_server().to_path_buf()),
@@ -549,31 +593,69 @@ async fn finish_startup(
         init_logging: false,
         ..Default::default()
     };
-    tracing::info!("launching stremio-runtime engine");
-    let server_task = tokio::spawn(stremio_runtime::start(server_cfg));
-    let storage_task = tokio::spawn(load_startup_storage());
-    let playback_files_task = tokio::spawn(mpv_integration::prepare_playback_files());
-    tokio::spawn(async {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            crate::event_loop::trim_process_memory();
+    tracing::info!("launching stremio-runtime engine in background");
+    let server_ui_weak = ui.as_weak();
+    let configured_torrent_port = config.torrent_port;
+    let server_task = tokio::spawn(async move {
+        match stremio_runtime::start(server_cfg).await {
+            Ok(handle) => {
+                let bound_addr = handle.http_addr();
+                let effective_url = format!("http://{bound_addr}");
+                if bound_addr.port() != configured_torrent_port {
+                    tracing::warn!(
+                        configured = configured_torrent_port,
+                        bound = bound_addr.port(),
+                        "streaming server bound to fallback port"
+                    );
+                }
+                server_notifier.mark_ready(effective_url.clone());
+                crate::startup_metrics::global().mark_server_ready();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = server_ui_weak.upgrade() {
+                        ui.set_server_url(effective_url.into());
+                        ui.set_server_status("Online".into());
+                    }
+                });
+                *server_shared_handle_task.lock().await = Some(handle);
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to start stremio-runtime");
+                server_notifier.mark_failed();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = server_ui_weak.upgrade() {
+                        ui.set_server_status("Offline".into());
+                    }
+                });
+            }
         }
     });
 
-    // Await these independent tasks from Slint's local executor so the event
-    // loop keeps painting and processing input while the loading UI is visible.
-    let server_handle = server_task
-        .await
-        .map_err(|error| anyhow::anyhow!("stremio-runtime startup task failed: {error}"))?
-        .map_err(|error| anyhow::anyhow!("failed to start stremio-runtime: {error}"))?;
+    let storage_task = tokio::spawn(load_startup_storage());
+    let playback_files_task = tokio::spawn(mpv_integration::prepare_playback_files());
+
+    // Fase 5: Post-render idle warmup. Shaders y binarios de mpv se precargan en idle
+    // unos milisegundos después de que el frame principal ya fue pintado por FemtoVG.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        if let Err(error) = mpv_integration::prepare_playback_files().await {
+            tracing::warn!(%error, "post-render idle preparation of playback files failed");
+        }
+    });
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            crate::event_loop::trim_process_memory(false);
+        }
+    });
+
     let mut startup_storage = storage_task
         .await
         .map_err(|error| anyhow::anyhow!("storage startup task failed: {error}"))?;
-    let server_url = format!("http://{}", server_handle.http_addr());
+    crate::startup_metrics::global().mark_storage_loaded();
+    let server_url = initial_server_url;
     startup_storage.profile.settings.streaming_server_url = url::Url::parse(&server_url)?;
-    ui.set_server_url(server_url.into());
-    ui.set_server_status("Online".into());
 
     let StartupStorage {
         profile,
@@ -666,7 +748,7 @@ async fn finish_startup(
                 navigation_tab.dispatch_and_project(&ui, NavigationIntent::SelectTab(selected_tab));
                 ui.set_loading(false);
                 sync_tab_from_model(selected_tab, &rt, &ui, &ui_weak_tab, &navigation_tab);
-                crate::event_loop::trim_process_memory();
+                crate::event_loop::trim_process_memory(false);
                 match selected_tab {
                     Tab::Movies => ui.invoke_discover_type_changed("movie".into()),
                     Tab::Shows => ui.invoke_discover_type_changed("series".into()),
@@ -791,6 +873,7 @@ async fn finish_startup(
         &config,
         navigation.clone(),
         download_manager.clone(),
+        server_readiness.clone(),
     );
     downloads::setup_ui_callbacks(
         &ui,
@@ -862,7 +945,8 @@ async fn finish_startup(
     }
     tracing::info!("background application startup completed");
     Ok(AppSession {
-        server_handle,
+        server_handle: server_shared_handle,
+        server_task,
         native_playback,
         command_task,
         tray,
@@ -1918,6 +2002,81 @@ fn set_profile_manager_error(ui_weak: slint::Weak<MainWindow>, message: String) 
     });
 }
 
+struct EarlyAuthState {
+    username: Option<String>,
+    avatar_url: Option<String>,
+}
+
+async fn load_early_auth_state() -> EarlyAuthState {
+    let Ok(profile_id) = profiles::active_profile_id().await else {
+        return EarlyAuthState {
+            username: None,
+            avatar_url: None,
+        };
+    };
+    let Ok(conn) = crate::db::get_conn().await else {
+        return EarlyAuthState {
+            username: None,
+            avatar_url: None,
+        };
+    };
+    let mut rows = match conn
+        .query(
+            "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = 'profile'",
+            [profile_id.as_str()],
+        )
+        .await
+    {
+        Ok(rows) => rows,
+        Err(_) => {
+            return EarlyAuthState {
+                username: None,
+                avatar_url: None,
+            };
+        }
+    };
+    let row = match rows.next().await {
+        Ok(Some(row)) => row,
+        _ => {
+            return EarlyAuthState {
+                username: None,
+                avatar_url: None,
+            };
+        }
+    };
+    let raw: String = match row.get(0) {
+        Ok(r) => r,
+        Err(_) => {
+            return EarlyAuthState {
+                username: None,
+                avatar_url: None,
+            };
+        }
+    };
+    let (username, avatar_url) = extract_auth_from_profile_json(&raw);
+    EarlyAuthState {
+        username,
+        avatar_url,
+    }
+}
+
+fn extract_auth_from_profile_json(raw: &str) -> (Option<String>, Option<String>) {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return (None, None);
+    };
+    let username = val
+        .pointer("/auth/user/email")
+        .and_then(|v| v.as_str())
+        .filter(|e| !e.is_empty())
+        .map(ToString::to_string);
+    let avatar_url = val
+        .pointer("/auth/user/avatar")
+        .and_then(|v| v.as_str())
+        .filter(|a| !a.is_empty())
+        .map(ToString::to_string);
+    (username, avatar_url)
+}
+
 async fn select_startup_profile(
     ui: &MainWindow,
     profiles: Vec<profiles::LocalProfile>,
@@ -2019,67 +2178,94 @@ struct StartupStorage {
 
 #[tracing::instrument]
 async fn load_startup_storage() -> StartupStorage {
-    let (
-        profile_result,
-        library_recent_result,
-        library_result,
-        streams_result,
-        server_urls_result,
-        legacy_server_urls_result,
-        notifications_result,
-        search_history_result,
-        dismissed_events_result,
-    ) = tokio::join!(
-        DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY),
-        DesktopEnv::get_storage::<stremio_core::types::library::LibraryBucket>(
-            LIBRARY_RECENT_STORAGE_KEY
-        ),
-        DesktopEnv::get_storage::<stremio_core::types::library::LibraryBucket>(LIBRARY_STORAGE_KEY),
-        DesktopEnv::get_storage::<stremio_core::types::streams::StreamsBucket>(STREAMS_STORAGE_KEY),
-        DesktopEnv::get_storage::<stremio_core::types::server_urls::ServerUrlsBucket>(
-            STREAMING_SERVER_URLS_STORAGE_KEY
-        ),
-        DesktopEnv::get_storage::<stremio_core::types::server_urls::ServerUrlsBucket>(
-            "server_urls"
-        ),
-        DesktopEnv::get_storage::<stremio_core::types::notifications::NotificationsBucket>(
-            NOTIFICATIONS_STORAGE_KEY
-        ),
-        DesktopEnv::get_storage::<stremio_core::types::search_history::SearchHistoryBucket>(
-            SEARCH_HISTORY_STORAGE_KEY
-        ),
-        DesktopEnv::get_storage::<stremio_core::types::events::DismissedEventsBucket>(
-            DISMISSED_EVENTS_STORAGE_KEY
-        ),
-    );
+    let profile_future =
+        DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY);
+    let auxiliary_buckets_future = async {
+        let profile_id = core_env::active_profile_scope();
+        let mut map = std::collections::HashMap::new();
+        if let Ok(conn) = crate::db::get_conn().await {
+            if let Ok(mut rows) = conn
+                .query(
+                    "SELECT key, value FROM profile_core_storage WHERE profile_id = ? AND key IN ('library_recent', 'library', 'streams', 'streaming_server_urls', 'server_urls', 'notifications', 'search_history', 'dismissed_events')",
+                    [profile_id.as_str()],
+                )
+                .await
+            {
+                while let Ok(Some(row)) = rows.next().await {
+                    if let (Ok(key), Ok(val)) = (row.get::<String>(0), row.get::<String>(1)) {
+                        map.insert(key, val);
+                    }
+                }
+            }
+        }
+        map
+    };
 
+    let (profile_result, mut aux_map) = tokio::join!(profile_future, auxiliary_buckets_future);
     let profile = storage_value(PROFILE_STORAGE_KEY, profile_result).unwrap_or_default();
+
+    let raw_recent = aux_map.remove(LIBRARY_RECENT_STORAGE_KEY);
+    let raw_library = aux_map.remove(LIBRARY_STORAGE_KEY);
+
+    // Off-thread deserialization for potentially large library bucket
+    let (recent_bucket, other_bucket) = tokio::task::spawn_blocking(move || {
+        let recent: Option<stremio_core::types::library::LibraryBucket> = raw_recent
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok());
+        let library: Option<stremio_core::types::library::LibraryBucket> = raw_library
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok());
+        (recent, library)
+    })
+    .await
+    .unwrap_or((None, None));
+
     let mut library = stremio_core::types::library::LibraryBucket::new(profile.uid(), vec![]);
-    if let Some(recent_bucket) = storage_value(LIBRARY_RECENT_STORAGE_KEY, library_recent_result) {
+    if let Some(recent_bucket) = recent_bucket {
         library.merge_bucket(recent_bucket);
     }
-    if let Some(other_bucket) = storage_value(LIBRARY_STORAGE_KEY, library_result) {
+    if let Some(other_bucket) = other_bucket {
         library.merge_bucket(other_bucket);
     }
-    let streams_bucket = storage_value(STREAMS_STORAGE_KEY, streams_result)
+
+    let streams_bucket = aux_map
+        .remove(STREAMS_STORAGE_KEY)
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_else(|| stremio_core::types::streams::StreamsBucket::new(profile.uid()));
-    let server_urls = storage_value(STREAMING_SERVER_URLS_STORAGE_KEY, server_urls_result)
-        .or_else(|| storage_value("server_urls", legacy_server_urls_result))
+
+    let server_urls = aux_map
+        .remove(STREAMING_SERVER_URLS_STORAGE_KEY)
+        .or_else(|| aux_map.remove("server_urls"))
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_else(|| {
             stremio_core::types::server_urls::ServerUrlsBucket::new::<DesktopEnv>(profile.uid())
         });
-    let notifications = storage_value(NOTIFICATIONS_STORAGE_KEY, notifications_result)
+
+    let notifications = aux_map
+        .remove(NOTIFICATIONS_STORAGE_KEY)
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_else(|| {
             stremio_core::types::notifications::NotificationsBucket::new::<DesktopEnv>(
                 profile.uid(),
                 vec![],
             )
         });
-    let search_history = storage_value(SEARCH_HISTORY_STORAGE_KEY, search_history_result)
+
+    let search_history = aux_map
+        .remove(SEARCH_HISTORY_STORAGE_KEY)
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_else(|| {
             stremio_core::types::search_history::SearchHistoryBucket::new(profile.uid())
         });
-    let dismissed_events = storage_value(DISMISSED_EVENTS_STORAGE_KEY, dismissed_events_result)
+
+    let dismissed_events = aux_map
+        .remove(DISMISSED_EVENTS_STORAGE_KEY)
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_else(|| stremio_core::types::events::DismissedEventsBucket::new(profile.uid()));
 
     tracing::info!(
@@ -2209,5 +2395,61 @@ fn sync_tab_from_model(
             }
         }
         Tab::Downloads => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_authenticated_user_email_and_avatar() {
+        let json = r#"{
+            "auth": {
+                "key": "some_token",
+                "user": {
+                    "_id": "user123",
+                    "email": "tester@example.com",
+                    "avatar": "https://example.com/avatar.png"
+                }
+            }
+        }"#;
+        let (email, avatar) = extract_auth_from_profile_json(json);
+        assert_eq!(email.as_deref(), Some("tester@example.com"));
+        assert_eq!(avatar.as_deref(), Some("https://example.com/avatar.png"));
+    }
+
+    #[test]
+    fn extracts_none_when_no_auth_present() {
+        let json = r#"{
+            "auth": null,
+            "settings": {}
+        }"#;
+        let (email, avatar) = extract_auth_from_profile_json(json);
+        assert_eq!(email, None);
+        assert_eq!(avatar, None);
+    }
+
+    #[test]
+    fn extracts_none_when_email_empty() {
+        let json = r#"{
+            "auth": {
+                "key": "",
+                "user": {
+                    "_id": "",
+                    "email": ""
+                }
+            }
+        }"#;
+        let (email, avatar) = extract_auth_from_profile_json(json);
+        assert_eq!(email, None);
+        assert_eq!(avatar, None);
+    }
+
+    #[test]
+    fn handles_malformed_json_gracefully() {
+        let (email, avatar) = extract_auth_from_profile_json("not valid json");
+        assert_eq!(email, None);
+        assert_eq!(avatar, None);
     }
 }

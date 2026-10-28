@@ -723,6 +723,9 @@ pub fn install_platform_shortcuts(ui: &MainWindow, media_session: Arc<MediaSessi
                 if dispatcher.ime_editing && !ui.get_show_player() {
                     return EventResult::Propagate;
                 }
+                if !ui.get_show_player() && ui.global::<crate::FocusTracker>().get_text_input_focused() {
+                    return EventResult::Propagate;
+                }
                 let Some(chord) = dispatcher.chord(&event.logical_key) else {
                     return EventResult::Propagate;
                 };
@@ -755,12 +758,14 @@ pub fn install_platform_shortcuts(ui: &MainWindow, media_session: Arc<MediaSessi
                 }
                 EventResult::PreventDefault
             }
-            winit::event::WindowEvent::Occluded(true)
+            winit::event::WindowEvent::Occluded(true) => {
+                crate::event_loop::trim_process_memory(true);
                 if ui.get_show_player()
                     && ui.get_settings_pause_on_minimize()
-                    && !ui.get_player_paused() =>
-            {
-                ui.invoke_player_toggle_pause();
+                    && !ui.get_player_paused()
+                {
+                    ui.invoke_player_toggle_pause();
+                }
                 EventResult::Propagate
             }
             _ => EventResult::Propagate,

@@ -59,10 +59,23 @@ pub fn setup(
             let rt = runtime.clone();
             let id = id.to_string();
             tokio::spawn(async move {
-                rt.dispatch(RuntimeAction {
-                    field: None,
-                    action: Action::Ctx(ActionCtx::RewindLibraryItem(id.clone())),
-                });
+                let is_temp = rt
+                    .model()
+                    .ok()
+                    .and_then(|model| model.ctx.library.items.get(&id).map(|it| it.temp))
+                    .unwrap_or(false);
+
+                if is_temp {
+                    rt.dispatch(RuntimeAction {
+                        field: None,
+                        action: Action::Ctx(ActionCtx::RemoveFromLibrary(id.clone())),
+                    });
+                } else {
+                    rt.dispatch(RuntimeAction {
+                        field: None,
+                        action: Action::Ctx(ActionCtx::RewindLibraryItem(id.clone())),
+                    });
+                }
                 rt.dispatch(RuntimeAction {
                     field: None,
                     action: Action::Ctx(ActionCtx::DismissNotificationItem(id)),
@@ -325,9 +338,44 @@ pub fn sync(
         items
     };
     let has_continue_watching = !continue_watching_items.is_empty();
-    let continue_watching_model =
-        slint::ModelRc::new(slint::VecModel::from(continue_watching_items));
-    ui.set_board_continue_watching(continue_watching_model.clone());
+    let existing_cw = ui.get_board_continue_watching();
+    let continue_watching_model = if let Some(vec_model) =
+        existing_cw.as_any().downcast_ref::<slint::VecModel<MediaCardItem>>()
+    {
+        let existing_len = vec_model.row_count();
+        let new_len = continue_watching_items.len();
+        let common_len = existing_len.min(new_len);
+        let mut iter = continue_watching_items.into_iter();
+        for index in 0..common_len {
+            let item = iter.next().expect("bounded by common_len");
+            if let Some(existing_item) = vec_model.row_data(index) {
+                if existing_item.id != item.id
+                    || existing_item.title != item.title
+                    || existing_item.poster_url != item.poster_url
+                    || existing_item.show_progress != item.show_progress
+                    || existing_item.new_videos != item.new_videos
+                {
+                    vec_model.set_row_data(index, item);
+                }
+            } else {
+                vec_model.set_row_data(index, item);
+            }
+        }
+        if new_len > existing_len {
+            for item in iter {
+                vec_model.push(item);
+            }
+        } else if new_len < existing_len {
+            for index in (new_len..existing_len).rev() {
+                vec_model.remove(index);
+            }
+        }
+        existing_cw
+    } else {
+        let model = slint::ModelRc::new(slint::VecModel::from(continue_watching_items));
+        ui.set_board_continue_watching(model.clone());
+        model
+    };
 
     // 2. Sync Board Sections
     let board_sections = {

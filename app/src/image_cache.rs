@@ -38,7 +38,7 @@ static MAINTENANCE_STARTED: AtomicBool = AtomicBool::new(false);
 
 const MEMORY_CAPACITY_BYTES: u64 = 48 * 1024 * 1024;
 const MEMORY_IDLE_TTL: Duration = Duration::from_secs(5 * 60);
-const DISK_CAPACITY_BYTES: u64 = 1536 * 1024 * 1024;
+const DISK_CAPACITY_BYTES: u64 = 384 * 1024 * 1024;
 const DISK_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_POSTER_WIDTH: u32 = 360;

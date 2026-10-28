@@ -4011,7 +4011,7 @@ fn dispatch_state_to_core(
             && time >= current.last_time
             && current
                 .last_time_dispatch
-                .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1))
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(4))
         {
             current.last_time = time;
             current.last_time_dispatch = Some(now);
@@ -4960,10 +4960,17 @@ fn update_stream_state(
 }
 
 fn dispatch_player(core: &Arc<Runtime<DesktopEnv, AppModel>>, action: ActionPlayer) {
+    let should_flush = matches!(
+        action,
+        ActionPlayer::PausedChanged { paused: true } | ActionPlayer::Seek { .. }
+    );
     core.dispatch(RuntimeAction {
         field: None,
         action: Action::Player(action),
     });
+    if should_flush {
+        tokio::spawn(core_env::flush_storage());
+    }
 }
 
 fn resolve_config_dir() -> PathBuf {
@@ -5211,6 +5218,8 @@ fn unload_player(
         field: Some(AppModelField::Player),
         action: Action::Unload,
     });
+    tokio::spawn(core_env::flush_storage());
+    crate::event_loop::trim_process_memory(true);
 }
 
 fn lock_autohide_task(

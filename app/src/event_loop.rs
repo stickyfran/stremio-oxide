@@ -17,21 +17,35 @@ use stremio_core::{
     },
 };
 
-fn update_vec_model<T: Clone + 'static>(
+pub(crate) fn update_vec_model_with<T: Clone + 'static>(
     model: &slint::ModelRc<T>,
     values: Vec<T>,
+    mut is_equal: impl FnMut(&T, &T) -> bool,
 ) -> Result<(), Vec<T>> {
     let Some(model) = model.as_any().downcast_ref::<slint::VecModel<T>>() else {
         return Err(values);
     };
     if model.row_count() == values.len() {
         for (index, value) in values.into_iter().enumerate() {
-            model.set_row_data(index, value);
+            if let Some(existing) = model.row_data(index) {
+                if !is_equal(&existing, &value) {
+                    model.set_row_data(index, value);
+                }
+            } else {
+                model.set_row_data(index, value);
+            }
         }
     } else {
         model.set_vec(values);
     }
     Ok(())
+}
+
+pub(crate) fn update_vec_model_eq<T: Clone + PartialEq + 'static>(
+    model: &slint::ModelRc<T>,
+    values: Vec<T>,
+) -> Result<(), Vec<T>> {
+    update_vec_model_with(model, values, |a, b| a == b)
 }
 
 pub(crate) fn project_stream_selection_views(
@@ -78,11 +92,18 @@ pub(crate) fn project_stream_selection_views(
         }
     }
     let current_streams = ui.get_stream_links();
-    if let Err(stream_links) = update_vec_model(&current_streams, stream_links) {
+    if let Err(stream_links) = update_vec_model_with(&current_streams, stream_links, |a, b| {
+        a.id == b.id
+            && a.name == b.name
+            && a.provider == b.provider
+            && a.filtered == b.filtered
+            && (a.progress - b.progress).abs() < f32::EPSILON
+            && a.score_summary == b.score_summary
+    }) {
         ui.set_stream_links(slint::ModelRc::new(slint::VecModel::from(stream_links)));
     }
     let current_providers = ui.get_detail_stream_providers();
-    if let Err(providers) = update_vec_model(&current_providers, providers) {
+    if let Err(providers) = update_vec_model_eq(&current_providers, providers) {
         ui.set_detail_stream_providers(slint::ModelRc::new(slint::VecModel::from(providers)));
     }
 }
@@ -574,7 +595,10 @@ pub fn start_event_loop(
                     let streaming_stats_sync_needed =
                         first_render || fields.contains(&AppModelField::StreamingServer);
 
-                    first_render = false;
+                    if first_render {
+                        first_render = false;
+                        crate::startup_metrics::global().mark_first_sync();
+                    }
 
                     let _clone_span = tracing::debug_span!("clone_model_state").entered();
                     // Clone core submodels for thread-safe UI thread updates (only if needed)
@@ -809,9 +833,11 @@ pub fn start_event_loop(
                                     } else {
                                         ui.set_has_avatar_image(false);
                                     }
+                                    ui.set_auth_initialized(true);
                                 } else if current_username != "Guest" {
                                     ui.set_username("".into());
                                     ui.set_has_avatar_image(false);
+                                    ui.set_auth_initialized(true);
                                 }
                             }
 
@@ -1166,10 +1192,36 @@ fn handle_core_event(event: Event, ui_weak: &slint::Weak<MainWindow>) {
     }
 }
 
-pub fn trim_process_memory() {
-    // SAFETY: `mi_collect` is thread-safe in mimalloc and forces reclaiming empty memory
-    // arenas back to the operating system immediately.
+pub fn trim_process_memory(aggressive_os_trim: bool) {
+    // Nivel 1: Compactación en mimalloc (seguro para cambios de tab y loop periódico)
     unsafe {
-        libmimalloc_sys::mi_collect(true);
+        libmimalloc_sys::mi_collect(aggressive_os_trim);
+    }
+
+    if !aggressive_os_trim {
+        return;
+    }
+
+    // Nivel 2: Solo ejecutar cuando la app se minimiza (Occluded) o cierra el reproductor (unload_player)
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+        SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> std::ffi::c_int;
+        }
+        malloc_trim(0);
     }
 }

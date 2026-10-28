@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { ButtonSurface } from "button.slint";
+import { FocusTracker } from "text_input.slint";
 
 export component NumberInput inherits Rectangle {
     in property <length> unit: Theme.root-font-size;
@@ -100,6 +101,9 @@ export component NumberInput inherits Rectangle {
                 single-line: true;
                 enabled: root.enabled;
                 input-type: InputType.number;
+                changed has-focus => {
+                    FocusTracker.text-input-focused = self.has-focus;
+                }
                 edited => {
                     if (self.text.is-float()) {
                         root.update-value(self.text.to-float());
