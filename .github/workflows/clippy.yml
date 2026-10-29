@@ -47,10 +47,20 @@ jobs:
       VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/vcpkg-overlays
       PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-linux-v3-static-release/lib/pkgconfig
       LIBTORRENT_STATIC: "1"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      - name: Configure swap space
+        run: |
+          SWAP_DIR="/mnt"
+          if [ ! -d "$SWAP_DIR" ]; then SWAP_DIR="/var"; fi
+          sudo fallocate -l 6G "$SWAP_DIR/swapfile_extra" || sudo dd if=/dev/zero of="$SWAP_DIR/swapfile_extra" bs=1M count=6144
+          sudo chmod 600 "$SWAP_DIR/swapfile_extra"
+          sudo mkswap "$SWAP_DIR/swapfile_extra"
+          sudo swapon "$SWAP_DIR/swapfile_extra" || true
+          free -h
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31

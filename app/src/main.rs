@@ -31,7 +31,10 @@ use stremio_core::{
         player::Player,
         streaming_server::StreamingServer,
     },
-    runtime::{Env, Runtime},
+    runtime::{
+        Env, Runtime, RuntimeAction,
+        msg::{Action, ActionCtx, ActionStreamingServer},
+    },
     types::{addon::Descriptor, resource::MetaItemPreview},
 };
 
@@ -598,36 +601,102 @@ async fn finish_startup(
     tracing::info!("launching stremio-runtime engine in background");
     let server_ui_weak = ui.as_weak();
     let configured_torrent_port = config.torrent_port;
+    let server_notifier_task = server_notifier.clone();
+
     let server_task = tokio::spawn(async move {
-        match stremio_runtime::start(server_cfg).await {
-            Ok(handle) => {
-                let bound_addr = handle.http_addr();
-                let effective_url = format!("http://{bound_addr}");
-                if bound_addr.port() != configured_torrent_port {
-                    tracing::warn!(
-                        configured = configured_torrent_port,
-                        bound = bound_addr.port(),
-                        "streaming server bound to fallback port"
-                    );
+        let max_startup_retries = 5;
+        let mut retry_delay = Duration::from_millis(400);
+        let mut attempt = 0;
+
+        loop {
+            attempt += 1;
+            tracing::info!(attempt, max_retries = max_startup_retries, "launching stremio-runtime engine");
+
+            match stremio_runtime::start(server_cfg.clone()).await {
+                Ok(handle) => {
+                    let bound_addr = handle.http_addr();
+                    let effective_url = format!("http://{bound_addr}");
+                    if bound_addr.port() != configured_torrent_port {
+                        tracing::warn!(
+                            configured = configured_torrent_port,
+                            bound = bound_addr.port(),
+                            "streaming server bound to fallback port"
+                        );
+                    }
+                    server_notifier_task.mark_ready(effective_url.clone());
+                    crate::startup_metrics::global().mark_server_ready();
+                    let ui_weak = server_ui_weak.clone();
+                    let eff_url = effective_url.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_server_url(eff_url.into());
+                            ui.set_server_status("Online".into());
+                        }
+                    });
+                    *server_shared_handle_task.lock().await = Some(handle);
+                    break;
                 }
-                server_notifier.mark_ready(effective_url.clone());
-                crate::startup_metrics::global().mark_server_ready();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = server_ui_weak.upgrade() {
-                        ui.set_server_url(effective_url.into());
-                        ui.set_server_status("Online".into());
+                Err(error) => {
+                    tracing::error!(%error, attempt, "stremio-runtime startup failed");
+                    if attempt >= max_startup_retries {
+                        server_notifier_task.mark_failed();
+                        let ui_weak = server_ui_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_server_status("Offline".into());
+                            }
+                        });
+                        return;
                     }
-                });
-                *server_shared_handle_task.lock().await = Some(handle);
+                    server_notifier_task.mark_failed();
+                    let ui_weak = server_ui_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_server_status("Retrying...".into());
+                        }
+                    });
+                    tokio::time::sleep(retry_delay).await;
+                    retry_delay = (retry_delay * 2).min(Duration::from_secs(4));
+                }
             }
-            Err(error) => {
-                tracing::error!(%error, "failed to start stremio-runtime");
-                server_notifier.mark_failed();
+        }
+
+        // Periodic watchdog: checks that the server remains alive and responsive.
+        // If it terminates unexpectedly, attempts automatic recovery.
+        let mut check_interval = tokio::time::interval(Duration::from_secs(20));
+        loop {
+            check_interval.tick().await;
+            let is_alive = {
+                let lock = server_shared_handle_task.lock().await;
+                lock.as_ref().is_some_and(|h| h.is_running())
+            };
+            if !is_alive {
+                tracing::warn!("streaming server process died unexpectedly; initiating auto-recovery");
+                server_notifier_task.mark_failed();
+                let ui_weak = server_ui_weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = server_ui_weak.upgrade() {
-                        ui.set_server_status("Offline".into());
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_server_status("Reconnecting...".into());
                     }
                 });
+
+                if let Ok(new_handle) = stremio_runtime::start(server_cfg.clone()).await {
+                    let bound_addr = new_handle.http_addr();
+                    let effective_url = format!("http://{bound_addr}");
+                    server_notifier_task.mark_ready(effective_url.clone());
+                    let ui_weak = server_ui_weak.clone();
+                    let eff_url = effective_url.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_server_url(eff_url.into());
+                            ui.set_server_status("Online".into());
+                        }
+                    });
+                    *server_shared_handle_task.lock().await = Some(new_handle);
+                    tracing::info!("streaming server auto-recovery succeeded");
+                } else {
+                    tracing::error!("streaming server auto-recovery failed");
+                }
             }
         }
     });
@@ -655,7 +724,12 @@ async fn finish_startup(
         .await
         .map_err(|error| anyhow::anyhow!("storage startup task failed: {error}"))?;
     crate::startup_metrics::global().mark_storage_loaded();
-    let server_url = initial_server_url;
+
+    // Fast-path: wait a brief window (up to 350ms) for the background streaming server.
+    // If it is ready (the usual case when sockets bind quickly), profile.settings.streaming_server_url
+    // is set directly to the effective URL and StreamingServer::new will immediately succeed.
+    let _ = server_readiness.wait_ready(Duration::from_millis(350)).await;
+    let server_url = server_readiness.current_url();
     startup_storage.profile.settings.streaming_server_url = url::Url::parse(&server_url)?;
 
     let StartupStorage {
@@ -723,6 +797,42 @@ async fn finish_startup(
 
     let (runtime, rx) = Runtime::<DesktopEnv, _>::new(model, all_effects, 1000);
     let runtime = Arc::new(runtime);
+
+    {
+        let rt = runtime.clone();
+        let mut rx_ready = server_readiness.watch_ready();
+        let rx_url = server_readiness.watch_url();
+        tokio::spawn(async move {
+            let sync_server = |url_str: &str| {
+                tracing::info!(effective_url = url_str, "streaming server readiness confirmed; synchronizing core model");
+                if let Ok(parsed_url) = url::Url::parse(url_str)
+                    && let Ok(model) = rt.model()
+                    && model.ctx.profile.settings.streaming_server_url != parsed_url
+                {
+                    let mut settings = model.ctx.profile.settings.clone();
+                    settings.streaming_server_url = parsed_url;
+                    rt.dispatch(RuntimeAction {
+                        field: Some(AppModelField::Ctx),
+                        action: Action::Ctx(ActionCtx::UpdateSettings(settings)),
+                    });
+                }
+                rt.dispatch(RuntimeAction {
+                    field: Some(AppModelField::StreamingServer),
+                    action: Action::StreamingServer(ActionStreamingServer::Reload),
+                });
+            };
+
+            if *rx_ready.borrow() {
+                sync_server(&rx_url.borrow().clone());
+            }
+
+            while rx_ready.changed().await.is_ok() {
+                if *rx_ready.borrow() {
+                    sync_server(&rx_url.borrow().clone());
+                }
+            }
+        });
+    }
 
     {
         let ui_weak_refresh = ui_weak.clone();

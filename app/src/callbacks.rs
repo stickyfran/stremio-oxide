@@ -235,7 +235,20 @@ pub fn setup_ui_callbacks(
                                     }
                                 }
                             });
-                            server_readiness.wait_ready(std::time::Duration::from_secs(5)).await;
+                            if !server_readiness.wait_ready(std::time::Duration::from_secs(6)).await {
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(ui) = ui_weak.upgrade() {
+                                        ui.set_player_loading_stage_title("Servidor de streaming no disponible".into());
+                                        ui.set_player_loading_stage_detail(
+                                            "El motor local tardó demasiado en iniciar. Reintenta la reproducción o revisa Ajustes.".into(),
+                                        );
+                                        ui.set_player_error(
+                                            "No se pudo conectar con el motor de streaming local.".into(),
+                                        );
+                                    }
+                                });
+                                return;
+                            }
                         }
                         let (stage_title, stage_detail) = if is_torrent {
                             (
@@ -286,7 +299,20 @@ pub fn setup_ui_callbacks(
                                 }
                             }
                         });
-                        server_readiness.wait_ready(std::time::Duration::from_secs(5)).await;
+                        if !server_readiness.wait_ready(std::time::Duration::from_secs(6)).await {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = ui_weak.upgrade() {
+                                    ui.set_player_loading_stage_title("Servidor de streaming no disponible".into());
+                                    ui.set_player_loading_stage_detail(
+                                        "El motor local tardó demasiado en iniciar. Reintenta la reproducción o revisa Ajustes.".into(),
+                                    );
+                                    ui.set_player_error(
+                                        "No se pudo conectar con el motor de streaming local.".into(),
+                                    );
+                                }
+                            });
+                            return;
+                        }
                     }
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak.upgrade() {

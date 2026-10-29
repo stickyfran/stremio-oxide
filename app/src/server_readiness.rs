@@ -11,6 +11,7 @@ pub struct ServerReadiness {
     server_url_rx: watch::Receiver<String>,
 }
 
+#[derive(Clone)]
 pub struct ServerReadinessNotifier {
     ready_tx: Arc<watch::Sender<bool>>,
     server_url_tx: Arc<watch::Sender<String>>,
@@ -49,6 +50,14 @@ impl ServerReadiness {
 
     pub fn current_url(&self) -> String {
         self.server_url_rx.borrow().clone()
+    }
+
+    pub fn watch_ready(&self) -> watch::Receiver<bool> {
+        self.ready_rx.clone()
+    }
+
+    pub fn watch_url(&self) -> watch::Receiver<String> {
+        self.server_url_rx.clone()
     }
 
     /// Silently wait for the streaming server to become ready, up to `timeout`.
