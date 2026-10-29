@@ -216,8 +216,8 @@ async fn run_app(
                 ui.set_has_avatar_image(true);
             }
         }
+        ui.set_auth_initialized(true);
     }
-    ui.set_auth_initialized(true);
     tracing::info!("MainWindow created");
 
     // Restore persisted window geometry before initial paint.
@@ -495,8 +495,10 @@ async fn finish_startup(
     let local_profiles = profiles::list_profiles()
         .await
         .context("could not load local profiles")?;
-    let active_profile_id = select_startup_profile(&ui, local_profiles, active_profile_id).await?;
+    let (active_profile_id, preloaded_profile) =
+        select_startup_profile(&ui, local_profiles, active_profile_id).await?;
     core_env::set_active_profile_scope(active_profile_id.as_str());
+    let storage_task = tokio::spawn(load_startup_storage(preloaded_profile));
     let mut config = config::load_config();
 
     download_manager.set_bandwidth_limit(
@@ -630,7 +632,6 @@ async fn finish_startup(
         }
     });
 
-    let storage_task = tokio::spawn(load_startup_storage());
     let playback_files_task = tokio::spawn(mpv_integration::prepare_playback_files());
 
     // Fase 5: Post-render idle warmup. Shaders y binarios de mpv se precargan en idle
@@ -2008,52 +2009,80 @@ struct EarlyAuthState {
 }
 
 async fn load_early_auth_state() -> EarlyAuthState {
-    let Ok(profile_id) = profiles::active_profile_id().await else {
-        return EarlyAuthState {
-            username: None,
-            avatar_url: None,
-        };
-    };
     let Ok(conn) = crate::db::get_conn().await else {
         return EarlyAuthState {
             username: None,
             avatar_url: None,
         };
     };
-    let mut rows = match conn
+
+    let mut profile_id = None;
+    if let Ok(mut rows) = conn
         .query(
-            "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = 'profile'",
-            [profile_id.as_str()],
+            "SELECT value FROM app_state WHERE key = 'active_profile_id'",
+            (),
         )
         .await
     {
-        Ok(rows) => rows,
-        Err(_) => {
-            return EarlyAuthState {
-                username: None,
-                avatar_url: None,
-            };
+        if let Ok(Some(row)) = rows.next().await {
+            profile_id = row.get::<String>(0).ok();
         }
-    };
-    let row = match rows.next().await {
-        Ok(Some(row)) => row,
-        _ => {
-            return EarlyAuthState {
-                username: None,
-                avatar_url: None,
-            };
+    }
+
+    if profile_id.is_none() {
+        if let Ok(mut rows) = conn
+            .query(
+                "SELECT id FROM local_profiles ORDER BY created_at ASC LIMIT 1",
+                (),
+            )
+            .await
+        {
+            if let Ok(Some(row)) = rows.next().await {
+                profile_id = row.get::<String>(0).ok();
+            }
         }
-    };
-    let raw: String = match row.get(0) {
-        Ok(r) => r,
-        Err(_) => {
-            return EarlyAuthState {
-                username: None,
-                avatar_url: None,
-            };
+    }
+
+    if let Some(ref id) = profile_id {
+        core_env::set_active_profile_scope(id.as_str());
+    }
+
+    let mut raw: Option<String> = None;
+
+    if let Some(ref id) = profile_id {
+        if let Ok(mut rows) = conn
+            .query(
+                "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = 'profile'",
+                [id.as_str()],
+            )
+            .await
+        {
+            if let Ok(Some(row)) = rows.next().await {
+                raw = row.get::<String>(0).ok();
+            }
         }
+    }
+
+    if raw.is_none() {
+        if let Ok(mut rows) = conn
+            .query("SELECT value FROM core_storage WHERE key = 'profile'", ())
+            .await
+        {
+            if let Ok(Some(row)) = rows.next().await {
+                raw = row.get::<String>(0).ok();
+            }
+        }
+    }
+    drop(conn);
+
+    let Some(raw_str) = raw else {
+        return EarlyAuthState {
+            username: None,
+            avatar_url: None,
+        };
     };
-    let (username, avatar_url) = extract_auth_from_profile_json(&raw);
+
+    let (username, avatar_url) = extract_auth_from_profile_json(&raw_str);
     EarlyAuthState {
         username,
         avatar_url,
@@ -2081,17 +2110,18 @@ async fn select_startup_profile(
     ui: &MainWindow,
     profiles: Vec<profiles::LocalProfile>,
     active_profile: profiles::ProfileId,
-) -> anyhow::Result<profiles::ProfileId> {
+) -> anyhow::Result<(profiles::ProfileId, Option<stremio_core::types::profile::Profile>)> {
     let initial_preflight = preflight_profile(&active_profile).await;
     let items = profile_items(&profiles);
     ui.set_local_profiles(slint::ModelRc::new(slint::VecModel::from(items)));
     ui.set_profile_picker_selected_id(active_profile.as_str().into());
     if profiles.len() <= 1 && initial_preflight.is_ok() {
-        return Ok(active_profile);
+        return Ok((active_profile, initial_preflight.ok().flatten()));
     }
 
     ui.set_profile_picker_error(
         initial_preflight
+            .as_ref()
             .err()
             .map(|error| error.to_string())
             .unwrap_or_default()
@@ -2119,13 +2149,13 @@ async fn select_startup_profile(
             continue;
         }
         match preflight_profile(&profile.id).await {
-            Ok(()) => {
+            Ok(loaded_profile) => {
                 profiles::set_active_profile(&profile.id)
                     .await
                     .context("could not persist the active local profile")?;
                 ui.set_profile_picker_error("".into());
                 ui.set_show_profile_picker(false);
-                return Ok(profile.id.clone());
+                return Ok((profile.id.clone(), loaded_profile));
             }
             Err(error) => {
                 core_env::set_active_profile_scope(active_profile.as_str());
@@ -2158,11 +2188,12 @@ fn profile_items(profiles: &[profiles::LocalProfile]) -> Vec<ProfileItem> {
         .collect()
 }
 
-async fn preflight_profile(profile_id: &profiles::ProfileId) -> anyhow::Result<()> {
+async fn preflight_profile(
+    profile_id: &profiles::ProfileId,
+) -> anyhow::Result<Option<stremio_core::types::profile::Profile>> {
     core_env::set_active_profile_scope(profile_id.as_str());
     DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY)
         .await
-        .map(|_| ())
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
@@ -2176,10 +2207,17 @@ struct StartupStorage {
     dismissed_events: stremio_core::types::events::DismissedEventsBucket,
 }
 
-#[tracing::instrument]
-async fn load_startup_storage() -> StartupStorage {
-    let profile_future =
-        DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY);
+#[tracing::instrument(skip(preloaded_profile))]
+async fn load_startup_storage(
+    preloaded_profile: Option<stremio_core::types::profile::Profile>,
+) -> StartupStorage {
+    let profile_future = async {
+        if let Some(profile) = preloaded_profile {
+            Ok(Some(profile))
+        } else {
+            DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY).await
+        }
+    };
     let auxiliary_buckets_future = async {
         let profile_id = core_env::active_profile_scope();
         let mut map = std::collections::HashMap::new();
