@@ -78,6 +78,7 @@ mod shortcuts;
 mod single_instance;
 pub mod server_readiness;
 pub mod startup_metrics;
+mod pip_aspect;
 mod taskbar_media;
 mod theme_studio;
 mod thumbnail_preview;
@@ -1077,6 +1078,9 @@ async fn finish_startup(
         deep_link::handle(command, &ui, &runtime, &navigation);
     }
     tracing::info!("background application startup completed");
+    slint::Timer::single_shot(std::time::Duration::from_secs(3), || {
+        crate::event_loop::trim_process_memory(false);
+    });
     Ok(AppSession {
         server_handle: server_shared_handle,
         server_task,

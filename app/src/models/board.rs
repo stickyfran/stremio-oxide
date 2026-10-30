@@ -25,6 +25,7 @@ use stremio_core::{
 use url::Url;
 
 static LAST_SYNC_STATE: OnceLock<Mutex<Option<SyncFingerprint>>> = OnceLock::new();
+static BOARD_CATALOG_LOADER: OnceLock<tokio::sync::mpsc::Sender<usize>> = OnceLock::new();
 
 pub fn setup(
     ui: &MainWindow,
@@ -33,10 +34,19 @@ pub fn setup(
 ) {
     let ui_weak = ui.as_weak();
     let catalog_loader = spawn_catalog_visibility_loader(runtime, CatalogScope::Board);
+    let _ = BOARD_CATALOG_LOADER.set(catalog_loader.clone());
 
-    ui.on_board_catalog_visible(move |index| {
-        queue_visible_catalog(&catalog_loader, index);
+    ui.on_board_catalog_visible({
+        let catalog_loader = catalog_loader.clone();
+        move |index| {
+            queue_visible_catalog(&catalog_loader, index);
+        }
     });
+
+    // Proactively queue row 0 (which loads rows 0..CATALOG_PRELOAD_ROWS) so that
+    // catalog fetching never hangs if Slint delegates haven't attached their
+    // init hooks yet or if the window is initially not focused.
+    let _ = catalog_loader.try_send(0);
 
     ui.on_board_item_selected({
         let runtime = runtime.clone();
@@ -461,6 +471,24 @@ pub fn sync(
             .collect();
         let sections_model = slint::VecModel::from(board_sections);
         ui.set_board_sections(slint::ModelRc::new(sections_model));
+    }
+
+    // Update board loading state: if there is no loaded content yet and catalogs
+    // are still being resolved, show the pulsing skeleton animation.
+    let any_catalogs = !board.catalogs.is_empty();
+    let has_content = ui.get_board_sections().row_count() > 0
+        && (has_continue_watching || board.catalogs.iter().any(|c| c.first().is_some_and(|p| matches!(&p.content, Some(stremio_core::models::common::Loadable::Ready(_))))));
+    let is_loading = !has_content && (!any_catalogs || board.catalogs.iter().any(|c| c.first().is_none_or(|p| p.content.is_none() || matches!(&p.content, Some(stremio_core::models::common::Loadable::Loading)))));
+    ui.set_board_loading(is_loading);
+
+    // Proactively keep initial catalog loading rolling if any top catalogs are still unloaded.
+    if let Some(loader) = BOARD_CATALOG_LOADER.get() {
+        let has_unloaded_initial = board.catalogs.iter().take(3).any(|cat| {
+            cat.first().is_none_or(|p| p.content.is_none())
+        });
+        if has_unloaded_initial {
+            let _ = loader.try_send(0);
+        }
     }
 }
 

@@ -151,6 +151,9 @@ impl PipController {
             return;
         };
 
+        // Remove proportional-resize enforcement installed for PiP.
+        crate::pip_aspect::uninstall(crate::window_style::window_hwnd(window).unwrap_or(0));
+
         window.set_title("Stremio Oxide");
 
         #[cfg(target_os = "linux")]
@@ -228,6 +231,9 @@ impl PipController {
         window.set_decorations(false);
         window.set_resizable(true);
         window.set_window_level(WindowLevel::AlwaysOnTop);
+
+        // Install proportional-resize enforcement on Windows.
+        crate::pip_aspect::install(crate::window_style::window_hwnd(window).unwrap_or(0));
 
         let _ = window.request_inner_size(target_size);
 

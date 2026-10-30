@@ -2322,25 +2322,32 @@ impl NativePlaybackBridge {
 
         ui.on_player_scale_pip({
             let weak = ui.as_weak();
+            let state = self.state.clone();
             move |delta| {
                 let Some(ui) = weak.upgrade() else {
                     return;
+                };
+                let snapshot = read_state(&state);
+                let (aspect_w, aspect_h) = if let (Some(dw), Some(dh)) = (snapshot.video_dw, snapshot.video_dh) {
+                    (dw as f32, dh as f32)
+                } else {
+                    (16.0, 9.0)
                 };
                 let _ = ui.window().with_winit_window(|window| {
                     let current_size = window.inner_size();
                     let current_w = current_size.width as f32;
                     let factor = if delta > 0.0 { 1.1 } else { 0.9 };
                     let mut new_w = (current_w * factor).round();
-                    let mut new_h = (new_w * 9.0 / 16.0).round();
+                    let mut new_h = (new_w * aspect_h / aspect_w).round();
                     if new_w < 120.0 {
                         new_w = 120.0;
-                        new_h = 68.0;
+                        new_h = (120.0 * aspect_h / aspect_w).round().max(68.0);
                     }
                     if let Some(monitor) = window.current_monitor() {
                         let max_w = monitor.size().width as f32 * 0.8;
                         if new_w > max_w {
                             new_w = max_w;
-                            new_h = (new_w * 9.0 / 16.0).round();
+                            new_h = (new_w * aspect_h / aspect_w).round();
                         }
                     }
                     let _ = window.request_inner_size(
@@ -4020,6 +4027,10 @@ fn dispatch_state_to_core(
                 duration: duration_secs.max(0) as u64,
                 device: PLAYER_DEVICE.to_owned(),
             });
+        }
+
+        if let (Some(dw), Some(dh)) = (state.video_dw, state.video_dh) {
+            crate::pip_aspect::set_aspect(dw, dh);
         }
 
         let params_changed = current.last_video_params.as_ref().is_none_or(|previous| {

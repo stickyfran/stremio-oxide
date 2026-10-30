@@ -263,6 +263,8 @@ pub struct PlaybackState {
     pub video_format: Option<String>,
     pub audio_format: Option<String>,
     pub hardware_decoder: Option<String>,
+    pub video_dw: Option<u32>,
+    pub video_dh: Option<u32>,
 }
 
 impl Default for PlaybackState {
@@ -301,6 +303,8 @@ impl Default for PlaybackState {
             video_format: None,
             audio_format: None,
             hardware_decoder: None,
+            video_dw: None,
+            video_dh: None,
         }
     }
 }
@@ -1200,6 +1204,8 @@ fn observe_properties(client: &MpvClient) -> Result<(), MpvError> {
         (21, "chapter-list", FORMAT_NODE),
         (22, "video-params/primaries", FORMAT_STRING),
         (23, "video-params/gamma", FORMAT_STRING),
+        (24, "video-params/dw", FORMAT_INT64),
+        (25, "video-params/dh", FORMAT_INT64),
     ];
     for (id, name, format) in properties {
         client.observe(id, name, format)?;
@@ -1818,6 +1824,14 @@ fn update_property(event: &MpvEvent, state: &mut PlaybackState) -> PropertyUpdat
             state.video_transfer = property_string(property);
             update_hdr_content(state);
             return PropertyUpdate::Hdr;
+        }
+        "video-params/dw" => {
+            state.video_dw = property_int64(property).filter(|&v| v > 0).map(|v| v as u32);
+            return PropertyUpdate::StateOnly;
+        }
+        "video-params/dh" => {
+            state.video_dh = property_int64(property).filter(|&v| v > 0).map(|v| v as u32);
+            return PropertyUpdate::StateOnly;
         }
         "track-list" => {
             if let Some(node) = property_node(property) {

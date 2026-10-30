@@ -398,6 +398,7 @@ export component MainWindow inherits Window {
     in-out property <[MediaCardItem]> board-continue-watching: [];
     in-out property <[BoardSection]> board-sections: [];
     in-out property <bool> board-show-server-warning: false;
+    in-out property <bool> board-loading: true;
     in-out property <[BoardSection]> search-sections: [];
     in-out property <[SearchSuggestion]> search-suggestions: [];
     in-out property <string> search-query: "";
@@ -1752,7 +1753,7 @@ export component MainWindow inherits Window {
                             ? [] : board-sections;
                         loading: root.debug-preview-enabled && root.debug-preview-page == 0
                             ? root.debug-preview-state == "loading"
-                            : loading;
+                            : root.board-loading;
                         show-server-warning: root.board-show-server-warning;
                         item-selected(id, media-type, video-id) => {
                             board-item-selected(id, media-type, video-id);
