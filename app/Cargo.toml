@@ -1,6 +1,6 @@
 [package]
 name = "stremio-native"
-version = "0.99.1"
+version = "0.99.2"
 authors = ["perpetus <perpetus.github@gmail.com>"]
 edition = "2024"
 license = "GPL-3.0-only"
