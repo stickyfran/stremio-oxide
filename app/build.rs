@@ -175,6 +175,8 @@ fn embed_windows_resources() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=assets/app.ico");
     let mut resources = winres::WindowsResource::new();
     resources.set_icon_with_id("assets/app.ico", "MAINICON");
+    println!("cargo:rerun-if-changed=assets/tray.ico");
+    resources.set_icon_with_id("assets/tray.ico", "TRAYICON");
     resources.set("FileDescription", "Stremio");
     resources.set("ProductName", "Stremio");
     resources.set("OriginalFilename", "stremio-native.exe");

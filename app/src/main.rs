@@ -329,6 +329,9 @@ async fn run_app(
 
     tracing::info!("Stremio-Rust GUI loop starting...");
     let ui_result = tokio::task::block_in_place(slint::run_event_loop);
+    // Last-resort guard: if any native teardown (libmpv, torrent session, DB)
+    // wedges, the process still terminates instead of lingering invisibly.
+    spawn_exit_watchdog(Duration::from_secs(6));
     if let Some(reporter) = performance_reporter {
         reporter.abort();
     }
@@ -371,6 +374,17 @@ async fn run_app(
     installer_result
 }
 
+/// Terminates the process after `grace` even if orderly shutdown stalls.
+fn spawn_exit_watchdog(grace: Duration) {
+    let _ = std::thread::Builder::new()
+        .name("exit-watchdog".into())
+        .spawn(move || {
+            std::thread::sleep(grace);
+            tracing::warn!("orderly shutdown exceeded its grace period; forcing process exit");
+            std::process::exit(0);
+        });
+}
+
 struct AppSession {
     server_handle: Arc<tokio::sync::Mutex<Option<stremio_runtime::ServerHandle>>>,
     server_task: tokio::task::JoinHandle<()>,
@@ -383,6 +397,9 @@ struct AppSession {
 
 impl AppSession {
     fn shutdown(mut self) -> anyhow::Result<()> {
+        // Stop the supervisor first so the watchdog cannot resurrect the server
+        // while it is being torn down.
+        self.server_task.abort();
         self.updater.shutdown();
         // The event loop has ended, so changing the tray's visibility would
         // write to a finalized Slint property. Dropping it removes the native
@@ -404,11 +421,16 @@ impl AppSession {
             if let Err(error) = handle.shutdown() {
                 tracing::warn!(%error, "stremio-runtime was already stopped");
             }
-            let server_result = tokio::task::block_in_place(|| handle.join());
-            match server_result {
-                Ok(Some(source)) => tracing::info!(?source, "stremio-runtime stopped"),
-                Ok(None) => tracing::info!("stremio-runtime stopped"),
-                Err(error) => tracing::warn!(%error, "error joining stremio-runtime"),
+            // Joining can block on the torrent session; bound it so quitting is prompt.
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = done_tx.send(handle.join());
+            });
+            match tokio::task::block_in_place(|| done_rx.recv_timeout(Duration::from_secs(3))) {
+                Ok(Ok(Some(source))) => tracing::info!(?source, "stremio-runtime stopped"),
+                Ok(Ok(None)) => tracing::info!("stremio-runtime stopped"),
+                Ok(Err(error)) => tracing::warn!(%error, "error joining stremio-runtime"),
+                Err(_) => tracing::warn!("stremio-runtime did not stop in time; continuing shutdown"),
             }
         } else {
             self.server_task.abort();

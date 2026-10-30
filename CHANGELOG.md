@@ -138,11 +138,11 @@ This file records notable changes to Stremio Native relative to the initial sour
 ## 1.0.4 - 2026-07-25
 
 ### Downloads
-- **Windows**: [Installer](https://github.com/perpetus/stremio-native/releases/download/v1.0.4/StremioSetup-v1.0.4-x64.exe) | [Updater package](https://github.com/perpetus/stremio-native/releases/download/v1.0.4/stremio-native-v1.0.4-x86_64-pc-windows-msvc.zip)
-- **Linux**: [Binary](https://github.com/perpetus/stremio-native/releases/download/v1.0.4/stremio-native-v1.0.4-x86_64-unknown-linux-gnu)
-- **Debian / Ubuntu**: [DEB Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.4/stremio-native_1.0.4-1_amd64.deb)
-- **Arch Linux**: [Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.4/stremio-native-1.0.4-1-x86_64.pkg.tar.zst)
-- **Fedora**: [RPM Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.4/stremio-native-1.0.4-1.fc44.x86_64.rpm)
+- **Windows**: [Installer](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.4/StremioSetup-v1.0.4-x64.exe) | [Updater package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.4/stremio-native-v1.0.4-x86_64-pc-windows-msvc.zip)
+- **Linux**: [Binary](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.4/stremio-native-v1.0.4-x86_64-unknown-linux-gnu)
+- **Debian / Ubuntu**: [DEB Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.4/stremio-native_1.0.4-1_amd64.deb)
+- **Arch Linux**: [Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.4/stremio-native-1.0.4-1-x86_64.pkg.tar.zst)
+- **Fedora**: [RPM Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.4/stremio-native-1.0.4-1.fc44.x86_64.rpm)
 
 ### Reliable Windows self-updates
 - Stages the downloaded installer first, hands it to the outer application lifecycle, and launches it only after the UI, playback engine, tray, and stream server have shut down.
@@ -175,11 +175,11 @@ This file records notable changes to Stremio Native relative to the initial sour
 ## 1.0.2 - 2026-07-22
 
 ### Downloads
-- **Windows**: [Installer](https://github.com/perpetus/stremio-native/releases/download/v1.0.2/StremioSetup-v1.0.2-x64.exe) | [Portable](https://github.com/perpetus/stremio-native/releases/download/v1.0.2/stremio-native-v1.0.2-x86_64-pc-windows-msvc.zip)
-- **Linux**: [Binary](https://github.com/perpetus/stremio-native/releases/download/v1.0.2/stremio-native-v1.0.2-x86_64-unknown-linux-gnu)
-- **Debian / Ubuntu**: [DEB Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.2/stremio-native_1.0.2_amd64.deb)
-- **Arch Linux**: [Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.2/stremio-native-1.0.2-1-x86_64.pkg.tar.zst)
-- **Fedora**: [RPM Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.2/stremio-native-1.0.2-1.x86_64.rpm)
+- **Windows**: [Installer](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.2/StremioSetup-v1.0.2-x64.exe) | [Portable](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.2/stremio-native-v1.0.2-x86_64-pc-windows-msvc.zip)
+- **Linux**: [Binary](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.2/stremio-native-v1.0.2-x86_64-unknown-linux-gnu)
+- **Debian / Ubuntu**: [DEB Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.2/stremio-native_1.0.2_amd64.deb)
+- **Arch Linux**: [Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.2/stremio-native-1.0.2-1-x86_64.pkg.tar.zst)
+- **Fedora**: [RPM Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.2/stremio-native-1.0.2-1.x86_64.rpm)
 
 ### Skia rendering and video upscalers
 - Replaced the forced FemtoVG/GLES path with Slint's Skia OpenGL renderer and explicit native OpenGL context selection.
@@ -207,11 +207,11 @@ This file records notable changes to Stremio Native relative to the initial sour
 ## 1.0.1 - 2026-07-19
 
 ### Downloads
-- **Windows**: [Installer](https://github.com/perpetus/stremio-native/releases/download/v1.0.1/StremioSetup-v1.0.1-x64.exe) | [Portable](https://github.com/perpetus/stremio-native/releases/download/v1.0.1/stremio-native-v1.0.1-x86_64-pc-windows-msvc.zip)
-- **Linux**: [Binary](https://github.com/perpetus/stremio-native/releases/download/v1.0.1/stremio-native-v1.0.1-x86_64-unknown-linux-gnu)
-- **Debian / Ubuntu**: [DEB Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.1/stremio-native_1.0.1_amd64.deb)
-- **Arch Linux**: [Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.1/stremio-native-1.0.1-1-x86_64.pkg.tar.zst)
-- **Fedora**: [RPM Package](https://github.com/perpetus/stremio-native/releases/download/v1.0.1/stremio-native-1.0.1-1.x86_64.rpm)
+- **Windows**: [Installer](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.1/StremioSetup-v1.0.1-x64.exe) | [Portable](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.1/stremio-native-v1.0.1-x86_64-pc-windows-msvc.zip)
+- **Linux**: [Binary](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.1/stremio-native-v1.0.1-x86_64-unknown-linux-gnu)
+- **Debian / Ubuntu**: [DEB Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.1/stremio-native_1.0.1_amd64.deb)
+- **Arch Linux**: [Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.1/stremio-native-1.0.1-1-x86_64.pkg.tar.zst)
+- **Fedora**: [RPM Package](https://github.com/stickyfran/stremio-oxide/releases/download/v1.0.1/stremio-native-1.0.1-1.x86_64.rpm)
 
 ### Packaging and Distribution
 - Added **Flatpak** infrastructure including desktop entry, appstream metainfo, and a sandboxed Boost compilation module.

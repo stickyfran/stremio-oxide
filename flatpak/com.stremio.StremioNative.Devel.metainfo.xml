@@ -15,8 +15,8 @@
     </p>
   </description>
   <launchable type="desktop-id">com.stremio.StremioNative.Devel.desktop</launchable>
-  <url type="homepage">https://github.com/stremio-native/stremio-native</url>
-  <url type="bugtracker">https://github.com/stremio-native/stremio-native/issues</url>
+  <url type="homepage">https://github.com/stickyfran/stremio-oxide</url>
+  <url type="bugtracker">https://github.com/stickyfran/stremio-oxide/issues</url>
   <screenshots>
     <screenshot type="default">
       <caption>Main Interface</caption>

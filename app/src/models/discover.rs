@@ -637,6 +637,10 @@ pub fn sync(
         }
         visible_items
     };
+    // `Runtime::dispatch` takes the model write lock synchronously, so the read
+    // guard must be released before anything below can dispatch (auto-preview).
+    // Holding it here self-deadlocked the UI thread on the first Discover open.
+    drop(model_guard);
 
     ui.set_discover_column_count(columns as i32);
 

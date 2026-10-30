@@ -504,6 +504,9 @@ pub fn sync<F: LibraryFilter>(
         }
         visible_items
     };
+    // Release the model read lock before the auto-preview below dispatches into
+    // the runtime (which needs the write lock); otherwise the UI thread deadlocks.
+    drop(model_guard);
 
     ui.set_library_column_count(columns as i32);
 

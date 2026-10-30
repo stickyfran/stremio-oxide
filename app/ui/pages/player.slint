@@ -2054,7 +2054,9 @@ export component PlayerPage inherits Rectangle {
             padding-left: 6px;
             padding-right: 6px;
             spacing: 8px;
-            alignment: center;
+            // `stretch` (not `center`): a centered layout ignores the title's
+            // horizontal-stretch and clumps both buttons in the middle of the bar.
+            alignment: stretch;
 
             // Expandir a pantalla completa / restaurar ventana arriba a la izquierda
             PipIconButton {

@@ -49,8 +49,8 @@ const NIN_SELECT: u32 = WM_USER;
 const NIN_KEYSELECT: u32 = WM_USER + 1;
 /// The gap kept between the popup and both the cursor and the monitor edges.
 const EDGE_MARGIN: i32 = 8;
-/// The icon resource embedded by `build.rs` through `winres`.
-const ICON_RESOURCE: &str = "MAINICON";
+/// The monochrome white notification-area icon embedded by `build.rs` through `winres`.
+const ICON_RESOURCE: &str = "TRAYICON";
 const WINDOW_CLASS: &str = "StremioTrayHost";
 
 thread_local! {
