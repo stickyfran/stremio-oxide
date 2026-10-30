@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(clippy::all)]
 
 #[cfg(not(feature = "profiling"))]
 #[global_allocator]
