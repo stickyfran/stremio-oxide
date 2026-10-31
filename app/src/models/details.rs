@@ -943,6 +943,7 @@ pub fn sync(
         ui.set_discover_preview_rating(detail_rating.into());
         ui.set_discover_preview_runtime(detail_runtime.into());
         ui.set_discover_has_preview(true);
+        ui.set_discover_preview_id(meta_item.preview.id.as_str().into());
 
         ui.set_discover_preview_poster_url(
             meta_item
@@ -1030,6 +1031,7 @@ pub fn sync(
         ui.set_library_preview_rating(detail_rating.into());
         ui.set_library_preview_runtime(detail_runtime.into());
         ui.set_library_has_preview(true);
+        ui.set_library_preview_id(meta_item.preview.id.as_str().into());
 
         ui.set_library_preview_poster_url(
             meta_item

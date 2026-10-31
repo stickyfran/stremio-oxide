@@ -552,7 +552,7 @@ impl PlaybackRuntime {
         }
         client.set_option("ytdl", "yes")?;
         client.set_option("ytdl-format", "best[height<=?720]/bestvideo[height<=?720]+bestaudio/best")?;
-        let _ = client.set_option("ytdl-raw-options", "extractor-args=youtube:player_client=ios,web_embedded");
+        let _ = client.set_option("ytdl-raw-options", "extractor-args=youtube:player_client=android,web");
         client.set_option("terminal", "no")?;
         client.set_option("input-default-bindings", "no")?;
         client.set_option("input-vo-keyboard", "no")?;

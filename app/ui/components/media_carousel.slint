@@ -30,6 +30,9 @@ export component MediaCatalogRow inherits MetaRow {
     callback play-clicked(string);
     callback menu-clicked(string);
     callback context-requested(string, length, length);
+    callback watched-change-requested(string, bool);
+    callback library-remove-requested(string);
+    callback library-add-requested(string);
     callback dismiss-clicked(string);
     callback poster-requested(string);
     callback hover-preview-requested(string, string, length, length, length, length);
@@ -103,6 +106,11 @@ export component MediaCatalogRow inherits MetaRow {
         play-clicked => { root.play-clicked(card-item.id); }
         menu-clicked => { root.menu-clicked(card-item.id); }
         context-requested(x, y) => { root.context-requested(card-item.id, x, y); }
+        watched-change-requested(watched) => {
+            root.watched-change-requested(card-item.id, watched);
+        }
+        library-remove-requested => { root.library-remove-requested(card-item.id); }
+        library-add-requested => { root.library-add-requested(card-item.id); }
         dismiss-requested => { root.dismiss-clicked(card-item.id); }
         poster-requested(url) => { root.poster-requested(url); }
         hover-preview-requested(id, media-type, x, y, width, height) => {
@@ -116,6 +124,7 @@ export component MediaCatalogRow inherits MetaRow {
 // only card rendering and spacing to this shared component.
 export component MediaCardGridRow inherits Rectangle {
     in property <[MediaCardItem]> items: [];
+    in property <string> selected-id: "";
     in property <length> unit: Theme.root-font-size;
     in property <length> card-width: 12 * root.unit;
     in property <length> card-height:
@@ -133,6 +142,7 @@ export component MediaCardGridRow inherits Rectangle {
     callback menu-clicked(string, bool, length, length);
     callback watched-change-requested(string, bool);
     callback library-remove-requested(string);
+    callback library-add-requested(string);
     callback play-clicked(string);
     callback dismiss-requested(string);
     callback hover-preview-requested(string, string, length, length, length, length);
@@ -166,6 +176,7 @@ export component MediaCardGridRow inherits Rectangle {
         animate opacity, y { duration: 220ms; easing: cubic-bezier(0.22, 1.0, 0.36, 1.0); }
         unit: root.unit;
         item: card-item;
+        selected: card-item.id != "" && card-item.id == root.selected-id;
         enable-lazy-loading: root.enable-lazy-loading;
         library-context-menu: root.library-context-menu;
         continue-watching-context-menu: root.continue-watching-context-menu;
@@ -189,6 +200,7 @@ export component MediaCardGridRow inherits Rectangle {
             root.watched-change-requested(card-item.id, watched);
         }
         library-remove-requested => { root.library-remove-requested(card-item.id); }
+        library-add-requested => { root.library-add-requested(card-item.id); }
         play-clicked => { root.play-clicked(card-item.id); }
         dismiss-requested => { root.dismiss-requested(card-item.id); }
         hover-preview-requested(id, media-type, x, y, width, height) => {

@@ -332,6 +332,7 @@ pub fn setup(
             if transition.changed {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_discover_has_preview(true);
+                    ui.set_discover_preview_id(id.as_str().into());
                     if let Ok(model) = runtime.model() {
                         if let Some(item) = model
                             .discover
@@ -547,6 +548,13 @@ pub fn sync(
             .is_some_and(|lib_item| lib_item.watched())
     };
 
+    let is_in_library = |id: &str| {
+        model_guard
+            .as_ref()
+            .and_then(|model| model.ctx.library.items.get(id))
+            .is_some_and(|item| !item.removed)
+    };
+
     let mut fingerprint = Fingerprint::new();
     fingerprint.usize(columns);
     fingerprint.str(&active_type);
@@ -578,6 +586,7 @@ pub fn sync(
         fingerprint.optional_str(item.release_info.as_deref());
         fingerprint.optional_str(item.behavior_hints.default_video_id.as_deref());
         fingerprint.bool(is_watched(&item.id));
+        fingerprint.bool(is_in_library(&item.id));
     }
     if !sync_fingerprint_changed(&LAST_SYNC_STATE, fingerprint.finish()) {
         return;
@@ -654,6 +663,9 @@ pub fn sync(
             let mut card = catalog_media_card(item);
             if is_watched(&item.id) {
                 card.show_checkmark = true;
+            }
+            if is_in_library(&item.id) {
+                card.in_library = true;
             }
             visible_items.push(card);
         }

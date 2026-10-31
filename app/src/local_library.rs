@@ -417,6 +417,7 @@ pub async fn project(ui_weak: slint::Weak<crate::MainWindow>) {
                             progress_value: 0.0,
                             new_videos: 0,
                             can_play: true,
+                            in_library: true,
                         }
                     })
                     .collect::<Vec<_>>();

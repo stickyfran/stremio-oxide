@@ -462,6 +462,7 @@ export component MainWindow inherits Window {
     in-out property <length> discover-scroll-y: 0px;
 
     // Discover preview drawer parameters
+    in-out property <string> discover-preview-id: "";
     in-out property <bool> discover-has-preview: false;
     in-out property <string> discover-preview-title: "";
     in-out property <image> discover-preview-logo;
@@ -483,6 +484,7 @@ export component MainWindow inherits Window {
     in-out property <bool> discover-preview-ratings-loading: false;
 
     // Library preview drawer parameters
+    in-out property <string> library-preview-id: "";
     in-out property <bool> library-preview-enabled: true;
     in-out property <bool> library-has-preview: false;
     in-out property <string> library-preview-title: "";
@@ -991,6 +993,9 @@ export component MainWindow inherits Window {
     callback board-item-selected(string, string, string);
     callback board-play-clicked(string);
     callback remove-continue-watching(string);
+    callback board-library-add(string);
+    callback board-library-remove(string);
+    callback board-watched-change(string, bool);
     callback board-see-all-continue-watching();
     callback board-see-all-clicked(int);
     callback board-catalog-visible(int);
@@ -1764,6 +1769,9 @@ export component MainWindow inherits Window {
                             board-play-clicked(id);
                         }
                         remove-continue-watching(id) => { root.remove-continue-watching(id); }
+                        library-add(id) => { board-library-add(id); }
+                        library-remove(id) => { board-library-remove(id); }
+                        watched-change(id, watched) => { board-watched-change(id, watched); }
                         see-all-continue-watching() => {
                             root.library-continue-watching-mode = true;
                             board-see-all-continue-watching();
@@ -1808,6 +1816,7 @@ export component MainWindow inherits Window {
                         available-extra-options: discover-extra-options;
                         selected-addon-installed: discover-selected-addon-installed;
                         selected-addon-name: discover-selected-addon-name;
+                        selected-id: root.discover-preview-id;
 
                         has-preview: root.debug-preview-enabled && root.debug-preview-page == 1
                             ? (root.debug-preview-state == "movie-selected"
@@ -1948,6 +1957,7 @@ export component MainWindow inherits Window {
                         scroll-y <=> library-scroll-y;
 
                         preview-enabled <=> root.library-preview-enabled;
+                        selected-id: root.library-preview-id;
                         has-preview: root.library-has-preview;
                         preview-title: root.library-preview-title;
                         preview-logo: root.library-preview-logo;

@@ -58,6 +58,12 @@ struct RegisteredSelection {
     stream_name: String,
 }
 
+#[derive(Clone)]
+struct PinnedTrailer {
+    meta_id: String,
+    selection: RegisteredSelection,
+}
+
 fn stream_selection_id(resource_index: usize, stream_index: usize) -> String {
     format!("stream:{resource_index}:{stream_index}")
 }
@@ -66,6 +72,7 @@ fn stream_selection_id(resource_index: usize, stream_index: usize) -> String {
 #[derive(Default)]
 pub struct PlaybackSelections {
     entries: RwLock<HashMap<String, RegisteredSelection>>,
+    pinned_trailer: RwLock<Option<PinnedTrailer>>,
     trailer_id: RwLock<Option<String>>,
     ranking_mode: AtomicU8,
     show_filtered: AtomicBool,
@@ -80,6 +87,10 @@ impl PlaybackSelections {
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
+        *self
+            .pinned_trailer
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         *self
             .trailer_id
             .write()
@@ -129,6 +140,10 @@ impl PlaybackSelections {
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .clear();
+            *self
+                .pinned_trailer
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         }
 
         let mut next_entries = HashMap::new();
@@ -139,6 +154,7 @@ impl PlaybackSelections {
             .map(|addon| (addon.transport_url.as_str(), addon.manifest.name.as_str()))
             .collect();
 
+        let current_meta_id = meta_request.as_ref().map(|req| req.path.id.clone());
         let trailer_id = details
             .meta_items
             .iter()
@@ -150,19 +166,39 @@ impl PlaybackSelections {
             })
             .map(|stream| {
                 let id = "trailer".to_owned();
-                next_entries.insert(
-                    id.clone(),
-                    RegisteredSelection {
-                        selected: Selected {
-                            stream,
-                            stream_request: None,
-                            meta_request: meta_request.clone(),
-                            subtitles_path: None,
-                        },
-                        stream_name: "Trailer".to_owned(),
+                let reg = RegisteredSelection {
+                    selected: Selected {
+                        stream,
+                        stream_request: None,
+                        meta_request: meta_request.clone(),
+                        subtitles_path: None,
                     },
-                );
+                    stream_name: "Trailer".to_owned(),
+                };
+                next_entries.insert(id.clone(), reg.clone());
+                if let Some(meta_id) = &current_meta_id {
+                    *self
+                        .pinned_trailer
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PinnedTrailer {
+                        meta_id: meta_id.clone(),
+                        selection: reg,
+                    });
+                }
                 id
+            })
+            .or_else(|| {
+                let pinned = self
+                    .pinned_trailer
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(pinned) = pinned.as_ref() {
+                    if current_meta_id.as_deref() == Some(&pinned.meta_id) {
+                        next_entries.insert("trailer".to_owned(), pinned.selection.clone());
+                        return Some("trailer".to_owned());
+                    }
+                }
+                None
             });
 
         for (resource_index, resource) in details.streams.iter().enumerate() {
@@ -456,9 +492,19 @@ impl PlaybackSelections {
             Ok(entries) => entries,
             Err(poisoned) => poisoned.into_inner(),
         };
-        entries
-            .get(id)
-            .map(|entry| (entry.selected.clone(), entry.stream_name.clone()))
+        if let Some(entry) = entries.get(id) {
+            return Some((entry.selected.clone(), entry.stream_name.clone()));
+        }
+        if id == "trailer" {
+            let pinned = self
+                .pinned_trailer
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(pinned) = pinned.as_ref() {
+                return Some((pinned.selection.selected.clone(), pinned.selection.stream_name.clone()));
+            }
+        }
+        None
     }
 }
 

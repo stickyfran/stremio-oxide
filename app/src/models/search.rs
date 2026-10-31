@@ -273,7 +273,7 @@ pub fn sync_results(
                 ))
                 .copied()
                 .unwrap_or(page.request.path.id.as_str());
-            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name) {
+            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name, None) {
                 sections.push(section);
             }
         }

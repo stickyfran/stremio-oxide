@@ -94,6 +94,71 @@ pub fn setup(
         }
     });
 
+    ui.on_board_library_add({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        move |id| {
+            let id = id.to_string();
+            let preview = runtime.model().ok().and_then(|model| {
+                model
+                    .board
+                    .catalogs
+                    .iter()
+                    .flatten()
+                    .find_map(|page| match page.content.as_ref() {
+                        Some(stremio_core::models::common::Loadable::Ready(items)) => {
+                            items.iter().find(|i| i.id == id).cloned()
+                        }
+                        _ => None,
+                    })
+            });
+
+            if let Some(preview) = preview {
+                runtime.dispatch(RuntimeAction {
+                    field: None,
+                    action: Action::Ctx(ActionCtx::AddToLibrary(preview)),
+                });
+            }
+
+            if let Some(ui) = ui_weak.upgrade() {
+                update_board_card_state(&ui, &id, Some(true), None);
+            }
+        }
+    });
+
+    ui.on_board_library_remove({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        move |id| {
+            let id = id.to_string();
+            runtime.dispatch(RuntimeAction {
+                field: None,
+                action: Action::Ctx(ActionCtx::RemoveFromLibrary(id.clone())),
+            });
+            if let Some(ui) = ui_weak.upgrade() {
+                update_board_card_state(&ui, &id, Some(false), None);
+            }
+        }
+    });
+
+    ui.on_board_watched_change({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        move |id, is_watched| {
+            let id = id.to_string();
+            runtime.dispatch(RuntimeAction {
+                field: None,
+                action: Action::Ctx(ActionCtx::LibraryItemMarkAsWatched {
+                    id: id.clone(),
+                    is_watched,
+                }),
+            });
+            if let Some(ui) = ui_weak.upgrade() {
+                update_board_card_state(&ui, &id, None, Some(is_watched));
+            }
+        }
+    });
+
     ui.on_board_see_all_continue_watching({
         let ui_weak = ui_weak.clone();
         move || {
@@ -284,6 +349,14 @@ pub fn sync(
             fingerprint.optional_str(catalog.name.as_deref());
         }
     }
+    let library_items = runtime.model().ok().map(|m| m.ctx.library.items.clone());
+    if let Some(lib) = library_items.as_ref() {
+        for (id, item) in lib {
+            fingerprint.str(id);
+            fingerprint.bool(item.watched());
+            fingerprint.bool(!item.removed);
+        }
+    }
     fingerprint_catalog_projection(&mut fingerprint, board);
     if !sync_fingerprint_changed(&LAST_SYNC_STATE, fingerprint.finish()) {
         return;
@@ -343,6 +416,7 @@ pub fn sync(
                             video_id: video_id.clone(),
                         })
                     }),
+                in_library: true,
             });
         }
         items
@@ -419,7 +493,7 @@ pub fn sync(
                 ))
                 .copied()
                 .unwrap_or(page.request.path.id.as_str());
-            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name) {
+            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name, library_items.as_ref()) {
                 board_sections.push(section);
             }
         }
@@ -508,10 +582,41 @@ fn section_data_fingerprint(section: &BoardSection) -> SyncFingerprint {
             fp.str(item.title.as_str());
             fp.str(item.poster_url.as_str());
             fp.bool(item.show_progress);
+            fp.bool(item.show_checkmark);
+            fp.bool(item.in_library);
             fp.usize(item.new_videos.max(0) as usize);
         }
     }
     fp.finish()
+}
+
+fn update_board_card_state(
+    ui: &MainWindow,
+    id: &str,
+    in_library: Option<bool>,
+    watched: Option<bool>,
+) {
+    let sections = ui.get_board_sections();
+    for section_idx in 0..sections.row_count() {
+        if let Some(section) = sections.row_data(section_idx) {
+            let items = section.items;
+            if let Some(vec_items) = items.as_any().downcast_ref::<slint::VecModel<MediaCardItem>>() {
+                for item_idx in 0..vec_items.row_count() {
+                    if let Some(mut card) = vec_items.row_data(item_idx) {
+                        if card.id == id {
+                            if let Some(in_lib) = in_library {
+                                card.in_library = in_lib;
+                            }
+                            if let Some(w) = watched {
+                                card.show_checkmark = w;
+                            }
+                            vec_items.set_row_data(item_idx, card);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn clear_sync_state() {

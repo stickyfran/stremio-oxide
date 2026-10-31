@@ -43,6 +43,7 @@ export component DiscoverPage inherits Rectangle {
     }
 
     in property <bool> has-preview: false;
+    in property <string> selected-id: "";
     in property <string> preview-title: "";
     in property <image> preview-logo;
     in property <string> preview-description: "";
@@ -309,6 +310,7 @@ export component DiscoverPage inherits Rectangle {
                         height: root.card-height;
                         unit: root.unit;
                         items: row.cols;
+                        selected-id: root.selected-id;
                         card-width: root.card-width;
                         card-height: root.card-height;
                         spacing: 0.5 * root.unit;

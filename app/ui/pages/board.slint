@@ -90,6 +90,9 @@ export component BoardPage inherits Rectangle {
     callback item-selected(string, string, string);
     callback play-clicked(string);
     callback remove-continue-watching(string);
+    callback library-add(string);
+    callback library-remove(string);
+    callback watched-change(string, bool);
     callback see-all-continue-watching;
     callback see-all-clicked(int);
     callback catalog-visible(int);
@@ -167,9 +170,9 @@ export component BoardPage inherits Rectangle {
                 items: section.items;
                 show-close-button: section.is-continue-watching;
                 show-play-button: section.is-continue-watching;
-                library-context-menu: section.is-continue-watching;
+                library-context-menu: true;
                 continue-watching-context-menu: section.is-continue-watching;
-                show-watched-context-action: false;
+                show-watched-context-action: true;
                 enable-hover-preview: root.enable-hover-preview;
                 hover-preview-delay: root.hover-preview-delay;
                 hover-preview-requested(id, media-type, x, y, width, height) => {
@@ -192,7 +195,22 @@ export component BoardPage inherits Rectangle {
                 remove-clicked(id) => {
                     if (section.is-continue-watching) {
                         root.remove-continue-watching(id);
+                    } else {
+                        root.library-remove(id);
                     }
+                }
+                library-add-requested(id) => {
+                    root.library-add(id);
+                }
+                library-remove-requested(id) => {
+                    if (section.is-continue-watching) {
+                        root.remove-continue-watching(id);
+                    } else {
+                        root.library-remove(id);
+                    }
+                }
+                watched-change-requested(id, watched) => {
+                    root.watched-change(id, watched);
                 }
                 dismiss-clicked(id) => {
                     if (section.is-continue-watching) {

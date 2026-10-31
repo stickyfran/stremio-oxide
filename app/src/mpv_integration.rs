@@ -3503,12 +3503,25 @@ fn handle_event(
                 ) {
                     RecoveryDisposition::Scheduled | RecoveryDisposition::InFlight => {}
                     RecoveryDisposition::Exhausted | RecoveryDisposition::Unavailable => {
-                        show_player_error(
-                            ui,
-                            error.unwrap_or_else(|| {
-                                "Playback failed after retrying this source".to_owned()
-                            }),
-                        );
+                        let session_guard = lock_session(session);
+                        let maybe_yt_url = session_guard.url.clone();
+                        drop(session_guard);
+
+                        if let Some(yt_url) = maybe_yt_url.as_deref().filter(|u| u.contains("youtube.com") || u.contains("youtu.be")) {
+                            tracing::warn!(url = %yt_url, "YouTube stream failed in MPV; opening fallback in web browser");
+                            let _ = open::that(yt_url);
+                            show_player_error(
+                                ui,
+                                "No se pudo reproducir el trailer directamente. Abriendo en el navegador web...".to_owned(),
+                            );
+                        } else {
+                            show_player_error(
+                                ui,
+                                error.unwrap_or_else(|| {
+                                    "Playback failed after retrying this source".to_owned()
+                                }),
+                            );
+                        }
                     }
                 }
             }

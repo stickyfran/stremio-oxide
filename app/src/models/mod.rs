@@ -322,6 +322,7 @@ pub(crate) fn project_catalog_section(
     catalog_index: usize,
     catalog: &Catalog<MetaItemPreview>,
     catalog_name: &str,
+    library: Option<&std::collections::HashMap<String, stremio_core::types::library::LibraryItem>>,
 ) -> Option<BoardSection> {
     let first_page = catalog.first()?;
     let request = &first_page.request;
@@ -349,7 +350,14 @@ pub(crate) fn project_catalog_section(
                     _ => "poster",
                 };
             }
-            cards.push(catalog_media_card(item));
+            let mut card = catalog_media_card(item);
+            if let Some(lib) = library {
+                if let Some(lib_item) = lib.get(&item.id) {
+                    card.in_library = !lib_item.removed;
+                    card.show_checkmark = lib_item.watched();
+                }
+            }
+            cards.push(card);
         }
     }
 
@@ -396,6 +404,7 @@ pub(crate) fn catalog_media_card(item: &MetaItemPreview) -> MediaCardItem {
         progress_value: 0.0,
         new_videos: 0,
         can_play: false,
+        in_library: false,
     }
 }
 

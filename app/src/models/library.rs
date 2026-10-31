@@ -267,6 +267,7 @@ pub fn setup(
             });
             if transition.changed {
                 ui.set_library_has_preview(true);
+                ui.set_library_preview_id(id.as_str().into());
                 if let Ok(model) = runtime.model() {
                     if let Some(item) = model.ctx.library.items.get(&id) {
                         ui.set_library_preview_title(item.name.as_str().into());
@@ -522,6 +523,7 @@ pub fn sync<F: LibraryFilter>(
                 can_play: item.state.video_id.as_ref().is_some_and(|video_id| {
                     has_saved_stream(&item.id, video_id)
                 }),
+                in_library: true,
             });
         }
         visible_items
@@ -588,6 +590,7 @@ pub fn sync<F: LibraryFilter>(
             media_id: media_id.clone(),
         });
         if transition.changed {
+            ui.set_library_preview_id(media_id.as_str().into());
             crate::models::details::load_meta_details_for_video(
                 runtime,
                 media_id,

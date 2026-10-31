@@ -215,6 +215,64 @@ export component MetaLinks inherits Rectangle {
     }
 }
 
+export component TrailerCardPreview inherits ButtonSurface {
+    in property <length> unit: Theme.root-font-size;
+    in property <string> title: @tr("Watch Trailer");
+
+    height: 5.5 * root.unit;
+    border-radius: Theme.border-radius;
+    background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
+    border-width: self.has-hover || self.has-focus ? Theme.focus-outline-size : 1px;
+    border-color: self.has-hover || self.has-focus ? Theme.accent : Theme.card-border;
+    accessible-name: root.title;
+
+    HorizontalLayout {
+        padding-left: 1.5 * root.unit;
+        padding-right: 1.5 * root.unit;
+        spacing: 1.25 * root.unit;
+        alignment: start;
+
+        Rectangle {
+            width: 3.5 * root.unit;
+            height: 3.5 * root.unit;
+            y: (parent.height - self.height) / 2;
+            border-radius: self.height / 2;
+            background: Theme.accent.with-alpha(0.2);
+            border-width: 1px;
+            border-color: Theme.accent;
+
+            Image {
+                x: (parent.width - self.width) / 2 + 1px;
+                y: (parent.height - self.height) / 2;
+                width: 1.6 * root.unit;
+                height: 1.6 * root.unit;
+                source: @image-url("../assets/images/icons/play.svg");
+                colorize: Theme.accent;
+                image-fit: contain;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 0.15 * root.unit;
+
+            Text {
+                text: root.title;
+                color: Theme.primary-foreground;
+                font-size: 1.1 * root.unit;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Text {
+                text: @tr("Official YouTube Trailer");
+                color: Theme.text-secondary;
+                font-size: 0.85 * root.unit;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 // Reusable metadata presentation shared by Discover, Details, and the player
 // drawer. Data normalization and URL policy remain in the Rust/controller layer.
 export component MetaPreview inherits Rectangle {
@@ -599,6 +657,12 @@ export component MetaPreview inherits Rectangle {
                     font-size: root.unit;
                     wrap: word-wrap;
                 }
+            }
+
+            if (!root.compact && root.show-trailer) : TrailerCardPreview {
+                width: parent.width;
+                unit: root.unit;
+                clicked => { root.trailer-requested(); }
             }
         }
     }

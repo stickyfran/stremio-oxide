@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { ButtonSurface } from "button.slint";
+import { SkeletonBlock } from "feedback.slint";
 
 export struct MediaCardItem {
     id: string,
@@ -14,6 +15,7 @@ export struct MediaCardItem {
     progress-value: float,
     new-videos: int,
     can-play: bool,
+    in-library: bool,
 }
 
 // Reusable MetaItem port. Page navigation and image loading remain callbacks;
@@ -46,6 +48,7 @@ export component MediaCard inherits Rectangle {
     callback context-requested(length, length);
     callback watched-change-requested(bool);
     callback library-remove-requested;
+    callback library-add-requested;
     callback dismiss-requested;
     callback poster-requested(string);
     // Window-space anchor geometry travels with the request so the floating
@@ -143,21 +146,38 @@ export component MediaCard inherits Rectangle {
                 activated => { root.watched-change-requested(!root.item.show-checkmark); }
             }
             if (!root.continue-watching-context-menu) : MenuItem {
-                title: @tr("Remove from Library");
-                activated => { root.library-remove-requested(); }
+                title: root.item.in-library ? @tr("Remove from Library") : @tr("Add to Library");
+                activated => {
+                    if (root.item.in-library) {
+                        root.library-remove-requested();
+                    } else {
+                        root.library-add-requested();
+                    }
+                }
             }
         }
     }
 
-    // CSS box-shadow equivalent: hollow 0.2rem stroke outline around the poster.
-    if (root.highlighted) : Rectangle {
-        x: root.unit - 0.2 * root.unit;
-        y: root.unit - 0.2 * root.unit;
-        width: root.poster-width + 0.4 * root.unit;
-        height: root.poster-height + 0.4 * root.unit;
-        border-radius: Theme.border-radius + 0.2 * root.unit;
-        border-width: 0.2 * root.unit;
-        border-color: Theme.primary-foreground;
+    // CSS box-shadow equivalent: persistent accent border when selected, subtle highlight when hovered.
+    if (root.selected) : Rectangle {
+        x: root.unit - 0.25 * root.unit;
+        y: root.unit - 0.25 * root.unit;
+        width: root.poster-width + 0.5 * root.unit;
+        height: root.poster-height + 0.5 * root.unit;
+        border-radius: Theme.border-radius + 0.25 * root.unit;
+        border-width: 0.25 * root.unit;
+        border-color: Theme.accent;
+        background: transparent;
+    }
+
+    if (card-button.has-hover && !root.selected) : Rectangle {
+        x: root.unit - 0.15 * root.unit;
+        y: root.unit - 0.15 * root.unit;
+        width: root.poster-width + 0.3 * root.unit;
+        height: root.poster-height + 0.3 * root.unit;
+        border-radius: Theme.border-radius + 0.15 * root.unit;
+        border-width: 0.15 * root.unit;
+        border-color: Theme.primary-foreground.with-alpha(0.65);
         background: transparent;
     }
 
@@ -172,6 +192,12 @@ export component MediaCard inherits Rectangle {
 
         property <bool> poster-ready: root.item.poster.width > 0
             && (!root.enable-lazy-loading || root.is-visible);
+
+        if (!poster-container.poster-ready) : SkeletonBlock {
+            width: parent.width;
+            height: parent.height;
+            radius: Theme.border-radius;
+        }
 
         Image {
             x: parent.width * 0.1;
