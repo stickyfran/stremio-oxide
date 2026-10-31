@@ -199,14 +199,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the Windows runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libmpv-windows-${{ inputs.gcc_arch }}
           path: winbuild/release/*.7z
 
       - name: Upload build logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libmpv-windows-logs
           path: winbuild/build_x86_64/**/*.log
@@ -310,7 +310,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the Linux runtime
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libmpv-linux-${{ inputs.gcc_arch }}
           path: libmpv-linux-x86_64-*.tar.zst
