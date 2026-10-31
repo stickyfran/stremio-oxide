@@ -63,6 +63,7 @@ echo Creating the portable application archive...
 set "PORTABLE_STAGE_DIR=%CD%\artifacts\stremio-oxide-portable"
 if exist "%PORTABLE_STAGE_DIR%" rmdir /s /q "%PORTABLE_STAGE_DIR%"
 mkdir "%PORTABLE_STAGE_DIR%"
+type nul > "%PORTABLE_STAGE_DIR%\.portable"
 if exist "%BUILD_ROOT%\stremio-oxide.exe" copy /y "%BUILD_ROOT%\stremio-oxide.exe" "%PORTABLE_STAGE_DIR%\" >nul
 if exist "%BUILD_ROOT%\stremio-native.exe" copy /y "%BUILD_ROOT%\stremio-native.exe" "%PORTABLE_STAGE_DIR%\" >nul
 if exist "%BUILD_ROOT%\libmpv-2.dll" copy /y "%BUILD_ROOT%\libmpv-2.dll" "%PORTABLE_STAGE_DIR%\" >nul

@@ -1,6 +1,6 @@
 [package]
 name = "stremio-native"
-version = "0.99.6"
+version = "0.99.7"
 authors = ["perpetus <perpetus.github@gmail.com>"]
 edition = "2024"
 license = "GPL-3.0-only"
@@ -56,6 +56,7 @@ hex = "0.4.3"
 open = "5.4.1"
 percent-encoding.workspace = true
 self_update.workspace = true
+sha2.workspace = true
 zip.workspace = true
 sys-locale.workspace = true
 uuid = { version = "1.24.0", features = ["v4"] }

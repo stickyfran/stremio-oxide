@@ -873,6 +873,7 @@ export component MainWindow inherits Window {
     in-out property <int> settings-update-action-kind: 0;
     in-out property <bool> settings-update-action-enabled: true;
     in-out property <bool> update-dialog-open: false;
+    in-out property <float> update-download-progress: 0.0;
     in-out property <bool> onboarding-dialog-open: false;
     in-out property <styled-text> onboarding-changelog-text;
     in-out property <string> update-dialog-version: "";
@@ -2966,95 +2967,8 @@ export component MainWindow inherits Window {
             }
         }
 
-        update-dialog := ModalDialog {
-            width: 100%;
-            height: 100%;
-            z: 2000;
-            unit: root.ui-unit;
-            open: root.update-dialog-open;
-            title: @tr("UPDATER_TITLE" => "A new version of Stremio is available");
-            dialog-width: 42 * root.ui-unit;
-            dialog-height: 34 * root.ui-unit;
-            actions: [
-                {
-                    id: "later",
-                    label: @tr("BUTTON_UPDATE_LATTER" => "Not now"),
-                    icon: @image-url("assets/images/icons/close.svg"),
-                    has-icon: false,
-                    enabled: !root.update-installing,
-                    primary: false,
-                },
-                {
-                    id: "install",
-                    label: root.update-installing
-                        ? @tr("Updating…")
-                        : (root.update-dialog-can-install
-                            ? @tr("UPDATER_INSTALL_BUTTON" => "Install now")
-                            : @tr("View on GitHub")),
-                    icon: @image-url("assets/images/icons/download.svg"),
-                    has-icon: true,
-                    enabled: !root.update-installing,
-                    primary: true,
-                },
-            ];
-            close-requested => {
-                if (!root.update-installing) {
-                    root.update-dialog-open = false;
-                    root.update-dismiss();
-                }
-            }
-            action-triggered(action) => {
-                if (action == "install") {
-                    root.update-install();
-                } else {
-                    root.update-dialog-open = false;
-                    root.update-dismiss();
-                }
-            }
+        // update-dialog reemplazado por la tarjeta squircle compacta abajo a la derecha
 
-            VerticalLayout {
-                spacing: root.ui-unit;
-
-                Text {
-                    text: @tr("Stremio v{} is ready to install", root.update-dialog-version);
-                    color: Theme.text-primary;
-                    font-size: 1.15 * root.ui-unit;
-                    font-weight: 700;
-                    wrap: word-wrap;
-                }
-
-                Rectangle {
-                    height: 1px;
-                    background: Theme.overlay;
-                }
-
-                ScrollView {
-                    vertical-stretch: 1;
-                    viewport-width: self.width;
-                    horizontal-scrollbar-policy: always-off;
-                    mouse-drag-pan-enabled: true;
-
-                    StyledText {
-                        width: parent.width;
-                        text: root.update-dialog-notes;
-                        default-color: Theme.text-primary;
-                        default-font-size: 0.9 * root.ui-unit;
-                    }
-                }
-
-                if (root.update-dialog-status-state != 0) : Text {
-                    text: root.update-dialog-status-state == 1
-                        ? @tr("Downloading Stremio v{}…", root.update-dialog-version)
-                        : (root.update-dialog-status-state == 2
-                            ? @tr("Could not open the GitHub release page.")
-                            : @tr("The update could not be downloaded or launched."));
-                    color: root.update-installing ? Theme.accent : Theme.danger;
-                    font-size: 0.85 * root.ui-unit;
-                    font-weight: 600;
-                    wrap: word-wrap;
-                }
-            }
-        }
 
         onboarding-dialog := OnboardingModal {
             width: 100%;
@@ -3124,92 +3038,166 @@ export component MainWindow inherits Window {
 
     }
 
-    // Floating non-intrusive update badge bottom-right
-    if ((root.settings-update-state == 2 || root.update-installing) && !root.updater-banner-dismissed && !root.effective-show-player) : Rectangle {
+    // Floating squircle non-intrusive update card bottom-right
+    if ((root.settings-update-state == 2 || root.update-installing || root.update-dialog-open) && !root.updater-banner-dismissed && !root.effective-show-player) : Rectangle {
         x: parent.width - self.width - 2 * root.ui-unit;
         y: parent.height - self.height - 2 * root.ui-unit;
-        z: 950;
-        height: 3.5 * root.ui-unit;
-        border-radius: Theme.border-radius;
+        z: 1900;
+        width: root.update-dialog-open ? 32 * root.ui-unit : 30 * root.ui-unit;
+        border-radius: 1.25 * root.ui-unit;
         background: Theme.card-background;
         border-width: 1px;
         border-color: Theme.accent.with-alpha(0.5);
-        drop-shadow-blur: 16px;
-        drop-shadow-color: #00000080;
-        drop-shadow-offset-y: 4px;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #000000a0;
+        drop-shadow-offset-y: 6px;
 
-        HorizontalLayout {
-            padding-left: 1.25 * root.ui-unit;
-            padding-right: 0.75 * root.ui-unit;
+        VerticalLayout {
+            padding: 1.25 * root.ui-unit;
             spacing: root.ui-unit;
-            alignment: center;
 
-            // Status indicator dot
-            Rectangle {
-                width: 0.65 * root.ui-unit;
-                height: 0.65 * root.ui-unit;
-                border-radius: 0.325 * root.ui-unit;
-                background: root.update-installing ? Theme.warning : Theme.accent;
-            }
+            // Header row
+            HorizontalLayout {
+                spacing: 0.75 * root.ui-unit;
+                alignment: center;
 
-            // Version text & info
-            TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.update-dialog-open = true;
+                // Status indicator dot
+                Rectangle {
+                    width: 0.65 * root.ui-unit;
+                    height: 0.65 * root.ui-unit;
+                    border-radius: 0.325 * root.ui-unit;
+                    background: root.update-installing ? Theme.warning : Theme.accent;
                 }
+
+                // Title and version
                 VerticalLayout {
-                    alignment: center;
+                    horizontal-stretch: 1;
                     spacing: 2px;
                     Text {
                         text: root.update-installing
                             ? @tr("Actualizando Stremio…")
                             : @tr("Actualización disponible");
                         color: Theme.text-primary;
-                        font-size: 0.85 * root.ui-unit;
+                        font-size: 0.9 * root.ui-unit;
                         font-weight: 700;
                     }
                     Text {
                         text: root.update-installing
-                            ? @tr("Descargando v{}…", root.settings-update-version)
-                            : "v" + root.settings-update-version + " • " + @tr("Ver notas");
+                            ? @tr("Descargando e instalando v{}…", root.settings-update-version)
+                            : "v" + root.settings-update-version;
                         color: Theme.text-muted;
-                        font-size: 0.72 * root.ui-unit;
+                        font-size: 0.75 * root.ui-unit;
+                    }
+                }
+
+                // Expand / Collapse notes button
+                if (!root.update-installing) : PillButton {
+                    height: 2.2 * root.ui-unit;
+                    unit: root.ui-unit;
+                    label: root.update-dialog-open ? @tr("Menos") : @tr("Notas");
+                    surface-color: Theme.overlay;
+                    accent-color: Theme.text-primary;
+                    clicked => {
+                        root.update-dialog-open = !root.update-dialog-open;
+                    }
+                }
+
+                // Dismiss button
+                if (!root.update-installing) : IconAction {
+                    width: 2.2 * root.ui-unit;
+                    height: 2.2 * root.ui-unit;
+                    unit: root.ui-unit;
+                    icon-source: @image-url("assets/images/icons/close.svg");
+                    accessible-name: @tr("BUTTON_CLOSE" => "Close");
+                    clicked => {
+                        root.update-dialog-open = false;
+                        root.updater-banner-dismissed = true;
                     }
                 }
             }
 
-            // Separator
-            Rectangle {
-                width: 1px;
-                height: 2 * root.ui-unit;
-                background: Theme.divider;
-            }
+            // Expanded release notes area
+            if (root.update-dialog-open && !root.update-installing) : VerticalLayout {
+                spacing: 0.75 * root.ui-unit;
 
-            // Action button
-            PillButton {
-                height: 2.3 * root.ui-unit;
-                unit: root.ui-unit;
-                label: root.update-installing
-                    ? @tr("Descargando…")
-                    : (root.update-dialog-can-install ? @tr("Actualizar") : @tr("Ver"));
-                surface-color: root.update-installing ? Theme.overlay : Theme.accent;
-                accent-color: root.update-installing ? Theme.text-muted : Theme.primary-foreground;
-                enabled: !root.update-installing;
-                clicked => {
-                    root.update-install();
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+
+                ScrollView {
+                    height: 14 * root.ui-unit;
+                    viewport-width: self.width;
+                    horizontal-scrollbar-policy: always-off;
+                    mouse-drag-pan-enabled: true;
+
+                    StyledText {
+                        width: parent.width;
+                        text: root.update-dialog-notes;
+                        default-color: Theme.text-primary;
+                        default-font-size: 0.82 * root.ui-unit;
+                    }
                 }
             }
 
-            // Dismiss button
-            IconAction {
-                width: 2.2 * root.ui-unit;
-                height: 2.2 * root.ui-unit;
-                unit: root.ui-unit;
-                icon-source: @image-url("assets/images/icons/close.svg");
-                accessible-name: @tr("BUTTON_CLOSE" => "Close");
-                clicked => {
-                    root.updater-banner-dismissed = true;
+            // Download Progress Bar during install
+            if (root.update-installing) : VerticalLayout {
+                spacing: 0.5 * root.ui-unit;
+
+                Rectangle {
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Theme.overlay;
+                    clip: true;
+
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        width: parent.width * max(0.05, min(1.0, root.update-download-progress));
+                        height: 100%;
+                        border-radius: 3px;
+                        background: Theme.accent;
+                    }
+                }
+
+                Text {
+                    text: root.update-download-progress > 0.0
+                        ? round(root.update-download-progress * 100) + "%"
+                        : @tr("Preparando descarga…");
+                    color: Theme.text-muted;
+                    font-size: 0.72 * root.ui-unit;
+                    horizontal-alignment: right;
+                }
+            }
+
+            // Error display if failed
+            if (root.update-dialog-status-state == 2 || root.update-dialog-status-state == 3) : Text {
+                text: root.update-dialog-status-state == 2
+                    ? @tr("Could not open the GitHub release page.")
+                    : @tr("The update could not be downloaded or verified.");
+                color: Theme.danger;
+                font-size: 0.8 * root.ui-unit;
+                font-weight: 600;
+                wrap: word-wrap;
+            }
+
+            // Bottom Actions row
+            HorizontalLayout {
+                spacing: 0.75 * root.ui-unit;
+                alignment: end;
+
+                PillButton {
+                    height: 2.4 * root.ui-unit;
+                    unit: root.ui-unit;
+                    label: root.update-installing
+                        ? @tr("Instalando…")
+                        : (root.update-dialog-can-install ? @tr("Actualizar ahora") : @tr("Ver en GitHub"));
+                    surface-color: root.update-installing ? Theme.overlay : Theme.accent;
+                    accent-color: root.update-installing ? Theme.text-muted : Theme.primary-foreground;
+                    enabled: !root.update-installing;
+                    clicked => {
+                        root.update-install();
+                    }
                 }
             }
         }

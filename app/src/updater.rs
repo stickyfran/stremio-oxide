@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -145,11 +145,34 @@ pub(crate) fn installer_handoff() -> (InstallerRequest, InstallerLauncher) {
     (InstallerRequest(sender), InstallerLauncher(receiver))
 }
 
+fn cleanup_old_backups() {
+    if let Ok(exe) = std::env::current_exe() {
+        let target_exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        if let Some(parent) = target_exe.parent() {
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.starts_with(".stremio-oxide.old-")
+                            || name.starts_with(".stremio-native.old-")
+                            || name.starts_with(".libmpv-2.old-")
+                        {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn setup(
     ui: &MainWindow,
     tray: Option<&tray::Tray>,
     installer_request: InstallerRequest,
 ) -> UpdaterHandle {
+    cleanup_old_backups();
+
     ui.set_settings_update_state(SettingsUpdateState::Current as i32);
     ui.set_settings_update_version(env!("CARGO_PKG_VERSION").into());
     ui.set_settings_update_action_kind(SettingsUpdateAction::CheckNow as i32);
@@ -329,7 +352,7 @@ impl Updater {
         project_installing(views.clone(), &update.release.version);
         let version = update.release.version.clone();
         let release = update.release.clone();
-        let result = perform_update(&version, &release)
+        let result = perform_update(&version, &release, &views)
             .await
             .and_then(|target| self.installer_request.queue(target));
 
@@ -416,14 +439,32 @@ fn is_portable_instance() -> bool {
     false
 }
 
+fn resolve_asset_download_url(version: &str, asset_name: &str, default_url: &str) -> String {
+    if default_url.contains("github.com") && default_url.contains("/releases/download/") {
+        default_url.to_string()
+    } else {
+        let tag = canonical_release_tag(version);
+        format!(
+            "https://github.com/{REPOSITORY_OWNER}/{REPOSITORY_NAME}/releases/download/{tag}/{asset_name}"
+        )
+    }
+}
+
 fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
         for asset in &release.assets {
             let name = asset.name.to_lowercase();
-            if name.contains("x86_64") && name.contains("linux-gnu") {
+            if (name.contains("x86_64") || name.contains("amd64") || name.contains("x64"))
+                && (name.contains("linux-gnu")
+                    || (name.contains("linux")
+                        && !name.ends_with(".deb")
+                        && !name.ends_with(".rpm")
+                        && !name.ends_with(".tar.gz")
+                        && !name.ends_with(".zip")))
+            {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::LinuxBinary,
                 });
@@ -435,9 +476,16 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
     {
         for asset in &release.assets {
             let name = asset.name.to_lowercase();
-            if (name.contains("aarch64") || name.contains("arm64")) && name.contains("linux-gnu") {
+            if (name.contains("aarch64") || name.contains("arm64"))
+                && (name.contains("linux-gnu")
+                    || (name.contains("linux")
+                        && !name.ends_with(".deb")
+                        && !name.ends_with(".rpm")
+                        && !name.ends_with(".tar.gz")
+                        && !name.ends_with(".zip")))
+            {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::LinuxBinary,
                 });
@@ -450,10 +498,10 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
         if is_portable_instance() {
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                n.contains("windows-x64") && n.ends_with(".zip")
+                (n.contains("windows-x64") || n.contains("win64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -461,22 +509,22 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
         } else {
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup"))
-                    && n.contains("x64")
+                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup") || n.contains("setup"))
+                    && (n.contains("x64") || n.contains("win64") || n.contains("windows"))
                     && n.ends_with(".exe")
             }) {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsInstaller,
                 });
             }
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                n.contains("windows-x64") && n.ends_with(".zip")
+                (n.contains("windows-x64") || n.contains("win64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -489,10 +537,10 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
         if is_portable_instance() {
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                n.contains("windows-arm64") && n.ends_with(".zip")
+                (n.contains("windows-arm64") || n.contains("win-arm64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -500,22 +548,22 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
         } else {
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup"))
+                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup") || n.contains("setup"))
                     && (n.contains("arm64") || n.contains("aarch64"))
                     && n.ends_with(".exe")
             }) {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsInstaller,
                 });
             }
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                n.contains("windows-arm64") && n.ends_with(".zip")
+                (n.contains("windows-arm64") || n.contains("win-arm64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -529,7 +577,7 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
             let name = asset.name.to_lowercase();
             if name.contains("macos") && (name.ends_with(".tar.gz") || name.ends_with(".tgz")) {
                 return Some(MatchedAsset {
-                    download_url: asset.download_url.clone(),
+                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::MacTarGz,
                 });
@@ -550,6 +598,20 @@ fn can_install_update(release: &Release) -> bool {
         if let Ok(exe) = std::env::current_exe() {
             let target_exe = std::fs::canonicalize(&exe).unwrap_or(exe);
             if let Some(parent) = target_exe.parent() {
+                // If it's located in system directories like /usr/bin or /bin,
+                // and the current user has no write permissions, do not attempt in-place overwrite.
+                let parent_str = parent.to_string_lossy();
+                if parent_str.starts_with("/usr") || parent_str == "/bin" {
+                    let probe = parent.join(format!(".stremio_probe_{}", std::process::id()));
+                    if let Ok(file) = std::fs::File::create(&probe) {
+                        drop(file);
+                        let _ = std::fs::remove_file(probe);
+                        return true;
+                    }
+                    return false;
+                }
+
+                // Check directory write permissions for user locations
                 let probe = parent.join(format!(".stremio_probe_{}", std::process::id()));
                 if let Ok(file) = std::fs::File::create(&probe) {
                     drop(file);
@@ -563,11 +625,181 @@ fn can_install_update(release: &Release) -> bool {
 
     #[cfg(windows)]
     {
+        if is_portable_instance() {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(parent) = exe.parent() {
+                    let probe = parent.join(format!(".stremio_probe_{}", std::process::id()));
+                    if let Ok(file) = std::fs::File::create(&probe) {
+                        drop(file);
+                        let _ = std::fs::remove_file(probe);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
         true
     }
 }
 
-async fn perform_update(version: &str, release: &Release) -> Result<PathBuf> {
+fn verify_asset_integrity(path: &Path, kind: PlatformAssetKind) -> Result<()> {
+    let metadata = std::fs::metadata(path).context("failed to read asset metadata")?;
+    let len = metadata.len();
+
+    // Reject anything smaller than 1 MB as a corrupted/truncated payload or error message
+    if len < 1_048_576 {
+        let preview = std::fs::read_to_string(path).unwrap_or_default();
+        let snippet = preview.chars().take(200).collect::<String>();
+        bail!(
+            "Downloaded file is suspiciously small ({} bytes). Expected > 1 MB. Content preview: {:?}",
+            len,
+            snippet
+        );
+    }
+
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).context("failed to open staged file for verification")?;
+    let mut header = [0u8; 16];
+    let read_bytes = file.read(&mut header).context("failed to read header")?;
+    if read_bytes < 4 {
+        bail!("Downloaded file is truncated (< 4 bytes)");
+    }
+
+    // Check for JSON '{' or HTML '<'
+    if header[0] == b'{' || header[0] == b'<' {
+        let snippet = String::from_utf8_lossy(&header);
+        bail!("Downloaded asset is text/HTML/JSON instead of binary: {}", snippet);
+    }
+
+    match kind {
+        PlatformAssetKind::LinuxBinary => {
+            // ELF magic header: 0x7F 'E' 'L' 'F'
+            if &header[0..4] != [0x7f, b'E', b'L', b'F'] {
+                bail!("Invalid Linux binary: missing ELF magic header");
+            }
+        }
+        PlatformAssetKind::WindowsInstaller => {
+            // PE/MZ executable: 'M' 'Z'
+            if &header[0..2] != [b'M', b'Z'] {
+                bail!("Invalid Windows executable: missing MZ magic header");
+            }
+        }
+        PlatformAssetKind::WindowsZip => {
+            // ZIP magic header: 'P' 'K' 0x03 0x04
+            if &header[0..4] != [b'P', b'K', 0x03, 0x04] {
+                bail!("Invalid Windows archive: missing PK zip header");
+            }
+        }
+        PlatformAssetKind::MacTarGz => {
+            // Gzip magic header: 0x1F 0x8B
+            if &header[0..2] != [0x1f, 0x8b] {
+                bail!("Invalid macOS archive: missing gzip header");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn verify_sha256_if_available(
+    client: &reqwest::Client,
+    release: &Release,
+    asset_name: &str,
+    file_path: &Path,
+) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
+
+    let checksum_asset = release.assets.iter().find(|a| {
+        let n = a.name.to_lowercase();
+        n == "sha256sums.txt" || n == "checksums.txt" || n == format!("{}.sha256", asset_name.to_lowercase())
+    });
+
+    let Some(chk_asset) = checksum_asset else {
+        tracing::debug!("No checksum manifest found in release; skipping SHA-256 validation");
+        return Ok(());
+    };
+
+    let chk_url = resolve_asset_download_url(&release.version, &chk_asset.name, &chk_asset.download_url);
+    let Ok(resp) = client
+        .get(&chk_url)
+        .header(reqwest::header::ACCEPT, "text/plain, application/octet-stream")
+        .send()
+        .await
+    else {
+        tracing::warn!("Failed to fetch checksum file from {}", chk_url);
+        return Ok(());
+    };
+
+    if !resp.status().is_success() {
+        tracing::warn!("Checksum file request returned status {}", resp.status());
+        return Ok(());
+    }
+
+    let Ok(text) = resp.text().await else {
+        return Ok(());
+    };
+
+    let mut file = tokio::fs::File::open(file_path)
+        .await
+        .context("failed to open file for SHA-256 computation")?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    loop {
+        let n = file
+            .read(&mut buffer)
+            .await
+            .context("failed reading file for hash")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    let calculated_hash = format!("{:x}", hasher.finalize());
+
+    let mut found_expected_hash: Option<String> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+        if parts.len() == 1 && chk_asset.name.ends_with(".sha256") {
+            found_expected_hash = Some(parts[0].to_lowercase());
+            break;
+        }
+        if parts.len() >= 2 {
+            let fname = parts[1].trim_start_matches('*');
+            if fname.eq_ignore_ascii_case(asset_name) {
+                found_expected_hash = Some(parts[0].to_lowercase());
+                break;
+            }
+        }
+    }
+
+    if let Some(expected_hash) = found_expected_hash {
+        if calculated_hash.to_lowercase() != expected_hash {
+            bail!(
+                "SHA-256 verification failed for {}: expected {}, computed {}",
+                asset_name,
+                expected_hash,
+                calculated_hash
+            );
+        }
+        tracing::info!(
+            asset = %asset_name,
+            hash = %calculated_hash,
+            "SHA-256 checksum verified successfully"
+        );
+    }
+
+    Ok(())
+}
+
+async fn perform_update(version: &str, release: &Release, views: &UpdateViews) -> Result<PathBuf> {
     let matched = find_platform_asset(release)
         .context("no compatible release asset found for this platform")?;
 
@@ -597,11 +829,16 @@ async fn perform_update(version: &str, release: &Release) -> Result<PathBuf> {
 
     let response = client
         .get(&download_url)
+        .header(reqwest::header::ACCEPT, "application/octet-stream")
         .send()
         .await
         .context("failed to send download request to GitHub")?
         .error_for_status()
         .context("GitHub download returned error status")?;
+
+    let total_size = response.content_length();
+    let mut downloaded_bytes: u64 = 0;
+    let mut last_progress_report = std::time::Instant::now();
 
     let mut dest_file = tokio::fs::File::create(&staged_file)
         .await
@@ -614,9 +851,26 @@ async fn perform_update(version: &str, release: &Release) -> Result<PathBuf> {
         tokio::io::AsyncWriteExt::write_all(&mut dest_file, &chunk)
             .await
             .context("failed writing chunk to staged file")?;
+
+        downloaded_bytes += chunk.len() as u64;
+        if let Some(total) = total_size {
+            if total > 0 && last_progress_report.elapsed() > Duration::from_millis(100) {
+                let progress = (downloaded_bytes as f32 / total as f32).clamp(0.0, 1.0);
+                project_download_progress(views, progress);
+                last_progress_report = std::time::Instant::now();
+            }
+        }
     }
     tokio::io::AsyncWriteExt::flush(&mut dest_file).await?;
     drop(dest_file);
+    project_download_progress(views, 1.0);
+
+    // Verify minimum size and magic bytes
+    verify_asset_integrity(&staged_file, matched.kind)
+        .with_context(|| format!("asset integrity verification failed for {}", asset_name))?;
+
+    // Verify SHA-256 checksum manifest if provided by the release
+    verify_sha256_if_available(&client, release, &asset_name, &staged_file).await?;
 
     match matched.kind {
         PlatformAssetKind::LinuxBinary => {
@@ -687,6 +941,9 @@ async fn perform_update(version: &str, release: &Release) -> Result<PathBuf> {
                     }
                 }
                 let new_bin = found_bin.context("extracted zip did not contain stremio-oxide.exe or stremio-native.exe")?;
+
+                // Verify magic bytes of the extracted executable
+                verify_asset_integrity(&new_bin, PlatformAssetKind::WindowsInstaller)?;
 
                 let temp_backup = parent.join(format!(".stremio-oxide.old-{}.exe", std::process::id()));
                 self_update::Move::from_source(&new_bin)
@@ -759,7 +1016,7 @@ async fn perform_update(version: &str, release: &Release) -> Result<PathBuf> {
     }
 }
 
-fn launch_installer(target: &std::path::Path) -> Result<()> {
+fn launch_installer(target: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -881,6 +1138,7 @@ fn project_available_update(views: UpdateViews, update: AvailableUpdate, kind: C
             ui.set_update_dialog_can_install(can_install);
             ui.set_update_dialog_status_state(DialogStatus::None as i32);
             ui.set_update_installing(false);
+            ui.set_update_download_progress(0.0);
             if open_dialog {
                 ui.set_update_dialog_open(true);
             }
@@ -898,10 +1156,20 @@ fn project_installing(views: UpdateViews, version: &str) {
         if let Some(ui) = views.ui.upgrade() {
             ui.set_update_dialog_version(version.into());
             ui.set_update_installing(true);
+            ui.set_update_download_progress(0.0);
             ui.set_update_dialog_status_state(DialogStatus::Downloading as i32);
         }
         if let Some(tray) = views.tray.as_ref() {
             tray.set_update_installing(true);
+        }
+    });
+}
+
+fn project_download_progress(views: &UpdateViews, progress: f32) {
+    let views = views.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = views.ui.upgrade() {
+            ui.set_update_download_progress(progress);
         }
     });
 }
@@ -960,6 +1228,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_asset_download_url_prefers_direct_releases_format() {
+        let direct = resolve_asset_download_url(
+            "0.99.7",
+            "stremio-oxide-linux",
+            "https://api.github.com/repos/stickyfran/stremio-oxide/releases/assets/12345",
+        );
+        assert_eq!(
+            direct,
+            "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.7/stremio-oxide-linux"
+        );
+    }
+
+    #[test]
     fn updater_targets_the_published_repository() {
         assert_eq!(REPOSITORY_OWNER, "stickyfran");
         assert_eq!(REPOSITORY_NAME, "stremio-oxide");
@@ -1012,5 +1293,32 @@ mod tests {
 
         let matched = find_platform_asset(&release);
         assert!(matched.is_some(), "should match the current platform asset");
+    }
+
+    #[test]
+    fn verify_asset_integrity_rejects_json_and_tiny_files() {
+        let temp_dir = std::env::temp_dir();
+        let json_file = temp_dir.join("test_update_fake.json");
+        std::fs::write(&json_file, r#"{"message": "Not Found"}"#).unwrap();
+
+        let res = verify_asset_integrity(&json_file, PlatformAssetKind::LinuxBinary);
+        assert!(res.is_err(), "should reject tiny json files");
+        let _ = std::fs::remove_file(json_file);
+    }
+
+    #[test]
+    fn verify_asset_integrity_accepts_valid_elf_header() {
+        let temp_dir = std::env::temp_dir();
+        let elf_file = temp_dir.join("test_update_valid.elf");
+        let mut data = vec![0u8; 1_048_576 + 10]; // > 1 MB
+        data[0] = 0x7f;
+        data[1] = b'E';
+        data[2] = b'L';
+        data[3] = b'F';
+        std::fs::write(&elf_file, &data).unwrap();
+
+        let res = verify_asset_integrity(&elf_file, PlatformAssetKind::LinuxBinary);
+        assert!(res.is_ok(), "should accept valid elf file");
+        let _ = std::fs::remove_file(elf_file);
     }
 }
