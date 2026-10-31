@@ -1103,9 +1103,7 @@ pub fn setup(
     // Shutdown streaming server callback
     ui.on_shutdown_server(move || {
         tracing::info!("Closing the app and streaming server...");
-        if let Err(error) = slint::quit_event_loop() {
-            tracing::error!(%error, "failed to stop the UI event loop");
-        }
+        crate::tray::request_application_quit();
     });
 
     // Hardware acceleration toggle callback

@@ -267,6 +267,7 @@ async fn run_app(
     ui.set_loading(true);
     let os_media_session = Arc::new(media_session::MediaSession::for_window(&ui));
     shortcuts::install_platform_shortcuts(&ui, os_media_session.clone());
+    tray::install_close_handler(&ui);
 
     // Request the native window before scheduling any optional shell service or
     // application-engine work. The event loop below owns first-paint priority.
@@ -377,14 +378,17 @@ async fn run_app(
 }
 
 /// Terminates the process after `grace` even if orderly shutdown stalls.
-fn spawn_exit_watchdog(grace: Duration) {
-    let _ = std::thread::Builder::new()
-        .name("exit-watchdog".into())
-        .spawn(move || {
-            std::thread::sleep(grace);
-            tracing::warn!("orderly shutdown exceeded its grace period; forcing process exit");
-            std::process::exit(0);
-        });
+pub(crate) fn spawn_exit_watchdog(grace: Duration) {
+    static WATCHDOG_STARTED: std::sync::Once = std::sync::Once::new();
+    WATCHDOG_STARTED.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("exit-watchdog".into())
+            .spawn(move || {
+                std::thread::sleep(grace);
+                tracing::warn!("orderly shutdown exceeded its grace period; forcing process exit");
+                std::process::exit(0);
+            });
+    });
 }
 
 struct AppSession {

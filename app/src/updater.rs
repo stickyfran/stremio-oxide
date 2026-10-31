@@ -339,9 +339,7 @@ impl Updater {
                     version = %update.release.version,
                     "application updated / staged; shutting down before restart"
                 );
-                let _ = slint::invoke_from_event_loop(|| {
-                    let _ = slint::quit_event_loop();
-                });
+                crate::tray::request_application_quit();
             }
             Err(error) => {
                 tracing::error!(%error, "application update failed");

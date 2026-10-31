@@ -12,11 +12,15 @@ mod platform;
 #[path = "tray/windows.rs"]
 mod platform;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use slint::{
     CloseRequestResponse, ComponentHandle, SharedString, Weak, winit_030::WinitWindowAccessor,
 };
 
 use crate::{MainWindow, NavigationController, NavigationIntent, Tab};
+
+static TRAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 /// The live tray. Dropping it removes the icon from the notification area.
 pub struct Tray(platform::Tray);
@@ -39,6 +43,7 @@ pub(crate) struct TrayActions {
 pub fn setup(ui: &MainWindow, navigation: &NavigationController) -> anyhow::Result<Tray> {
     install_close_handler(ui);
     let tray = platform::create(TrayActions::new(ui, navigation))?;
+    TRAY_AVAILABLE.store(true, Ordering::Release);
     tracing::info!("system tray initialized");
     Ok(Tray(tray))
 }
@@ -98,20 +103,25 @@ impl TrayActions {
             }),
             quit: Box::new(|| {
                 tracing::info!("quit requested from the system tray");
-                let _ = slint::invoke_from_event_loop(|| {
-                    if let Err(error) = slint::quit_event_loop() {
-                        tracing::warn!(%error, "failed to request UI event-loop shutdown from event loop");
-                    }
-                });
-                if let Err(error) = slint::quit_event_loop() {
-                    tracing::warn!(%error, "failed to request UI event-loop shutdown");
-                }
+                request_application_quit();
             }),
         }
     }
 }
 
-fn install_close_handler(ui: &MainWindow) {
+pub(crate) fn request_application_quit() {
+    crate::spawn_exit_watchdog(std::time::Duration::from_secs(6));
+    let _ = slint::invoke_from_event_loop(|| {
+        if let Err(error) = slint::quit_event_loop() {
+            tracing::warn!(%error, "failed to request UI event-loop shutdown from event loop");
+        }
+    });
+    if let Err(error) = slint::quit_event_loop() {
+        tracing::warn!(%error, "failed to request UI event-loop shutdown");
+    }
+}
+
+pub(crate) fn install_close_handler(ui: &MainWindow) {
     let ui_weak = ui.as_weak();
     ui.window().on_close_requested(move || {
         if let Some(ui) = ui_weak.upgrade() {
@@ -124,16 +134,22 @@ fn install_close_handler(ui: &MainWindow) {
         }
         let quit_on_close = ui_weak
             .upgrade()
-            .is_some_and(|ui| ui.get_settings_quit_on_close());
-        if quit_on_close {
-            tracing::info!("main window close requested application shutdown");
-            if let Err(error) = slint::quit_event_loop() {
-                tracing::warn!(%error, "failed to request UI event-loop shutdown");
+            .map_or(true, |ui| ui.get_settings_quit_on_close());
+        let tray_available = TRAY_AVAILABLE.load(Ordering::Acquire);
+        if quit_on_close || !tray_available {
+            if !quit_on_close {
+                tracing::warn!(
+                    "main window close requested with quit_on_close=false, but system tray is unavailable; shutting down"
+                );
+            } else {
+                tracing::info!("main window close requested application shutdown");
             }
+            request_application_quit();
+            CloseRequestResponse::KeepWindowShown
         } else {
             tracing::info!("main window closed to the system tray");
+            CloseRequestResponse::HideWindow
         }
-        CloseRequestResponse::HideWindow
     });
 }
 
