@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -135,7 +136,8 @@ impl LocalLibraryManager {
     pub async fn scan(&self, root: LocalRoot) -> Result<Vec<LocalMediaItem>, LocalLibraryError> {
         let progress = self.progress.clone();
         let root_for_scan = root.clone();
-        let items = tokio::task::spawn_blocking(move || scan_root(&root_for_scan, &progress))
+        let existing = list_items_for_root(&root.id).await.unwrap_or_default();
+        let items = tokio::task::spawn_blocking(move || scan_root(&root_for_scan, &progress, existing))
             .await
             .map_err(|_| LocalLibraryError::Scan)??;
         persist_scan(&root, &items).await?;
@@ -156,8 +158,32 @@ impl LocalLibraryManager {
         );
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if event.is_ok() {
-                    let _ = events_tx.try_send(());
+                if let Ok(event) = event {
+                    use notify::EventKind;
+                    let is_relevant = match event.kind {
+                        EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(_) => {
+                            if event.paths.is_empty() {
+                                true
+                            } else {
+                                event.paths.iter().any(|path| {
+                                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                                        matches!(
+                                            ext.to_ascii_lowercase().as_str(),
+                                            "mkv" | "mp4" | "avi" | "mov" | "wmv" | "webm" | "m4v"
+                                                | "ts" | "m2ts" | "srt" | "ass" | "ssa"
+                                                | "vtt" | "sub" | "nfo"
+                                        )
+                                    } else {
+                                        true
+                                    }
+                                })
+                            }
+                        }
+                        _ => false,
+                    };
+                    if is_relevant {
+                        let _ = events_tx.try_send(());
+                    }
                 }
             })
             .map_err(|_| LocalLibraryError::Watcher)?;
@@ -318,6 +344,67 @@ pub async fn list_items() -> Result<Vec<LocalMediaItem>, LocalLibraryError> {
             subtitles: Vec::new(),
             metadata: serde_json::from_str(&metadata_json).unwrap_or_default(),
         });
+    }
+    Ok(items)
+}
+
+pub async fn list_items_for_root(root_id: &str) -> Result<HashMap<PathBuf, LocalMediaItem>, LocalLibraryError> {
+    let conn = crate::db::get_conn()
+        .await
+        .map_err(|_| LocalLibraryError::Database)?;
+    let mut rows = conn
+        .query(
+            "SELECT id, root_id, path, size_bytes, modified_at, fingerprint,
+                    media_type, title, season, episode, metadata_json
+             FROM local_media_items WHERE root_id = ?",
+            [root_id],
+        )
+        .await
+        .map_err(|_| LocalLibraryError::Database)?;
+    let mut items = HashMap::new();
+    while let Some(row) = rows.next().await.map_err(|_| LocalLibraryError::Database)? {
+        let path = PathBuf::from(
+            row.get::<String>(2)
+                .map_err(|_| LocalLibraryError::Database)?,
+        );
+        let media_type = match row
+            .get::<String>(6)
+            .map_err(|_| LocalLibraryError::Database)?
+            .as_str()
+        {
+            "movie" => LocalMediaType::Movie,
+            "episode" => LocalMediaType::Episode,
+            _ => LocalMediaType::Unknown,
+        };
+        let metadata_json = row
+            .get::<String>(10)
+            .map_err(|_| LocalLibraryError::Database)?;
+        items.insert(
+            path.clone(),
+            LocalMediaItem {
+                id: row.get(0).map_err(|_| LocalLibraryError::Database)?,
+                root_id: row.get(1).map_err(|_| LocalLibraryError::Database)?,
+                path,
+                size_bytes: row
+                    .get::<i64>(3)
+                    .map_err(|_| LocalLibraryError::Database)?
+                    .max(0) as u64,
+                modified_at: row.get(4).map_err(|_| LocalLibraryError::Database)?,
+                fingerprint: row.get(5).map_err(|_| LocalLibraryError::Database)?,
+                media_type,
+                title: row.get(7).map_err(|_| LocalLibraryError::Database)?,
+                season: row
+                    .get::<Option<i64>>(8)
+                    .map_err(|_| LocalLibraryError::Database)?
+                    .and_then(|value| u32::try_from(value).ok()),
+                episode: row
+                    .get::<Option<i64>>(9)
+                    .map_err(|_| LocalLibraryError::Database)?
+                    .and_then(|value| u32::try_from(value).ok()),
+                subtitles: Vec::new(),
+                metadata: serde_json::from_str(&metadata_json).unwrap_or_default(),
+            },
+        );
     }
     Ok(items)
 }
@@ -534,6 +621,7 @@ pub fn setup(
 fn scan_root(
     root: &LocalRoot,
     progress: &watch::Sender<ScanProgress>,
+    existing: HashMap<PathBuf, LocalMediaItem>,
 ) -> Result<Vec<LocalMediaItem>, LocalLibraryError> {
     let walker = WalkDir::new(&root.path)
         .follow_links(false)
@@ -553,7 +641,37 @@ fn scan_root(
         if !is_video(path) {
             continue;
         }
-        items.push(inspect_media_file(root, path)?);
+
+        let fast_matched = if let Some(old) = existing.get(path) {
+            if let Ok(meta) = path.metadata() {
+                let size_bytes = meta.len();
+                let modified_at = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or_default();
+                let mtime_diff = (old.modified_at - modified_at).abs();
+                if old.size_bytes == size_bytes && mtime_diff <= 2 {
+                    let mut preserved = old.clone();
+                    preserved.subtitles = discover_subtitles(path);
+                    Some(preserved)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(item) = fast_matched {
+            items.push(item);
+        } else {
+            items.push(inspect_media_file(root, path)?);
+        }
+
         if visited.is_multiple_of(32) {
             let _ = progress.send(ScanProgress {
                 root_id: root.id.clone(),

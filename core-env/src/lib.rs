@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use futures::{FutureExt, future};
 use http::Request;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -30,6 +30,9 @@ const SEQUENTIAL_QUEUE_CAPACITY: usize = 64;
 const SEQUENTIAL_WORKER_STACK_BYTES: usize = 512 * 1024;
 static SEQUENTIAL_EXECUTOR: OnceLock<SyncSender<SequentialFuture>> = OnceLock::new();
 static SEQUENTIAL_SATURATED: AtomicBool = AtomicBool::new(false);
+static SEQUENTIAL_OVERFLOW: LazyLock<Mutex<VecDeque<SequentialFuture>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static FLUSHER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 static PENDING_STORAGE_WRITES: OnceLock<Mutex<HashMap<(String, String), String>>> = OnceLock::new();
 static LAST_STORAGE_FLUSH: OnceLock<Mutex<HashMap<(String, String), Instant>>> = OnceLock::new();
@@ -95,18 +98,59 @@ fn run_sequential(handle: &Handle, receiver: Receiver<SequentialFuture>) {
     }
 }
 
+fn ensure_flusher_running(sender: &SyncSender<SequentialFuture>) {
+    if FLUSHER_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        let sender_clone = sender.clone();
+        spawn_on_runtime(async move {
+            let _ = tokio::task::spawn_blocking(move || {
+                loop {
+                    let next = {
+                        let mut q = SEQUENTIAL_OVERFLOW.lock().unwrap_or_else(|p| p.into_inner());
+                        q.pop_front()
+                    };
+                    let Some(future) = next else {
+                        FLUSHER_ACTIVE.store(false, Ordering::Release);
+                        let q = SEQUENTIAL_OVERFLOW.lock().unwrap_or_else(|p| p.into_inner());
+                        if !q.is_empty()
+                            && FLUSHER_ACTIVE
+                                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                                .is_ok()
+                        {
+                            continue;
+                        }
+                        SEQUENTIAL_SATURATED.store(false, Ordering::Release);
+                        break;
+                    };
+
+                    if sender_clone.send(future).is_err() {
+                        FLUSHER_ACTIVE.store(false, Ordering::Release);
+                        break;
+                    }
+                }
+            })
+            .await;
+        });
+    }
+}
+
 fn submit_sequential(
     sender: &SyncSender<SequentialFuture>,
     future: SequentialFuture,
 ) -> Result<(), SequentialFuture> {
+    let mut overflow = SEQUENTIAL_OVERFLOW.lock().unwrap_or_else(|p| p.into_inner());
+    if !overflow.is_empty() {
+        overflow.push_back(future);
+        drop(overflow);
+        ensure_flusher_running(sender);
+        return Ok(());
+    }
+
     match sender.try_send(future) {
         Ok(()) => Ok(()),
         Err(TrySendError::Full(future)) => {
-            // Si la cola secuencial está llena y se intenta encolar desde un hilo
-            // de worker de Tokio, hacer `sender.send()` bloquearía el worker thread,
-            // lo cual arriesga deadlock si `run_sequential` necesita ese worker thread.
-            // En ese caso, o si estamos en cualquier hilo con runtime activo, despachar
-            // de forma desacoplada para evitar atascar el pool de Tokio.
             if Handle::try_current().is_ok() {
                 if SEQUENTIAL_SATURATED
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
@@ -114,18 +158,15 @@ fn submit_sequential(
                 {
                     tracing::warn!(
                         capacity = SEQUENTIAL_QUEUE_CAPACITY,
-                        "sequential core executor saturated from within runtime; offloading to avoid deadlock"
+                        "sequential core executor saturated from within runtime; enqueuing to FIFO overflow buffer"
                     );
                 }
-                let sender_clone = sender.clone();
-                spawn_on_runtime(async move {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let _ = sender_clone.send(future);
-                        SEQUENTIAL_SATURATED.store(false, Ordering::Release);
-                    }).await;
-                });
+                overflow.push_back(future);
+                drop(overflow);
+                ensure_flusher_running(sender);
                 Ok(())
             } else {
+                drop(overflow);
                 if SEQUENTIAL_SATURATED
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()

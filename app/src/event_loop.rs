@@ -154,7 +154,9 @@ fn schedule_debrid_annotations(
                 available.map(|available| (selection_id, available))
             }
         });
-        let availability = futures::future::join_all(checks)
+        let availability = futures::stream::iter(checks)
+            .buffer_unordered(4)
+            .collect::<Vec<_>>()
             .await
             .into_iter()
             .flatten()

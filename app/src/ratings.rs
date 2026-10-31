@@ -26,6 +26,8 @@ static RATINGS_CACHE: LazyLock<Cache<String, Arc<MediaRatings>>> = LazyLock::new
 
 static CURRENT_MEDIA_ID: OnceLock<Mutex<String>> = OnceLock::new();
 static CURRENT_PREVIEW_MEDIA_ID: OnceLock<Mutex<String>> = OnceLock::new();
+static DETAIL_ABORT_HANDLE: OnceLock<Mutex<Option<tokio::task::AbortHandle>>> = OnceLock::new();
+static PREVIEW_ABORT_HANDLE: OnceLock<Mutex<Option<tokio::task::AbortHandle>>> = OnceLock::new();
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PreviewSource {
@@ -49,6 +51,14 @@ pub fn clear_current_media() {
     {
         id.clear();
     }
+    if let Ok(mut guard) = DETAIL_ABORT_HANDLE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        if let Some(prev) = guard.take() {
+            prev.abort();
+        }
+    }
 }
 
 pub fn clear_current_preview_media() {
@@ -57,6 +67,14 @@ pub fn clear_current_preview_media() {
         .lock()
     {
         id.clear();
+    }
+    if let Ok(mut guard) = PREVIEW_ABORT_HANDLE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        if let Some(prev) = guard.take() {
+            prev.abort();
+        }
     }
 }
 
@@ -89,7 +107,14 @@ pub fn fetch_and_project(
         return;
     }
 
-    tokio::spawn(async move {
+    let abort_slot = DETAIL_ABORT_HANDLE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = abort_slot.lock() {
+        if let Some(prev) = guard.take() {
+            prev.abort();
+        }
+    }
+
+    let handle = tokio::spawn(async move {
         let cache_key = format!("{}:{}:{is_series}:{is_anime}", media_id, title);
         if let Some(cached) = RATINGS_CACHE.get(&cache_key).await {
             project_if_current(&ui_weak, &media_id, &cached);
@@ -133,6 +158,10 @@ pub fn fetch_and_project(
         RATINGS_CACHE.insert(cache_key, ratings_arc.clone()).await;
         project_if_current(&ui_weak, &media_id, &ratings_arc);
     });
+
+    if let Ok(mut guard) = abort_slot.lock() {
+        *guard = Some(handle.abort_handle());
+    }
 }
 
 fn project_if_current(ui_weak: &slint::Weak<MainWindow>, target_id: &str, ratings: &MediaRatings) {
@@ -209,7 +238,14 @@ pub fn fetch_and_project_preview(
         return;
     }
 
-    tokio::spawn(async move {
+    let abort_slot = PREVIEW_ABORT_HANDLE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = abort_slot.lock() {
+        if let Some(prev) = guard.take() {
+            prev.abort();
+        }
+    }
+
+    let handle = tokio::spawn(async move {
         let cache_key = format!("preview:{}:{}:{is_series}", media_id, title);
         if let Some(cached) = RATINGS_CACHE.get(&cache_key).await {
             project_preview_if_current(&ui_weak, &media_id, &cached, source);
@@ -228,6 +264,10 @@ pub fn fetch_and_project_preview(
         RATINGS_CACHE.insert(cache_key, ratings_arc.clone()).await;
         project_preview_if_current(&ui_weak, &media_id, &ratings_arc, source);
     });
+
+    if let Ok(mut guard) = abort_slot.lock() {
+        *guard = Some(handle.abort_handle());
+    }
 }
 
 fn project_preview_if_current(

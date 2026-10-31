@@ -10,7 +10,10 @@ use std::{
 
 use credential_store::{CredentialError, CredentialRef, CredentialStore, SecretKind, SecretValue};
 use futures::StreamExt;
-use reqwest::{Client, StatusCode, header::RANGE};
+use reqwest::{
+    Client, StatusCode,
+    header::{CONTENT_RANGE, RANGE},
+};
 use serde::{Deserialize, Serialize};
 use slint::ComponentHandle;
 use tokio::{
@@ -434,8 +437,8 @@ pub async fn project_active_profile(ui_weak: slint::Weak<crate::MainWindow>) {
 impl DownloadManager {
     pub fn new(credentials: Arc<dyn CredentialStore>, concurrency: usize) -> Self {
         let client = Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(20))
+            .tcp_keepalive(Some(Duration::from_secs(15)))
             .user_agent("Stremio-Native/1")
             .build()
             .unwrap_or_default();
@@ -640,45 +643,93 @@ impl DownloadManager {
             request = request.header(RANGE, format!("bytes={resume_from}-"));
         }
         let response = request.send().await.map_err(|_| DownloadError::Network)?;
-        if resume_from > 0 && response.status() != StatusCode::PARTIAL_CONTENT {
-            return Err(DownloadError::RangeUnsupported);
-        }
         if !response.status().is_success() {
             return Err(DownloadError::Network);
         }
-        let bytes_total = response
-            .content_length()
-            .map(|remaining| remaining.saturating_add(resume_from));
+
+        // Determine if server honored range request or sent full body / restarted
+        let (file, downloaded, bytes_total) = if resume_from > 0 && response.status() == StatusCode::PARTIAL_CONTENT {
+            let range_consistent = if let Some(cr) = response.headers().get(CONTENT_RANGE) {
+                cr.to_str()
+                    .map(|s| s.starts_with(&format!("bytes {resume_from}-")))
+                    .unwrap_or(false)
+            } else {
+                true
+            };
+
+            if range_consistent {
+                let bytes_total = response
+                    .content_length()
+                    .map(|remaining| remaining.saturating_add(resume_from));
+                let raw_file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&part_path)
+                    .await
+                    .map_err(|_| DownloadError::Filesystem)?;
+                (tokio::io::BufWriter::with_capacity(512 * 1024, raw_file), resume_from, bytes_total)
+            } else {
+                tracing::warn!(%resume_from, "Content-Range mismatch on resume; restarting download from 0");
+                let bytes_total = response.content_length();
+                let raw_file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&part_path)
+                    .await
+                    .map_err(|_| DownloadError::Filesystem)?;
+                (tokio::io::BufWriter::with_capacity(512 * 1024, raw_file), 0, bytes_total)
+            }
+        } else {
+            // Server returned 200 OK (ignored Range or new download)
+            let bytes_total = response.content_length();
+            let raw_file = tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&part_path)
+                .await
+                .map_err(|_| DownloadError::Filesystem)?;
+            (tokio::io::BufWriter::with_capacity(512 * 1024, raw_file), 0, bytes_total)
+        };
+
+        let mut file = file;
+        let mut downloaded = downloaded;
         update_progress(
             &job.id,
             DownloadState::Downloading,
-            resume_from,
+            downloaded,
             bytes_total,
         )
         .await?;
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&part_path)
-            .await
-            .map_err(|_| DownloadError::Filesystem)?;
-        let mut downloaded = resume_from;
+
         let mut stream = response.bytes_stream();
         let mut last_progress_time = std::time::Instant::now();
-        while let Some(chunk) = stream.next().await {
+        loop {
             if cancellation.is_cancelled() {
                 update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
                 file.flush().await.map_err(|_| DownloadError::Filesystem)?;
                 return Ok(());
             }
-            let chunk = chunk.map_err(|_| DownloadError::Network)?;
-            self.throttle(chunk.len() as u64).await;
-            file.write_all(&chunk)
+
+            // Per-chunk read timeout (45s) to detect stalled TCP streams without dying on long downloads
+            let next_chunk = match tokio::time::timeout(Duration::from_secs(45), stream.next()).await {
+                Ok(Some(chunk_res)) => chunk_res.map_err(|_| DownloadError::Network)?,
+                Ok(None) => break, // EOF reached cleanly
+                Err(_) => {
+                    tracing::warn!(job_id = %job.id, "Download chunk read timed out after 45s of silence");
+                    let _ = file.flush().await;
+                    return Err(DownloadError::Network);
+                }
+            };
+
+            self.throttle(next_chunk.len() as u64).await;
+            file.write_all(&next_chunk)
                 .await
                 .map_err(|_| DownloadError::Filesystem)?;
-            downloaded = downloaded.saturating_add(chunk.len() as u64);
+            downloaded = downloaded.saturating_add(next_chunk.len() as u64);
 
-            let should_persist = last_progress_time.elapsed() >= Duration::from_millis(300);
+            let should_persist = last_progress_time.elapsed() >= Duration::from_millis(500);
             if should_persist {
                 last_progress_time = std::time::Instant::now();
                 update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;

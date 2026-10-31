@@ -268,6 +268,9 @@ pub fn setup(
             if transition.changed {
                 ui.set_library_has_preview(true);
                 ui.set_library_preview_id(id.as_str().into());
+                ui.set_library_preview_description("".into());
+                ui.set_library_preview_year("".into());
+                ui.set_library_preview_ratings_loading(true);
                 if let Ok(model) = runtime.model() {
                     if let Some(item) = model.ctx.library.items.get(&id) {
                         ui.set_library_preview_title(item.name.as_str().into());

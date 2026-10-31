@@ -315,7 +315,7 @@ pub fn sync(
     _ui_weak: &slint::Weak<MainWindow>,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
 ) {
-    if let Ok(model) = runtime.model() {
+    let (show_warning, lib_flags, saved_stream_keys) = if let Ok(model) = runtime.model() {
         let show_warning = model
             .ctx
             .profile
@@ -326,8 +326,26 @@ pub fn sync(
                 &model.streaming_server.settings,
                 stremio_core::models::common::Loadable::Err(_)
             );
-        ui.set_board_show_server_warning(show_warning);
-    }
+
+        let mut lib_flags = std::collections::HashMap::with_capacity(model.ctx.library.items.len());
+        for (id, item) in &model.ctx.library.items {
+            lib_flags.insert(id.clone(), (!item.removed, item.watched()));
+        }
+
+        let saved_stream_keys = model
+            .ctx
+            .streams
+            .items
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+
+        (show_warning, lib_flags, saved_stream_keys)
+    } else {
+        (false, std::collections::HashMap::new(), std::collections::HashSet::new())
+    };
+
+    ui.set_board_show_server_warning(show_warning);
 
     let mut fingerprint = Fingerprint::new();
     for item in &continue_watching.items {
@@ -349,13 +367,10 @@ pub fn sync(
             fingerprint.optional_str(catalog.name.as_deref());
         }
     }
-    let library_items = runtime.model().ok().map(|m| m.ctx.library.items.clone());
-    if let Some(lib) = library_items.as_ref() {
-        for (id, item) in lib {
-            fingerprint.str(id);
-            fingerprint.bool(item.watched());
-            fingerprint.bool(!item.removed);
-        }
+    for (id, &(in_library, watched)) in &lib_flags {
+        fingerprint.str(id);
+        fingerprint.bool(watched);
+        fingerprint.bool(in_library);
     }
     fingerprint_catalog_projection(&mut fingerprint, board);
     if !sync_fingerprint_changed(&LAST_SYNC_STATE, fingerprint.finish()) {
@@ -365,19 +380,6 @@ pub fn sync(
     // 1. Sync Continue Watching
     let continue_watching_items: Vec<MediaCardItem> = {
         let _span = tracing::info_span!("sync_continue_watching").entered();
-        let saved_stream_keys = runtime
-            .model()
-            .ok()
-            .map(|model| {
-                model
-                    .ctx
-                    .streams
-                    .items
-                    .keys()
-                    .cloned()
-                    .collect::<std::collections::HashSet<_>>()
-            })
-            .unwrap_or_default();
         let mut items = Vec::with_capacity(continue_watching.items.len());
         for item in &continue_watching.items {
             let library_item = &item.library_item;
@@ -493,7 +495,7 @@ pub fn sync(
                 ))
                 .copied()
                 .unwrap_or(page.request.path.id.as_str());
-            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name, library_items.as_ref()) {
+            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name, Some(&lib_flags)) {
                 board_sections.push(section);
             }
         }

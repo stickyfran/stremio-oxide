@@ -9,8 +9,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-#[cfg(target_os = "windows")]
-use self_update::backends::github::Update;
 use self_update::{backends::github::ReleaseList, update::Release};
 use slint::{ComponentHandle, Weak};
 use tokio::task::JoinHandle;
@@ -19,10 +17,22 @@ use crate::{MainWindow, tray};
 
 const REPOSITORY_OWNER: &str = "stickyfran";
 const REPOSITORY_NAME: &str = "stremio-oxide";
-#[cfg(target_os = "windows")]
-const WINDOWS_ASSET_IDENTIFIER: &str = "stremio-oxide";
-#[cfg(target_os = "windows")]
-const WINDOWS_INSTALLER_NAME: &str = "stremio-oxide-installer";
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlatformAssetKind {
+    LinuxBinary,
+    WindowsZip,
+    WindowsInstaller,
+    MacTarGz,
+}
+
+#[derive(Clone, Debug)]
+struct MatchedAsset {
+    download_url: String,
+    name: String,
+    kind: PlatformAssetKind,
+}
 
 #[derive(Clone)]
 struct AvailableUpdate {
@@ -169,7 +179,7 @@ pub(crate) fn setup(
         let views = action_views.clone();
         tokio::spawn(async move {
             if let Some(update) = updater.available_update() {
-                project_available_update(views, update);
+                project_available_update(views, update, CheckKind::Manual);
             } else {
                 updater.check(views, CheckKind::Manual).await;
             }
@@ -261,7 +271,7 @@ impl Updater {
                     SettingsUpdateAction::ViewUpdate,
                     true,
                 );
-                project_available_update(views, update);
+                project_available_update(views, update, kind);
             }
             Ok(None) => {
                 self.set_available(None);
@@ -318,17 +328,16 @@ impl Updater {
 
         project_installing(views.clone(), &update.release.version);
         let version = update.release.version.clone();
-        let result = tokio::task::spawn_blocking(move || stage_installer(&version))
+        let release = update.release.clone();
+        let result = perform_update(&version, &release)
             .await
-            .context("updater task failed")
-            .and_then(|result| result)
-            .and_then(|installer| self.installer_request.queue(installer));
+            .and_then(|target| self.installer_request.queue(target));
 
         match result {
             Ok(()) => {
                 tracing::info!(
                     version = %update.release.version,
-                    "application installer staged; shutting down before launch"
+                    "application updated / staged; shutting down before restart"
                 );
                 let _ = slint::invoke_from_event_loop(|| {
                     let _ = slint::quit_event_loop();
@@ -360,7 +369,7 @@ fn fetch_latest_stable() -> Result<Option<AvailableUpdate>> {
     let release = latest_stable_release(releases, env!("CARGO_PKG_VERSION"));
 
     Ok(release.map(|release| AvailableUpdate {
-        can_install: has_native_installer(&release),
+        can_install: can_install_update(&release),
         release,
     }))
 }
@@ -403,89 +412,392 @@ fn is_portable_instance() -> bool {
     false
 }
 
-#[cfg(target_os = "windows")]
-fn has_native_installer(release: &Release) -> bool {
-    if is_portable_instance() {
-        return false;
-    }
-    release
-        .asset_for(self_update::get_target(), Some(WINDOWS_ASSET_IDENTIFIER))
-        .is_some()
-}
-
+#[allow(dead_code)]
 #[cfg(not(target_os = "windows"))]
-fn has_native_installer(_release: &Release) -> bool {
+fn is_portable_instance() -> bool {
     false
 }
 
-#[cfg(target_os = "windows")]
-fn stage_installer(version: &str) -> Result<PathBuf> {
+fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        for asset in &release.assets {
+            let name = asset.name.to_lowercase();
+            if name.contains("x86_64") && name.contains("linux-gnu") {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::LinuxBinary,
+                });
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        for asset in &release.assets {
+            let name = asset.name.to_lowercase();
+            if (name.contains("aarch64") || name.contains("arm64")) && name.contains("linux-gnu") {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::LinuxBinary,
+                });
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        if is_portable_instance() {
+            if let Some(asset) = release.assets.iter().find(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("windows-x64") && n.ends_with(".zip")
+            }) {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::WindowsZip,
+                });
+            }
+        } else {
+            if let Some(asset) = release.assets.iter().find(|a| {
+                let n = a.name.to_lowercase();
+                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup"))
+                    && n.contains("x64")
+                    && n.ends_with(".exe")
+            }) {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::WindowsInstaller,
+                });
+            }
+            if let Some(asset) = release.assets.iter().find(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("windows-x64") && n.ends_with(".zip")
+            }) {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::WindowsZip,
+                });
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        if is_portable_instance() {
+            if let Some(asset) = release.assets.iter().find(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("windows-arm64") && n.ends_with(".zip")
+            }) {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::WindowsZip,
+                });
+            }
+        } else {
+            if let Some(asset) = release.assets.iter().find(|a| {
+                let n = a.name.to_lowercase();
+                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup"))
+                    && (n.contains("arm64") || n.contains("aarch64"))
+                    && n.ends_with(".exe")
+            }) {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::WindowsInstaller,
+                });
+            }
+            if let Some(asset) = release.assets.iter().find(|a| {
+                let n = a.name.to_lowercase();
+                n.contains("windows-arm64") && n.ends_with(".zip")
+            }) {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::WindowsZip,
+                });
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        for asset in &release.assets {
+            let name = asset.name.to_lowercase();
+            if name.contains("macos") && (name.ends_with(".tar.gz") || name.ends_with(".tgz")) {
+                return Some(MatchedAsset {
+                    download_url: asset.download_url.clone(),
+                    name: asset.name.clone(),
+                    kind: PlatformAssetKind::MacTarGz,
+                });
+            }
+        }
+    }
+
+    None
+}
+
+fn can_install_update(release: &Release) -> bool {
+    let Some(_matched) = find_platform_asset(release) else {
+        return false;
+    };
+
+    #[cfg(unix)]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            let target_exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+            if let Some(parent) = target_exe.parent() {
+                let probe = parent.join(format!(".stremio_probe_{}", std::process::id()));
+                if let Ok(file) = std::fs::File::create(&probe) {
+                    drop(file);
+                    let _ = std::fs::remove_file(probe);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[cfg(windows)]
+    {
+        true
+    }
+}
+
+async fn perform_update(version: &str, release: &Release) -> Result<PathBuf> {
+    let matched = find_platform_asset(release)
+        .context("no compatible release asset found for this platform")?;
+
     let update_dir = crate::paths::get().updates().join(display_version(version));
-    std::fs::create_dir_all(&update_dir)
+    tokio::fs::create_dir_all(&update_dir)
+        .await
         .with_context(|| format!("failed to create {}", update_dir.display()))?;
-    let installer = update_dir.join("stremio-installer.exe");
-    if installer.exists() {
-        std::fs::remove_file(&installer)
-            .with_context(|| format!("failed to remove stale {}", installer.display()))?;
-    }
-    let release_tag = canonical_release_tag(version);
 
-    let status = Update::configure()
-        .repo_owner(REPOSITORY_OWNER)
-        .repo_name(REPOSITORY_NAME)
-        .target(self_update::get_target())
-        .identifier(WINDOWS_ASSET_IDENTIFIER)
-        .target_version_tag(&release_tag)
-        .current_version(env!("CARGO_PKG_VERSION"))
-        .bin_name(WINDOWS_INSTALLER_NAME)
-        .bin_path_in_archive("stremio-installer.exe")
-        .bin_install_path(&installer)
-        .show_download_progress(false)
-        .show_output(false)
-        .no_confirm(true)
+    let download_url = matched.download_url.clone();
+    let asset_name = matched.name.clone();
+    let staged_file = update_dir.join(&asset_name);
+
+    if staged_file.exists() {
+        let _ = tokio::fs::remove_file(&staged_file).await;
+    }
+
+    tracing::info!(
+        url = %download_url,
+        file = %staged_file.display(),
+        "downloading update asset from GitHub"
+    );
+
+    let client = reqwest::Client::builder()
+        .user_agent("stremio-oxide-updater")
         .build()
-        .context("invalid GitHub updater configuration")?
-        .update()
-        .context("self_update failed to stage the installer")?;
+        .context("failed to build HTTP client")?;
 
-    if !status.updated() && !installer.is_file() {
-        bail!("self_update did not stage the installer");
+    let response = client
+        .get(&download_url)
+        .send()
+        .await
+        .context("failed to send download request to GitHub")?
+        .error_for_status()
+        .context("GitHub download returned error status")?;
+
+    let mut dest_file = tokio::fs::File::create(&staged_file)
+        .await
+        .with_context(|| format!("failed to create staged file {}", staged_file.display()))?;
+
+    use futures::StreamExt;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.context("failed reading download chunk")?;
+        tokio::io::AsyncWriteExt::write_all(&mut dest_file, &chunk)
+            .await
+            .context("failed writing chunk to staged file")?;
+    }
+    tokio::io::AsyncWriteExt::flush(&mut dest_file).await?;
+    drop(dest_file);
+
+    match matched.kind {
+        PlatformAssetKind::LinuxBinary => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&staged_file)?.permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&staged_file, perms)?;
+
+                let current_exe = std::env::current_exe().context("failed to get current executable path")?;
+                let target_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
+                let parent = target_exe.parent().context("target exe has no parent directory")?;
+                let temp_backup = parent.join(format!(".stremio-oxide.old-{}", std::process::id()));
+
+                tracing::info!(
+                    source = %staged_file.display(),
+                    dest = %target_exe.display(),
+                    "replacing current binary with downloaded binary"
+                );
+
+                self_update::Move::from_source(&staged_file)
+                    .replace_using_temp(&temp_backup)
+                    .to_dest(&target_exe)
+                    .context("failed to replace binary in-place")?;
+
+                let _ = std::fs::remove_file(&temp_backup);
+                Ok(target_exe)
+            }
+            #[cfg(not(unix))]
+            {
+                bail!("Linux binary asset on non-unix platform");
+            }
+        }
+        PlatformAssetKind::WindowsInstaller => {
+            #[cfg(windows)]
+            {
+                Ok(staged_file)
+            }
+            #[cfg(not(windows))]
+            {
+                bail!("Windows installer asset on non-windows platform");
+            }
+        }
+        PlatformAssetKind::WindowsZip => {
+            #[cfg(windows)]
+            {
+                let current_exe = std::env::current_exe().context("failed to get current executable path")?;
+                let target_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
+                let parent = target_exe.parent().context("target exe has no parent directory")?;
+
+                let extract_dir = update_dir.join("extracted");
+                let _ = std::fs::remove_dir_all(&extract_dir);
+                std::fs::create_dir_all(&extract_dir)?;
+
+                self_update::Extract::from_source(&staged_file)
+                    .archive(self_update::ArchiveKind::Zip)
+                    .extract_into(&extract_dir)
+                    .context("failed to extract windows zip")?;
+
+                let candidate_names = ["stremio-oxide.exe", "stremio-native.exe"];
+                let mut found_bin = None;
+                for name in candidate_names {
+                    let p = extract_dir.join(name);
+                    if p.is_file() {
+                        found_bin = Some(p);
+                        break;
+                    }
+                }
+                let new_bin = found_bin.context("extracted zip did not contain stremio-oxide.exe or stremio-native.exe")?;
+
+                let temp_backup = parent.join(format!(".stremio-oxide.old-{}.exe", std::process::id()));
+                self_update::Move::from_source(&new_bin)
+                    .replace_using_temp(&temp_backup)
+                    .to_dest(&target_exe)
+                    .context("failed to replace Windows binary in-place")?;
+
+                let dll_src = extract_dir.join("libmpv-2.dll");
+                if dll_src.is_file() {
+                    let dll_dest = parent.join("libmpv-2.dll");
+                    let temp_dll = parent.join(format!(".libmpv-2.old-{}.dll", std::process::id()));
+                    let _ = self_update::Move::from_source(&dll_src)
+                        .replace_using_temp(&temp_dll)
+                        .to_dest(&dll_dest);
+                }
+
+                Ok(target_exe)
+            }
+            #[cfg(not(windows))]
+            {
+                bail!("Windows zip asset on non-windows platform");
+            }
+        }
+        PlatformAssetKind::MacTarGz => {
+            #[cfg(target_os = "macos")]
+            {
+                let current_exe = std::env::current_exe().context("failed to get current executable path")?;
+                let target_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
+                let parent = target_exe.parent().context("target exe has no parent directory")?;
+
+                let extract_dir = update_dir.join("extracted");
+                let _ = std::fs::remove_dir_all(&extract_dir);
+                std::fs::create_dir_all(&extract_dir)?;
+
+                self_update::Extract::from_source(&staged_file)
+                    .archive(self_update::ArchiveKind::Tar(Some(self_update::Compression::Gz)))
+                    .extract_into(&extract_dir)
+                    .context("failed to extract macos archive")?;
+
+                let new_bin = extract_dir.join("stremio-oxide");
+                if !new_bin.is_file() {
+                    bail!("extracted archive did not contain stremio-oxide");
+                }
+
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&new_bin)?.permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&new_bin, perms)?;
+
+                let temp_backup = parent.join(format!(".stremio-oxide.old-{}", std::process::id()));
+                self_update::Move::from_source(&new_bin)
+                    .replace_using_temp(&temp_backup)
+                    .to_dest(&target_exe)
+                    .context("failed to replace macOS binary in-place")?;
+
+                let _ = std::fs::remove_file(&temp_backup);
+                Ok(target_exe)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                bail!("macOS asset on non-macOS platform");
+            }
+        }
+    }
+}
+
+fn launch_installer(target: &std::path::Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+
+        let file_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_installer = file_name.to_lowercase().contains("setup") || file_name.to_lowercase().contains("installer");
+
+        if is_installer {
+            std::process::Command::new(target)
+                .args([
+                    "/SP-",
+                    "/SILENT",
+                    "/SUPPRESSMSGBOXES",
+                    "/CLOSEAPPLICATIONS",
+                    "/RESTARTAPPLICATIONS",
+                    "/LOG",
+                ])
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                .spawn()
+                .with_context(|| format!("failed to launch installer {}", target.display()))?;
+        } else {
+            std::process::Command::new(target)
+                .args(std::env::args().skip(1))
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                .spawn()
+                .with_context(|| format!("failed to relaunch updated app {}", target.display()))?;
+        }
+
+        std::process::exit(0);
     }
 
-    Ok(installer)
-}
-
-#[cfg(target_os = "windows")]
-fn launch_installer(installer: &std::path::Path) -> Result<()> {
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x00000008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-
-    std::process::Command::new(installer)
-        .args([
-            "/SP-",
-            "/SILENT",
-            "/SUPPRESSMSGBOXES",
-            "/CLOSEAPPLICATIONS",
-            "/RESTARTAPPLICATIONS",
-            "/LOG",
-        ])
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-        .spawn()
-        .with_context(|| format!("failed to launch {}", installer.display()))?;
-
-    // Terminate immediately so all executable and DLL handles are released
-    std::process::exit(0);
-}
-
-#[cfg(not(target_os = "windows"))]
-fn stage_installer(_version: &str) -> Result<PathBuf> {
-    bail!("automatic installation is not available on this platform")
-}
-
-#[cfg(not(target_os = "windows"))]
-fn launch_installer(_installer: &std::path::Path) -> Result<()> {
-    bail!("automatic installation is not available on this platform")
+    #[cfg(unix)]
+    {
+        tracing::info!(path = %target.display(), "relaunching updated application");
+        std::process::Command::new(target)
+            .args(std::env::args().skip(1))
+            .spawn()
+            .with_context(|| format!("failed to launch {}", target.display()))?;
+        std::process::exit(0);
+    }
 }
 
 fn display_version(version: &str) -> &str {
@@ -553,10 +865,11 @@ fn project_settings(
     });
 }
 
-fn project_available_update(views: UpdateViews, update: AvailableUpdate) {
+fn project_available_update(views: UpdateViews, update: AvailableUpdate, kind: CheckKind) {
     let version = display_version(&update.release.version).to_owned();
     let notes = release_notes(&update.release);
     let can_install = update.can_install;
+    let open_dialog = matches!(kind, CheckKind::Manual);
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = views.ui.upgrade() {
             ui.set_update_dialog_version(version.into());
@@ -564,7 +877,9 @@ fn project_available_update(views: UpdateViews, update: AvailableUpdate) {
             ui.set_update_dialog_can_install(can_install);
             ui.set_update_dialog_status_state(DialogStatus::None as i32);
             ui.set_update_installing(false);
-            ui.set_update_dialog_open(true);
+            if open_dialog {
+                ui.set_update_dialog_open(true);
+            }
         }
         if let Some(tray) = views.tray.as_ref() {
             tray.set_update_can_install(can_install);
@@ -666,5 +981,32 @@ mod tests {
             launcher.take_pending(),
             Some(PathBuf::from("stremio-installer.exe"))
         );
+    }
+
+    #[test]
+    fn find_platform_asset_matches_github_release_assets() {
+        use self_update::update::ReleaseAsset;
+
+        let release = Release {
+            version: "0.99.3".to_string(),
+            assets: vec![
+                ReleaseAsset {
+                    name: "stremio-oxide-v0.99.3-x86_64-unknown-linux-gnu".to_string(),
+                    download_url: "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.3/stremio-oxide-v0.99.3-x86_64-unknown-linux-gnu".to_string(),
+                },
+                ReleaseAsset {
+                    name: "stremio-oxide-v0.99.3-windows-x64.zip".to_string(),
+                    download_url: "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.3/stremio-oxide-v0.99.3-windows-x64.zip".to_string(),
+                },
+                ReleaseAsset {
+                    name: "stremio-oxide-macos.tar.gz".to_string(),
+                    download_url: "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.3/stremio-oxide-macos.tar.gz".to_string(),
+                },
+            ],
+            ..Release::default()
+        };
+
+        let matched = find_platform_asset(&release);
+        assert!(matched.is_some(), "should match the current platform asset");
     }
 }

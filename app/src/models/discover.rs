@@ -440,7 +440,7 @@ pub fn setup(
 pub fn sync(
     ui: &MainWindow,
     discover: &CatalogWithFilters<MetaItemPreview>,
-    _ui_weak: &slint::Weak<MainWindow>,
+    ui_weak: &slint::Weak<MainWindow>,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
     navigation: &NavigationController,
 ) {
@@ -733,6 +733,15 @@ pub fn sync(
             media_id: media_id.clone(),
         });
         if transition.changed {
+            ui.set_discover_has_preview(true);
+            ui.set_discover_preview_id(media_id.as_str().into());
+            ui.set_discover_preview_title(first_item.name.as_str().into());
+            if let Some(poster) = first_item.poster.as_ref() {
+                ui.set_discover_preview_poster_url(poster.as_str().into());
+                ui.set_discover_preview_poster(crate::image_cache::get_poster_image(&first_item.poster, &ui_weak));
+            }
+            ui.set_discover_preview_description("".into());
+            ui.set_discover_preview_ratings_loading(true);
             load_meta_details_for_video(runtime, media_id, Some(media_type), video_id);
         }
     }

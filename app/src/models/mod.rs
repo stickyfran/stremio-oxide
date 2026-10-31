@@ -322,7 +322,7 @@ pub(crate) fn project_catalog_section(
     catalog_index: usize,
     catalog: &Catalog<MetaItemPreview>,
     catalog_name: &str,
-    library: Option<&std::collections::HashMap<String, stremio_core::types::library::LibraryItem>>,
+    library: Option<&std::collections::HashMap<String, (bool, bool)>>,
 ) -> Option<BoardSection> {
     let first_page = catalog.first()?;
     let request = &first_page.request;
@@ -352,9 +352,9 @@ pub(crate) fn project_catalog_section(
             }
             let mut card = catalog_media_card(item);
             if let Some(lib) = library {
-                if let Some(lib_item) = lib.get(&item.id) {
-                    card.in_library = !lib_item.removed;
-                    card.show_checkmark = lib_item.watched();
+                if let Some(&(in_library, watched)) = lib.get(&item.id) {
+                    card.in_library = in_library;
+                    card.show_checkmark = watched;
                 }
             }
             cards.push(card);

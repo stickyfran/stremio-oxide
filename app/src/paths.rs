@@ -98,7 +98,6 @@ impl AppPaths {
         &self.plugins
     }
 
-    #[cfg(any(target_os = "windows", test))]
     pub(crate) fn updates(&self) -> &Path {
         &self.updates
     }

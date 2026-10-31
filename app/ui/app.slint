@@ -1662,44 +1662,6 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if (root.settings-update-state == 2 && !root.updater-banner-dismissed) : Rectangle {
-                height: 4 * root.ui-unit;
-                background: Theme.accent;
-                z: 90;
-
-                HorizontalLayout {
-                    padding-left: root.ui-unit;
-                    padding-right: root.ui-unit;
-                    spacing: root.ui-unit;
-                    alignment: center;
-
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Text {
-                        text: @tr("UPDATER_TITLE" => "A new version of Stremio is available");
-                        color: Theme.background;
-                        font-size: root.ui-unit;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
-                    PillButton {
-                        height: 2.5 * root.ui-unit;
-                        unit: root.ui-unit;
-                        label: @tr("UPDATER_INSTALL_BUTTON" => "Install");
-                        surface-color: Theme.text-primary;
-                        accent-color: Theme.background;
-                        clicked => { root.update-install(); }
-                    }
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                    IconAction {
-                        width: 3 * root.ui-unit;
-                        height: 3 * root.ui-unit;
-                        unit: root.ui-unit;
-                        icon-source: @image-url("assets/images/icons/close.svg");
-                        accessible-name: @tr("BUTTON_CLOSE" => "Close");
-                        clicked => { root.updater-banner-dismissed = true; }
-                    }
-                }
-            }
 
             // Lower Content Area (Sidebar on left, main content page on right)
             HorizontalLayout {
@@ -3160,6 +3122,97 @@ export component MainWindow inherits Window {
             }
         }
 
+    }
+
+    // Floating non-intrusive update badge bottom-right
+    if ((root.settings-update-state == 2 || root.update-installing) && !root.updater-banner-dismissed && !root.effective-show-player) : Rectangle {
+        x: parent.width - self.width - 2 * root.ui-unit;
+        y: parent.height - self.height - 2 * root.ui-unit;
+        z: 950;
+        height: 3.5 * root.ui-unit;
+        border-radius: Theme.border-radius;
+        background: Theme.card-background;
+        border-width: 1px;
+        border-color: Theme.accent.with-alpha(0.5);
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000080;
+        drop-shadow-offset-y: 4px;
+
+        HorizontalLayout {
+            padding-left: 1.25 * root.ui-unit;
+            padding-right: 0.75 * root.ui-unit;
+            spacing: root.ui-unit;
+            alignment: center;
+
+            // Status indicator dot
+            Rectangle {
+                width: 0.65 * root.ui-unit;
+                height: 0.65 * root.ui-unit;
+                border-radius: 0.325 * root.ui-unit;
+                background: root.update-installing ? Theme.warning : Theme.accent;
+            }
+
+            // Version text & info
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.update-dialog-open = true;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: root.update-installing
+                            ? @tr("Actualizando Stremio…")
+                            : @tr("Actualización disponible");
+                        color: Theme.text-primary;
+                        font-size: 0.85 * root.ui-unit;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.update-installing
+                            ? @tr("Descargando v{}…", root.settings-update-version)
+                            : "v" + root.settings-update-version + " • " + @tr("Ver notas");
+                        color: Theme.text-muted;
+                        font-size: 0.72 * root.ui-unit;
+                    }
+                }
+            }
+
+            // Separator
+            Rectangle {
+                width: 1px;
+                height: 2 * root.ui-unit;
+                background: Theme.divider;
+            }
+
+            // Action button
+            PillButton {
+                height: 2.3 * root.ui-unit;
+                unit: root.ui-unit;
+                label: root.update-installing
+                    ? @tr("Descargando…")
+                    : (root.update-dialog-can-install ? @tr("Actualizar") : @tr("Ver"));
+                surface-color: root.update-installing ? Theme.overlay : Theme.accent;
+                accent-color: root.update-installing ? Theme.text-muted : Theme.primary-foreground;
+                enabled: !root.update-installing;
+                clicked => {
+                    root.update-install();
+                }
+            }
+
+            // Dismiss button
+            IconAction {
+                width: 2.2 * root.ui-unit;
+                height: 2.2 * root.ui-unit;
+                unit: root.ui-unit;
+                icon-source: @image-url("assets/images/icons/close.svg");
+                accessible-name: @tr("BUTTON_CLOSE" => "Close");
+                clicked => {
+                    root.updater-banner-dismissed = true;
+                }
+            }
+        }
     }
 
     if (root.debug-preview-enabled) : AppDebugMenu {
