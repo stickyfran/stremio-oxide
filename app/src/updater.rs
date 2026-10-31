@@ -723,10 +723,16 @@ async fn perform_update(version: &str, release: &Release) -> Result<PathBuf> {
                 let _ = std::fs::remove_dir_all(&extract_dir);
                 std::fs::create_dir_all(&extract_dir)?;
 
-                self_update::Extract::from_source(&staged_file)
-                    .archive(self_update::ArchiveKind::Tar(Some(self_update::Compression::Gz)))
-                    .extract_into(&extract_dir)
-                    .context("failed to extract macos archive")?;
+                let status = std::process::Command::new("tar")
+                    .arg("-xzf")
+                    .arg(&staged_file)
+                    .arg("-C")
+                    .arg(&extract_dir)
+                    .status()
+                    .context("failed to execute tar to extract macos archive")?;
+                if !status.success() {
+                    bail!("tar exited with status {status} while extracting macos archive");
+                }
 
                 let new_bin = extract_dir.join("stremio-oxide");
                 if !new_bin.is_file() {
