@@ -76,6 +76,7 @@ export component LibraryPage inherits Rectangle {
 
     callback hover-preview-requested(string, string, length, length, length, length);
     callback hover-preview-dismissed();
+    callback item-activated(string, string, string);
     callback type-changed(string);
     callback sort-changed(string);
     callback item-selected(string, string, string);
@@ -416,6 +417,13 @@ export component LibraryPage inherits Rectangle {
                             root.local-play(id);
                         } else {
                             root.item-selected(id, media-type, video-id);
+                        }
+                    }
+                    item-activated(id, media-type, video-id) => {
+                        if (root.local-mode) {
+                            root.local-play(id);
+                        } else {
+                            root.item-activated(id, media-type, video-id);
                         }
                     }
                     poster-requested(url) => { root.poster-requested(url); }

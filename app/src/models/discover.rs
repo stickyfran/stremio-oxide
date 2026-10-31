@@ -321,6 +321,7 @@ pub fn setup(
     ui.on_discover_item_selected({
         let runtime = runtime.clone();
         let navigation = navigation.clone();
+        let ui_weak = ui_weak.clone();
         move |id, media_type, video_id| {
             let id = id.to_string();
             let media_type = media_type.to_string();
@@ -329,6 +330,27 @@ pub fn setup(
                 media_id: id.clone(),
             });
             if transition.changed {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_discover_has_preview(true);
+                    if let Ok(model) = runtime.model() {
+                        if let Some(item) = model
+                            .discover
+                            .catalog
+                            .iter()
+                            .filter_map(|p| p.content.as_ref().and_then(Loadable::ready))
+                            .flatten()
+                            .find(|item| item.id == id)
+                        {
+                            ui.set_discover_preview_title(item.name.as_str().into());
+                            ui.set_discover_preview_description(item.description.as_deref().unwrap_or_default().into());
+                            ui.set_discover_preview_year(item.release_info.as_deref().unwrap_or_default().into());
+                            if let Some(poster) = item.poster.as_ref() {
+                                ui.set_discover_preview_poster_url(poster.as_str().into());
+                                ui.set_discover_preview_poster(crate::image_cache::get_poster_image(&item.poster, &ui_weak));
+                            }
+                        }
+                    }
+                }
                 load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
             }
         }

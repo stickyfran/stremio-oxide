@@ -647,7 +647,7 @@ fn clamp_i64_to_i32(value: i64) -> i32 {
 
 pub fn prepare_capture_directory() -> std::io::Result<PathBuf> {
     let preferred =
-        dirs::picture_dir().map(|pictures| pictures.join("Stremio Native").join("Captures"));
+        dirs::picture_dir().map(|pictures| pictures.join("Stremio Oxide").join("Captures"));
     let fallback = crate::paths::get().root().join("captures");
 
     if let Some(preferred) = preferred

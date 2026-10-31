@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.99.0"
+  #define AppVersion "0.99.1"
 #endif
 
 #ifndef BuildRoot
@@ -11,23 +11,23 @@
 #endif
 
 #ifndef OutputBaseName
-  #define OutputBaseName "StremioSetup-v" + AppVersion + "-x64"
+  #define OutputBaseName "StremioOxideSetup-v" + AppVersion + "-x64"
 #endif
 
 #ifndef ArchAllowed
   #define ArchAllowed "x64compatible arm64"
 #endif
 
-#define AppName "Stremio"
-#define AppExeName "stremio-native.exe"
+#define AppName "Stremio Oxide"
+#define AppExeName "stremio-oxide.exe"
 
 [Setup]
 AppId={{9B7477C6-8E3D-4EA7-A128-EB249D052C6C}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=Stremio
-DefaultDirName={localappdata}\Programs\stremio-native
-DefaultGroupName=Stremio
+AppPublisher=Stremio Oxide
+DefaultDirName={localappdata}\Programs\stremio-oxide
+DefaultGroupName=Stremio Oxide
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed={#ArchAllowed}
@@ -48,8 +48,8 @@ VersionInfoProductVersion={#AppVersion}
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "startup"; Description: "Start Stremio when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
-Name: "magnet"; Description: "Open magnet links with Stremio"; GroupDescription: "Link handling:"; Flags: unchecked
+Name: "startup"; Description: "Start Stremio Oxide when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
+Name: "magnet"; Description: "Open magnet links with Stremio Oxide"; GroupDescription: "Link handling:"; Flags: unchecked
 
 [Files]
 Source: "{#BuildRoot}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -61,19 +61,19 @@ Source: "{#BuildRoot}\licenses\mpv\LICENSE.LGPL"; DestDir: "{app}\licenses\mpv";
 ; AppUserModelID must match SetCurrentProcessExplicitAppUserModelID in the app so
 ; Windows resolves the friendly name and icon shown in the media overlay / taskbar.
 [Icons]
-Name: "{group}\Stremio"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; AppUserModelID: "com.stremio.native"
-Name: "{autodesktop}\Stremio"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "com.stremio.native"
-Name: "{userstartup}\Stremio"; Filename: "{app}\{#AppExeName}"; Parameters: "--start-hidden"; WorkingDir: "{app}"; Tasks: startup; AppUserModelID: "com.stremio.native"
+Name: "{group}\Stremio Oxide"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; AppUserModelID: "com.stremio.oxide"
+Name: "{autodesktop}\Stremio Oxide"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "com.stremio.oxide"
+Name: "{userstartup}\Stremio Oxide"; Filename: "{app}\{#AppExeName}"; Parameters: "--start-hidden"; WorkingDir: "{app}"; Tasks: startup; AppUserModelID: "com.stremio.oxide"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\stremio"; ValueType: string; ValueData: "URL:Stremio Protocol"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\stremio"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\stremio"; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\stremio\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExeName},0"
 Root: HKCU; Subkey: "Software\Classes\stremio\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExeName}"" ""%1"""
 Root: HKCU; Subkey: "Software\Classes\magnet"; ValueType: string; ValueData: "URL:Magnet Protocol"; Flags: uninsdeletekey; Tasks: magnet
-Root: HKCU; Subkey: "Software\Classes\magnet"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Tasks: magnet
+Root: HKCU; Subkey: "Software\Classes\magnet"; ValueName: "URL Protocol"; ValueData: ""; Tasks: magnet
 Root: HKCU; Subkey: "Software\Classes\magnet\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExeName},0"; Tasks: magnet
 Root: HKCU; Subkey: "Software\Classes\magnet\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExeName}"" ""%1"""; Tasks: magnet
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "Launch Stremio"; WorkingDir: "{app}"; Flags: nowait postinstall
+Filename: "{app}\{#AppExeName}"; Description: "Launch Stremio Oxide"; WorkingDir: "{app}"; Flags: nowait postinstall

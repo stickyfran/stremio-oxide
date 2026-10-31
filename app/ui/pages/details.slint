@@ -28,6 +28,7 @@ export struct StreamLink {
 export struct EpisodeItem {
     id: string,
     title: string,
+    description: string,
     released: string,
     thumbnail-url: string,
     thumbnail: image,
@@ -76,6 +77,7 @@ export component DetailsPage inherits Rectangle {
     callback toggle-library;
     callback toggle-watched;
     callback play-trailer(string);
+    callback download-stream(string);
     in property <bool> is-series: false;
     in property <[int]> available-seasons: [];
     in-out property <int> active-season: 1;
@@ -127,7 +129,7 @@ export component DetailsPage inherits Rectangle {
     callback close;
 
     in property <length> unit: Theme.root-font-size;
-    property <length> drawer-width: 30 * root.unit;
+    property <length> drawer-width: 39 * root.unit;
     in-out property <bool> stream-filter-open: false;
     in-out property <bool> ranking-filter-open: false;
     private property <int> first-season: root.available-seasons.length > 0
@@ -234,13 +236,13 @@ export component DetailsPage inherits Rectangle {
             genres: root.genres;
             cast: root.cast;
             directors: root.directors;
-            show-trailer: root.has-trailer && root.trailer-selection-id != "";
+            show-trailer: root.has-trailer;
             show-library-actions: true;
             in-library: root.is-in-library;
             watched: root.is-watched;
             show-ratings: true;
             show-share: true;
-            trailer-requested => { root.play-trailer(root.trailer-selection-id); }
+            trailer-requested => { root.play-trailer(root.trailer-selection-id != "" ? root.trailer-selection-id : "trailer"); }
             library-requested(_in-library) => { root.toggle-library(); }
             watched-requested(_watched) => { root.toggle-watched(); }
             share-requested => { root.share-modal-open = true; }
@@ -496,6 +498,7 @@ export component DetailsPage inherits Rectangle {
                     width: parent.width;
                     unit: root.unit;
                     title: episode.title;
+                    description: episode.description;
                     released: episode.released;
                     thumbnail: episode.thumbnail;
                     episode-number: episode.episode-num;
@@ -659,6 +662,7 @@ export component DetailsPage inherits Rectangle {
                         thumbnail: stream.thumbnail;
                         progress: stream.progress;
                         play => { root.play-stream(stream.id); }
+                        download => { root.download-stream(stream.id); }
                         context-requested(x, y) => {
                             root.stream-context-x = x;
                             root.stream-context-y = y;

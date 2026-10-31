@@ -395,6 +395,7 @@ fn configure_client(client: &MpvClient, config: &PreviewConfig) -> Result<(), Mp
         ("sub-auto", "no"),
         ("ytdl", "yes"),
         ("ytdl-format", PREVIEW_YTDL_FORMAT),
+        ("ytdl-raw-options", "extractor-args=youtube:player_client=ios,web_embedded"),
         ("hwdec", preview_hwdec(config.hardware_decoding)),
         ("screenshot-sw", "yes"),
         ("vd-lavc-threads", "2"),

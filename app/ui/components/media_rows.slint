@@ -15,6 +15,7 @@ export component StreamRow inherits Rectangle {
     in property <float> progress: 0;
     in property <bool> selected: false;
     callback play;
+    callback download;
     callback context-requested(length, length);
 
     height: 5.6 * root.unit;
@@ -134,23 +135,43 @@ export component StreamRow inherits Rectangle {
             }
         }
 
-        if (root.selected || area.has-hover) : Rectangle {
-            width: 3 * root.unit;
+        if (root.selected || area.has-hover) : HorizontalLayout {
+            spacing: 0.5 * root.unit;
+            alignment: center;
             height: parent.height;
-            background: transparent;
 
-            play-button := Rectangle {
-                y: (parent.height - self.height) / 2;
-                width: 3 * root.unit;
-                height: 3 * root.unit;
+            download-button := ButtonSurface {
+                width: 2.8 * root.unit;
+                height: 2.8 * root.unit;
                 border-radius: self.width / 2;
-                background: Theme.success;
+                background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
+                accessible-name: @tr("DOWNLOAD" => "Download");
+                clicked => { root.download(); }
 
                 Image {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    width: 1.4 * root.unit;
-                    height: 1.4 * root.unit;
+                    width: 1.3 * root.unit;
+                    height: 1.3 * root.unit;
+                    source: @image-url("../assets/images/icons/download.svg");
+                    colorize: Theme.text-primary;
+                    image-fit: contain;
+                }
+            }
+
+            play-button := ButtonSurface {
+                width: 2.8 * root.unit;
+                height: 2.8 * root.unit;
+                border-radius: self.width / 2;
+                background: Theme.success;
+                accessible-name: @tr("PLAY" => "Play");
+                clicked => { root.play(); }
+
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 1.3 * root.unit;
+                    height: 1.3 * root.unit;
                     source: @image-url("../assets/images/icons/play.svg");
                     colorize: Theme.text-primary;
                     image-fit: contain;
@@ -163,6 +184,7 @@ export component StreamRow inherits Rectangle {
 export component EpisodeRow inherits Rectangle {
     in property <length> unit: 16px;
     in property <string> title;
+    in property <string> description: "";
     in property <string> released;
     in property <image> thumbnail;
     in property <int> episode-number;
@@ -287,12 +309,24 @@ export component EpisodeRow inherits Rectangle {
                 x: 0px;
                 y: 0px;
                 width: parent.width;
-                height: 2.4 * root.unit;
+                height: root.description != "" ? 1.7 * root.unit : 2.4 * root.unit;
                 text: (root.episode-number > 0 ? root.episode-number + ". " : "")
                     + root.title;
                 color: Theme.primary-foreground;
                 font-size: root.unit;
                 font-weight: 500;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+
+            if (root.description != "") : Text {
+                x: 0px;
+                y: 1.8 * root.unit;
+                width: parent.width;
+                height: 1.5 * root.unit;
+                text: root.description;
+                color: Theme.text-muted;
+                font-size: 0.75 * root.unit;
                 wrap: word-wrap;
                 overflow: elide;
             }

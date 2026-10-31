@@ -88,7 +88,7 @@ async fn request_segments(
     tracing::info!(%url, "fetching TheIntroDB segments");
     let mut request = client()
         .get(url)
-        .header("User-Agent", "TheIntroDB Stremio Native Client");
+        .header("User-Agent", "TheIntroDB Stremio Oxide Client");
     if !api_key.is_empty() {
         request = request.bearer_auth(api_key);
     }

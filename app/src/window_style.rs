@@ -91,7 +91,7 @@ const fn colorref(red: u32, green: u32, blue: u32) -> u32 {
 /// The installer's Start Menu shortcut must carry the same id for Windows to
 /// resolve the friendly name and icon shown in the media overlay.
 #[cfg(target_os = "windows")]
-const APP_USER_MODEL_ID: &str = "com.stremio.native";
+const APP_USER_MODEL_ID: &str = "com.stremio.oxide";
 
 /// Give the process an explicit AppUserModelID. Windows keys the media overlay's
 /// app identity off this, not the executable's version info, so without it the

@@ -1025,6 +1025,7 @@ export component MainWindow inherits Window {
     callback library-sort-changed(string);
     callback library-search-changed(string);
     callback library-item-selected(string, string, string);
+    callback library-item-activated(string, string, string);
     callback library-load-next-page();
     callback library-remove-item(string);
     callback library-watched-changed(string, bool);
@@ -1058,6 +1059,7 @@ export component MainWindow inherits Window {
     callback details-season-step(int);
     callback details-episode-changed(int, string);
     callback play-stream(string);
+    callback download-stream(string);
     
     // Settings callbacks
     callback apply-cache-settings(float);
@@ -1921,6 +1923,9 @@ export component MainWindow inherits Window {
                         item-selected(id, media-type, video-id) => {
                             library-item-selected(id, media-type, video-id);
                         }
+                        item-activated(id, media-type, video-id) => {
+                            library-item-activated(id, media-type, video-id);
+                        }
                         load-next-page => { library-load-next-page(); }
                         request-login => {
                             root.username = "";
@@ -2457,6 +2462,7 @@ export component MainWindow inherits Window {
             toggle-watched => { details-toggle-watched(); }
             notifications-changed(enabled) => { details-notifications-changed(enabled); }
             play-trailer(selection-id) => { play-stream(selection-id); }
+            download-stream(selection-id) => { root.download-stream(selection-id); }
 
             is-series: root.debug-preview-enabled && root.debug-preview-page == 7
                 ? (root.debug-preview-state == "series-episodes"

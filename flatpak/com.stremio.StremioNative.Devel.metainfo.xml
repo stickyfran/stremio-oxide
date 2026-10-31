@@ -3,13 +3,13 @@
   <id>com.stremio.StremioNative.Devel</id>
   <metadata_license>MIT</metadata_license>
   <project_license>GPL-3.0</project_license>
-  <name>Stremio Native (Devel)</name>
+  <name>Stremio Oxide (Devel)</name>
   <summary>Ultra-Fast & Lightweight Native Stremio Desktop Client</summary>
   <developer_name>perpetus</developer_name>
   <update_contact>perpetus.github@gmail.com</update_contact>
   <description>
     <p>
-      Stremio Native is an ultra-fast, lightweight, and modern desktop client for Stremio.
+      Stremio Oxide is an ultra-fast, lightweight, and modern desktop client for Stremio.
       Built with Rust and Slint UI, it features a custom, embedded open-source stream server
       and hardware-accelerated playback via libmpv.
     </p>

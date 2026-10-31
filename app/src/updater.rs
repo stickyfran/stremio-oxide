@@ -392,7 +392,22 @@ fn is_stable(version: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn is_portable_instance() -> bool {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            if parent.join(".portable").exists() || parent.join("portable.dat").exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
 fn has_native_installer(release: &Release) -> bool {
+    if is_portable_instance() {
+        return false;
+    }
     release
         .asset_for(self_update::get_target(), Some(WINDOWS_ASSET_IDENTIFIER))
         .is_some()
@@ -442,6 +457,10 @@ fn stage_installer(version: &str) -> Result<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn launch_installer(installer: &std::path::Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+
     std::process::Command::new(installer)
         .args([
             "/SP-",
@@ -451,9 +470,12 @@ fn launch_installer(installer: &std::path::Path) -> Result<()> {
             "/RESTARTAPPLICATIONS",
             "/LOG",
         ])
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
         .spawn()
         .with_context(|| format!("failed to launch {}", installer.display()))?;
-    Ok(())
+
+    // Terminate immediately so all executable and DLL handles are released
+    std::process::exit(0);
 }
 
 #[cfg(not(target_os = "windows"))]

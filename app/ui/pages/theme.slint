@@ -148,7 +148,7 @@ component StudioPreviewCard inherits Rectangle {
     @children
 }
 
-// ── Stremio Native Card 1: Featured Hero & Media Details Preview ──
+// ── Stremio Oxide Card 1: Featured Hero & Media Details Preview ──
 component StremioMediaHeroCard inherits StudioPreviewCard {
     VerticalLayout {
         padding: 1.5 * root.unit;
@@ -263,7 +263,7 @@ component StremioMediaHeroCard inherits StudioPreviewCard {
     }
 }
 
-// ── Stremio Native Card 2: Streams & Torrent Health List Preview ──
+// ── Stremio Oxide Card 2: Streams & Torrent Health List Preview ──
 component StremioStreamsCard inherits StudioPreviewCard {
     VerticalLayout {
         padding: 1.25 * root.unit;
@@ -386,7 +386,7 @@ component StremioStreamsCard inherits StudioPreviewCard {
     }
 }
 
-// ── Stremio Native Card 3: Native Video Player & OSD Controls Preview ──
+// ── Stremio Oxide Card 3: Native Video Player & OSD Controls Preview ──
 component StremioPlayerCard inherits StudioPreviewCard {
     property <float> progress: 0.52;
 
@@ -476,7 +476,7 @@ component StremioPlayerCard inherits StudioPreviewCard {
     }
 }
 
-// ── Stremio Native Card 4: Library Progress & Activity Stats Card ──
+// ── Stremio Oxide Card 4: Library Progress & Activity Stats Card ──
 component StremioLibraryCard inherits StudioPreviewCard {
     VerticalLayout {
         padding: 1.25 * root.unit;
@@ -682,7 +682,7 @@ component AddonsHealthCard inherits StudioPreviewCard {
     }
 }
 
-// ── Main Stremio Native Theme Studio Page Component ──
+// ── Main Stremio Oxide Theme Studio Page Component ──
 export component ThemePage inherits Rectangle {
     in property <length> unit: 16px;
     in property <color> current-accent: Theme.primary-accent;
@@ -693,7 +693,7 @@ export component ThemePage inherits Rectangle {
     in property <color> current-text-primary: Theme.primary-foreground;
 
     private property <int> active-left-tab: 0; // 0: Colors, 1: Presets, 2: Typography, 3: Other
-    private property <int> active-canvas-tab: 0; // 0: Stremio Native, 1: Player, 2: Library, 3: Addons
+    private property <int> active-canvas-tab: 0; // 0: Stremio Oxide, 1: Player, 2: Library, 3: Addons
     in-out property <int> selected-preset-idx: Theme.active-preset-idx;
     private property <bool> preset-dropdown-open: false;
 
@@ -828,7 +828,7 @@ export component ThemePage inherits Rectangle {
         padding: 0px;
         spacing: 0px;
 
-        // ── Top Stremio Native Header Bar ──
+        // ── Top Stremio Oxide Header Bar ──
         Rectangle {
             height: 3.5 * root.unit;
             background: transparent;
@@ -1389,7 +1389,7 @@ export component ThemePage inherits Rectangle {
                 }
             }
 
-            // ── Right Column: Stremio Native Live Canvas Grid ──
+            // ── Right Column: Stremio Oxide Live Canvas Grid ──
             VerticalLayout {
                 horizontal-stretch: 1;
                 padding: 1.25 * root.unit;
@@ -1402,7 +1402,7 @@ export component ThemePage inherits Rectangle {
 
                     HorizontalLayout {
                         spacing: 0.5 * root.unit;
-                        for tab[c-idx] in ["Stremio Native", @tr("Player"), @tr("Library"), @tr("Addons")] : ButtonSurface {
+                        for tab[c-idx] in ["Stremio Oxide", @tr("Player"), @tr("Library"), @tr("Addons")] : ButtonSurface {
                             height: parent.height;
                             background: root.active-canvas-tab == c-idx ? Theme.overlay-hover : transparent;
                             border-radius: Theme.compact-radius;
@@ -1424,11 +1424,11 @@ export component ThemePage inherits Rectangle {
                     }
                 }
 
-                // Interactive Stremio Native Cards Grid View
+                // Interactive Stremio Oxide Cards Grid View
                 ScrollView {
                     horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
 
-                    // Sub-tab 0: Stremio Native 2x2 Grid View
+                    // Sub-tab 0: Stremio Oxide 2x2 Grid View
                     if (root.active-canvas-tab == 0) : HorizontalLayout {
                         spacing: 1.25 * root.unit;
                         alignment: start;

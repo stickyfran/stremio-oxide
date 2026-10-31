@@ -1436,7 +1436,7 @@ fn setup_integration_management(ui: &MainWindow) {
                             integrations::send_notification(
                                 profile.as_str(),
                                 kind,
-                                "Stremio Native notification test succeeded.",
+                                "Stremio Oxide notification test succeeded.",
                             )
                             .await?;
                             format!("{provider} connected and tested")

@@ -24,6 +24,7 @@ use slint::{
 use stremio_core::{
     models::{
         common::Loadable,
+        meta_details::Selected as DetailsSelected,
         player::{Player, Selected, VideoParams},
     },
     runtime::{
@@ -524,6 +525,7 @@ fn send_external_subtitles(
 struct PlayerEpisodeProjection {
     id: String,
     title: String,
+    description: String,
     released: String,
     thumbnail_url: String,
     season: i32,
@@ -763,6 +765,7 @@ fn player_episode_selector_projection(
             PlayerEpisodeProjection {
                 id: video.id.clone(),
                 title: video.title.clone(),
+                description: video.overview.clone().unwrap_or_default(),
                 released,
                 thumbnail_url,
                 season: active_season,
@@ -820,6 +823,7 @@ fn apply_player_episode_selector(
             EpisodeItem {
                 id: episode.id.into(),
                 title: episode.title.into(),
+                description: episode.description.into(),
                 released: episode.released.into(),
                 thumbnail_url: thumbnail_url
                     .as_ref()
@@ -2656,14 +2660,8 @@ impl NativePlaybackBridge {
 
         ui.on_player_next_episode({
             let core = core.clone();
-            let controller = self.controller.clone();
             let weak = ui.as_weak();
-            let statistics_poll = self.statistics_poll.clone();
-            let session = self.session.clone();
             let navigation = navigation.clone();
-            let discord_rpc = self.discord_rpc.clone();
-            let thumbnails = self.thumbnails.clone();
-            let pip_controller = pip_controller.clone();
             move || {
                 if play_next(&core) {
                     return;
@@ -2672,15 +2670,14 @@ impl NativePlaybackBridge {
                     let player = &model.player;
                     let next_video = player.next_video.as_ref()?;
                     let video_id = next_video.id.clone();
-                    let meta_id = player
+                    let meta_item = player
                         .meta_item
                         .as_ref()?
                         .content
                         .as_ref()
-                        .and_then(Loadable::ready)?
-                        .preview
-                        .id
-                        .clone();
+                        .and_then(Loadable::ready)?;
+                    let meta_id = meta_item.preview.id.clone();
+                    let meta_type = meta_item.preview.r#type.clone();
                     let saved_stream = model
                         .ctx
                         .streams
@@ -2690,25 +2687,38 @@ impl NativePlaybackBridge {
                             video_id: video_id.clone(),
                         })
                         .cloned();
-                    let (season, index) = player
-                        .meta_item
-                        .as_ref()
-                        .and_then(|resource| resource.content.as_ref().and_then(Loadable::ready))
-                        .and_then(|meta_item| {
-                            meta_item
-                                .videos
-                                .iter()
-                                .enumerate()
-                                .find(|(_, video)| video.id == video_id)
-                        })
+                    let (season, index) = meta_item
+                        .videos
+                        .iter()
+                        .enumerate()
+                        .find(|(_, video)| video.id == video_id)
                         .map(|(idx, video)| {
                             let s = video.series_info.as_ref().map(|info| info.season as i32);
                             (s, idx as i32)
                         })
                         .unwrap_or((None, 0));
-                    Some((meta_id, video_id, saved_stream, season, index))
+                    let current_binge = player
+                        .selected
+                        .as_ref()
+                        .and_then(|sel| sel.stream.behavior_hints.binge_group.clone());
+                    let current_name = player
+                        .selected
+                        .as_ref()
+                        .and_then(|sel| sel.stream.name.clone());
+                    let mut stream_request = player
+                        .selected
+                        .as_ref()
+                        .and_then(|s| s.stream_request.clone());
+                    if let Some(req) = stream_request.as_mut() {
+                        req.path.id = video_id.clone();
+                    }
+                    let meta_request = player
+                        .selected
+                        .as_ref()
+                        .and_then(|s| s.meta_request.clone());
+                    Some((meta_id, meta_type, video_id, saved_stream, season, index, current_binge, current_name, stream_request, meta_request))
                 });
-                let Some((meta_id, video_id, saved_stream, season, index)) = selection else {
+                let Some((meta_id, meta_type, video_id, saved_stream, season, index, current_binge, current_name, stream_request, meta_request)) = selection else {
                     return;
                 };
                 if let (Some(ui), Some(saved_stream)) = (weak.upgrade(), saved_stream) {
@@ -2716,42 +2726,117 @@ impl NativePlaybackBridge {
                     return;
                 }
 
-                unload_player(
-                    &controller,
-                    &core,
-                    &statistics_poll,
-                    &session,
-                    &discord_rpc,
-                    &thumbnails,
-                );
+                // Hot stream switch: do NOT unload the player.
+                // Keep the player open, show loading stage, and resolve next stream.
                 if let Some(ui) = weak.upgrade() {
-                    if !navigation.is_player_visible() {
-                        return;
-                    }
-                    let _ = ui.window().with_winit_window(|window| {
-                        pip_controller.borrow_mut().exit(window);
-                    });
-                    ui.set_player_pip_active(false);
-                    if let Some(season) = season {
-                        ui.set_detail_active_season(season);
-                        ui.invoke_details_season_changed(season);
-                    }
-                    navigation.dispatch_and_project(
-                        &ui,
-                        NavigationIntent::OpenDetails { media_id: meta_id },
-                    );
+                    ui.set_player_loading(true);
+                    ui.set_player_buffering(true);
+                    ui.set_player_loading_stage_title("Cargando siguiente episodio…".into());
+                    ui.set_player_loading_stage_detail("Buscando streams compatibles…".into());
+                    ui.set_player_active_video_id(video_id.clone().into());
                     ui.set_player_active_episode_idx(index);
-                    ui.set_detail_active_episode_idx(index);
-                    ui.invoke_details_episode_changed(index, video_id.into());
-                    ui.set_player_loading(false);
-                    ui.set_player_buffering(false);
-                    ui.set_player_has_video_frame(false);
-                    ui.set_player_video_frame(slint::Image::default());
-                    clear_player_episode_selector(&ui);
-                    if ui.window().is_fullscreen() {
-                        ui.window().set_fullscreen(false);
+                    if let Some(season) = season {
+                        ui.set_player_active_season(season);
                     }
                 }
+
+                // Dispatch stream request for the next episode
+                let meta_path = ResourcePath {
+                    resource: "meta".to_owned(),
+                    r#type: meta_type.clone(),
+                    id: meta_id.clone(),
+                    extra: vec![],
+                };
+                let stream_path = Some(ResourcePath {
+                    resource: "stream".to_owned(),
+                    r#type: meta_type,
+                    id: video_id.clone(),
+                    extra: vec![],
+                });
+                core.dispatch(RuntimeAction {
+                    field: None,
+                    action: Action::Load(ActionLoad::MetaDetails(DetailsSelected {
+                        meta_path: meta_path.clone(),
+                        stream_path: stream_path.clone(),
+                        guess_stream: true,
+                    })),
+                });
+
+                let core_clone = core.clone();
+                let weak_clone = weak.clone();
+                tokio::spawn(async move {
+                    let start = std::time::Instant::now();
+                    let timeout = std::time::Duration::from_secs(12);
+                    let mut matched_stream = None;
+
+                    while start.elapsed() < timeout {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        if let Ok(model) = core_clone.model() {
+                            let streams: Vec<stremio_core::types::resource::Stream> = model
+                                .meta_details
+                                .streams
+                                .iter()
+                                .filter_map(|r| r.content.as_ref().and_then(Loadable::ready))
+                                .flatten()
+                                .cloned()
+                                .collect();
+
+                            if !streams.is_empty() {
+                                // 1. Match by binge_group
+                                if let Some(ref bg) = current_binge {
+                                    if let Some(found) = streams.iter().find(|s| s.behavior_hints.binge_group.as_ref() == Some(bg)) {
+                                        matched_stream = Some(found.clone());
+                                        break;
+                                    }
+                                }
+                                // 2. Match by stream name / provider
+                                if let Some(ref name) = current_name {
+                                    if let Some(found) = streams.iter().find(|s| s.name.as_ref() == Some(name)) {
+                                        matched_stream = Some(found.clone());
+                                        break;
+                                    }
+                                }
+                                // 3. Fallback to first available stream
+                                if start.elapsed() > std::time::Duration::from_secs(3) {
+                                    matched_stream = streams.first().cloned();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(stream) = matched_stream {
+                        let selected = Selected {
+                            stream,
+                            stream_request,
+                            meta_request,
+                            subtitles_path: None,
+                        };
+                        let resolution = crate::integrations::resolve_explicit_selection(selected).await;
+                        let final_selected = match resolution {
+                            crate::integrations::DebridResolution::Resolved(s) => s,
+                            crate::integrations::DebridResolution::Uncached { selected, .. } => selected,
+                            crate::integrations::DebridResolution::Fallback(s) => s,
+                        };
+                        let _ = slint::invoke_from_event_loop(move || {
+                            core_clone.dispatch(RuntimeAction {
+                                field: None,
+                                action: Action::Load(ActionLoad::Player(Box::new(final_selected))),
+                            });
+                        });
+                    } else {
+                        // Fallback after 12s: show playlist drawer inside player without crashing or unloading
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_clone.upgrade() {
+                                ui.set_player_loading(false);
+                                ui.set_player_buffering(false);
+                                ui.set_player_loading_stage_title("Selecciona un stream".into());
+                                ui.set_player_loading_stage_detail("No se encontró stream compatible automáticamente.".into());
+                                ui.set_player_show_playlist_drawer(true);
+                            }
+                        });
+                    }
+                });
             }
         });
 
@@ -4524,13 +4609,17 @@ fn apply_state_to_ui(
     }
 
     let buffered_percent = if state.duration > 0.0 {
-        ((state.buffered_until / state.duration) * 100.0).clamp(0.0, 100.0) as f32
+        let current_pos = state.time.max(0.0);
+        let buffered_end = (current_pos + state.buffered_until).min(state.duration);
+        ((buffered_end / state.duration) * 100.0).clamp(0.0, 100.0) as f32
     } else {
         0.0
     };
     let previous_buffered_percent = previous.map(|previous| {
         if previous.duration > 0.0 {
-            ((previous.buffered_until / previous.duration) * 100.0).clamp(0.0, 100.0) as f32
+            let prev_pos = previous.time.max(0.0);
+            let prev_buffered_end = (prev_pos + previous.buffered_until).min(previous.duration);
+            ((prev_buffered_end / previous.duration) * 100.0).clamp(0.0, 100.0) as f32
         } else {
             0.0
         }

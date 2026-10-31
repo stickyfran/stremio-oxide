@@ -27,7 +27,8 @@ jobs:
       LIBTORRENT_STATIC: "1"
       CARGO_BUILD_JOBS: "2"
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Configure swap space
@@ -39,10 +40,12 @@ jobs:
           sudo mkswap "$SWAP_DIR/swapfile_extra"
           sudo swapon "$SWAP_DIR/swapfile_extra" || true
           free -h
-      - uses: dtolnay/rust-toolchain@master
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
       - name: Restore apt cache
         id: apt-cache
         uses: actions/cache/restore@v6
@@ -105,7 +108,8 @@ jobs:
           tool: cargo-deb
       - name: Build DEB Package
         run: cargo deb --package stremio-native --no-build
-      - uses: actions/upload-artifact@v7
+      - name: Upload Linux x64 artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: stremio-oxide-linux-x64
           path: |
@@ -127,7 +131,8 @@ jobs:
       LIBTORRENT_STATIC: "1"
       CARGO_BUILD_JOBS: "2"
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Configure swap space
@@ -139,10 +144,12 @@ jobs:
           sudo mkswap "$SWAP_DIR/swapfile_extra"
           sudo swapon "$SWAP_DIR/swapfile_extra" || true
           free -h
-      - uses: dtolnay/rust-toolchain@master
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
           key: linux-arm64
       - name: Restore apt cache
@@ -207,7 +214,8 @@ jobs:
           tool: cargo-deb
       - name: Build DEB Package
         run: cargo deb --package stremio-native --no-build
-      - uses: actions/upload-artifact@v7
+      - name: Upload Linux ARM64 artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: stremio-oxide-linux-arm64
           path: |
@@ -221,10 +229,12 @@ jobs:
     env:
       VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@master
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
           targets: x86_64-pc-windows-msvc
@@ -323,7 +333,8 @@ jobs:
           Invoke-WebRequest -Uri $archiveUrl -OutFile 'mpv-x64.7z'
           7z x 'mpv-x64.7z' -o"$mpvDir" -y
           "STREMIO_MPV_DIR=$mpvDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --locked --release --package stremio-native
         env:
@@ -366,20 +377,22 @@ jobs:
             $iscc = Find-Iscc
           }
           "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Build installer and updater archive
+      - name: Build Windows installer and portable archive
         shell: cmd
         run: |
           set "SKIP_BUILD=1"
           call setup\create_setup.cmd
-      - uses: actions/upload-artifact@v7
+      - name: Upload Windows x64 artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: stremio-oxide-windows-x64
           path: |
             target/release/stremio-native.exe
+            target/release/stremio-oxide.exe
             target/release/libmpv-2.dll
             target/release/msvc-runtime
-            artifacts/StremioSetup-v*-x64.exe
-            artifacts/stremio-native-v*-x86_64-pc-windows-msvc.zip
+            artifacts/StremioOxideSetup-v*-x64.exe
+            artifacts/stremio-oxide-v*-windows-x64.zip
           if-no-files-found: error
 
   windows-arm64:
@@ -389,10 +402,12 @@ jobs:
       VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
       TARGET_ARCH: arm64
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@master
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
           targets: aarch64-pc-windows-msvc
@@ -500,7 +515,8 @@ jobs:
           Invoke-WebRequest -Uri $archiveUrl -OutFile 'mpv-arm64.7z'
           7z x 'mpv-arm64.7z' -o"$mpvDir" -y
           "STREMIO_MPV_DIR=$mpvDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
           key: aarch64-pc-windows-msvc
       - name: Build release
@@ -547,32 +563,36 @@ jobs:
             $iscc = Find-Iscc
           }
           "ISCC_EXE=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Build installer and updater archive
+      - name: Build Windows installer and portable archive
         shell: cmd
         env:
           TARGET_ARCH: arm64
         run: |
           set "SKIP_BUILD=1"
           call setup\create_setup.cmd
-      - uses: actions/upload-artifact@v7
+      - name: Upload Windows ARM64 artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: stremio-oxide-windows-arm64
           path: |
             target/release/stremio-native.exe
+            target/release/stremio-oxide.exe
             target/release/libmpv-2.dll
             target/release/msvc-runtime
-            artifacts/StremioSetup-v*-arm64.exe
-            artifacts/stremio-native-v*-aarch64-pc-windows-msvc.zip
+            artifacts/StremioOxideSetup-v*-arm64.exe
+            artifacts/stremio-oxide-v*-windows-arm64.zip
           if-no-files-found: error
 
   macos-arm64:
     name: macOS (Apple Silicon ARM64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@master
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-31
       - name: Install dependencies
@@ -586,7 +606,8 @@ jobs:
           cp target/release/stremio-native package-macos/stremio-oxide
           chmod +x package-macos/stremio-oxide
           tar -czvf stremio-oxide-macos-arm64.tar.gz -C package-macos stremio-oxide
-      - uses: actions/upload-artifact@v7
+      - name: Upload macOS ARM64 artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: stremio-oxide-macos-arm64
           path: stremio-oxide-macos-arm64.tar.gz

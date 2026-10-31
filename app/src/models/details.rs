@@ -1319,6 +1319,7 @@ pub fn sync(
                 slint_episodes.push(EpisodeItem {
                     id: video.id.as_str().into(),
                     title: video.title.as_str().into(),
+                    description: video.overview.as_deref().unwrap_or_default().into(),
                     released: released_str.into(),
                     thumbnail_url: thumb_url
                         .as_ref()

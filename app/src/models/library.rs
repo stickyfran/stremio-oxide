@@ -249,7 +249,7 @@ pub fn setup(
         }
     });
 
-    // Item selection callback
+    // Item selection callback (single-click selects item in right preview drawer)
     ui.on_library_item_selected({
         let runtime = runtime.clone();
         let ui_weak = ui_weak.clone();
@@ -261,17 +261,39 @@ pub fn setup(
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
-            if ui.get_library_preview_enabled() {
-                let transition = navigation.dispatch(NavigationIntent::SelectLibraryPreview {
-                    media_id: id.clone(),
-                });
-                if transition.changed {
-                    load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
+            ui.set_library_preview_enabled(true);
+            let transition = navigation.dispatch(NavigationIntent::SelectLibraryPreview {
+                media_id: id.clone(),
+            });
+            if transition.changed {
+                ui.set_library_has_preview(true);
+                if let Ok(model) = runtime.model() {
+                    if let Some(item) = model.ctx.library.items.get(&id) {
+                        ui.set_library_preview_title(item.name.as_str().into());
+                        if let Some(poster) = item.poster.as_ref() {
+                            ui.set_library_preview_poster_url(poster.as_str().into());
+                            ui.set_library_preview_poster(crate::image_cache::get_poster_image(&item.poster, &ui_weak));
+                        }
+                    }
                 }
-            } else {
-                open_details_route(&ui, &runtime, &navigation, &id);
                 load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
             }
+        }
+    });
+
+    // Item activation callback (double-click opens full details route)
+    ui.on_library_item_activated({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        let navigation = navigation.clone();
+        move |id, media_type, video_id| {
+            let id = id.to_string();
+            let media_type = media_type.to_string();
+            let video_id = (!video_id.is_empty()).then(|| video_id.to_string());
+            if let Some(ui) = ui_weak.upgrade() {
+                open_details_route(&ui, &runtime, &navigation, &id);
+            }
+            load_meta_details_for_video(&runtime, id, Some(media_type), video_id);
         }
     });
 

@@ -449,10 +449,19 @@ fn load_file_options(url: &str, start_at: Option<f64>) -> Option<String> {
     let mut options = Vec::new();
     if needs_ytdl(url) {
         options.push("cache=yes".to_owned());
-    }
-    if is_local_or_loopback(url) {
-        options.push("demuxer-max-bytes=16777216".to_owned()); // 16 MiB
-        options.push("demuxer-max-back-bytes=8388608".to_owned()); // 8 MiB
+        options.push("demuxer-max-bytes=67108864".to_owned()); // 64 MiB
+        options.push("demuxer-max-back-bytes=0".to_owned());
+        options.push("demuxer-readahead-secs=15".to_owned());
+    } else if is_local_or_loopback(url) {
+        options.push("cache=yes".to_owned());
+        options.push("demuxer-max-bytes=268435456".to_owned()); // 256 MiB
+        options.push("demuxer-max-back-bytes=67108864".to_owned()); // 64 MiB
+        options.push("demuxer-readahead-secs=60".to_owned());
+    } else {
+        options.push("cache=yes".to_owned());
+        options.push("demuxer-max-bytes=536870912".to_owned()); // 512 MiB
+        options.push("demuxer-max-back-bytes=134217728".to_owned()); // 128 MiB
+        options.push("demuxer-readahead-secs=180".to_owned());
     }
     if let Some(start_at) = start_at.filter(|time| time.is_finite() && *time > 0.0) {
         options.push(format!("start={start_at:.3}"));
@@ -542,7 +551,8 @@ impl PlaybackRuntime {
             tracing::warn!(%error, path = %ytdl_path.display(), "could not point ytdl_hook at yt-dlp");
         }
         client.set_option("ytdl", "yes")?;
-        client.set_option("ytdl-format", "bestvideo+bestaudio/best")?;
+        client.set_option("ytdl-format", "best[height<=?720]/bestvideo[height<=?720]+bestaudio/best")?;
+        let _ = client.set_option("ytdl-raw-options", "extractor-args=youtube:player_client=ios,web_embedded");
         client.set_option("terminal", "no")?;
         client.set_option("input-default-bindings", "no")?;
         client.set_option("input-vo-keyboard", "no")?;

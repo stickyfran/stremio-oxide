@@ -725,9 +725,7 @@ pub fn start_event_loop(
                         }
                         fingerprint.finish()
                     });
-                    let trailer_selection_id = details_stream_sync_needed
-                        .then(|| playback_selections.trailer_id())
-                        .flatten();
+                    let trailer_selection_id = playback_selections.trailer_id();
                     let detail_stream_loading_count = details_stream_sync_needed.then(|| {
                         i32::try_from(
                             model
@@ -940,11 +938,14 @@ pub fn start_event_loop(
                                 ui.set_discover_preview_is_watched(details_is_watched);
                             }
 
+                            if details_patch_allowed {
+                                if let Some(trailer_id) = &trailer_selection_id {
+                                    ui.set_detail_trailer_selection_id(trailer_id.as_str().into());
+                                }
+                            }
+
                             // Sync stream links only for the route that requested them.
                             if details_stream_sync_needed && details_patch_allowed {
-                                ui.set_detail_trailer_selection_id(
-                                    trailer_selection_id.as_deref().unwrap_or_default().into(),
-                                );
                                 if let Ok(mut last_id_guard) = last_details_id_clone.lock()
                                     && *last_id_guard != details_route_id
                                 {

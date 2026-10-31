@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Stremio Native release notes from assets, changelog, and git history."""
+"""Generate Stremio Oxide release notes from assets, changelog, and git history."""
 
 from __future__ import annotations
 
@@ -19,19 +19,30 @@ PROJECT_DESCRIPTION = (
 )
 
 ASSET_PATTERNS = (
-    ("StremioSetup-v*-x64.exe", "Windows installer"),
-    (
-        "stremio-native-v*-x86_64-pc-windows-msvc.zip",
-        "Windows automatic updater",
-    ),
-    (
-        "stremio-native-v*-x86_64-unknown-linux-gnu",
-        "Linux x64 portable",
-    ),
-    ("*.deb", "Debian / Ubuntu Package"),
-    ("*.pkg.tar.zst", "Arch Linux Package"),
-    ("*.rpm", "Fedora / RedHat RPM Package"),
-    ("SHA256SUMS.txt", "SHA-256 checksums"),
+    # Linux (Debian, Arch, RPM, standalone binaries)
+    ("*amd64*.deb", "🐧 Linux", "Debian / Ubuntu (.deb x64)"),
+    ("*arm64*.deb", "🐧 Linux", "Debian / Ubuntu (.deb ARM64)"),
+    ("*.deb", "🐧 Linux", "Debian / Ubuntu (.deb)"),
+    ("*.pkg.tar.zst", "🐧 Linux", "Arch Linux (.pkg.tar.zst)"),
+    ("*.rpm", "🐧 Linux", "Fedora / RHEL (.rpm)"),
+    ("stremio-oxide-*-x86_64-unknown-linux-gnu*", "🐧 Linux", "x86_64 Standalone Binary"),
+    ("stremio-oxide-*-aarch64-unknown-linux-gnu*", "🐧 Linux", "ARM64 Standalone Binary"),
+    ("stremio-native-*-x86_64-unknown-linux-gnu*", "🐧 Linux", "x86_64 Standalone Binary"),
+    ("stremio-native-*-aarch64-unknown-linux-gnu*", "🐧 Linux", "ARM64 Standalone Binary"),
+    # Windows (Inno Setup installer and portable archive)
+    ("StremioOxideSetup-v*-x64.exe", "🪟 Windows", "x64 Installer (.exe)"),
+    ("StremioOxideSetup-v*-arm64.exe", "🪟 Windows", "ARM64 Installer (.exe)"),
+    ("StremioSetup-v*-x64.exe", "🪟 Windows", "x64 Installer (.exe)"),
+    ("StremioSetup-v*-arm64.exe", "🪟 Windows", "ARM64 Installer (.exe)"),
+    ("stremio-oxide-v*-windows-x64.zip", "🪟 Windows", "x64 Portable (.zip)"),
+    ("stremio-oxide-v*-windows-arm64.zip", "🪟 Windows", "ARM64 Portable (.zip)"),
+    # macOS (Universal portable and packages)
+    ("stremio-oxide-macos.tar.gz", "🍎 macOS", "Universal Portable (.tar.gz)"),
+    ("stremio-oxide-*-macos*.zip", "🍎 macOS", "Universal (.zip)"),
+    ("stremio-oxide-*.dmg", "🍎 macOS", "Disk Image (.dmg)"),
+    ("stremio-native-macos.tar.gz", "🍎 macOS", "Portable (.tar.gz)"),
+    # Checksums
+    ("SHA256SUMS.txt", "📋 Checksums", "SHA-256 Hashes"),
 )
 
 CATEGORY_ORDER = (
@@ -137,16 +148,16 @@ def categorize(subject: str) -> str:
     return TYPE_CATEGORIES.get(match.group("type").lower(), "Other Changes")
 
 
-def asset_label(name: str) -> str:
-    for pattern, label in ASSET_PATTERNS:
+def asset_info(name: str) -> tuple[str, str]:
+    for pattern, os_label, pkg_label in ASSET_PATTERNS:
         if fnmatch.fnmatchcase(name, pattern):
-            return label
-    return "Additional asset"
+            return os_label, pkg_label
+    return "📦 Other", "Additional asset"
 
 
 def sorted_assets(asset_dir: Path) -> list[Path]:
     def sort_key(path: Path) -> tuple[int, str]:
-        for index, (pattern, _) in enumerate(ASSET_PATTERNS):
+        for index, (pattern, _, _) in enumerate(ASSET_PATTERNS):
             if fnmatch.fnmatchcase(path.name, pattern):
                 return index, path.name.lower()
         return len(ASSET_PATTERNS), path.name.lower()
@@ -168,11 +179,17 @@ def github_commit_url(repo: str, sha: str) -> str:
 
 
 def render_downloads(repo: str, tag: str, assets: Iterable[Path]) -> list[str]:
-    lines = ["### Downloads", "", "| Platform | Download |", "| --- | --- |"]
+    lines = [
+        "### Downloads",
+        "",
+        "| OS | Package / Platform | Download |",
+        "| :--- | :--- | :--- |",
+    ]
     for asset in assets:
+        os_label, pkg_label = asset_info(asset.name)
         lines.append(
-            f"| {asset_label(asset.name)} | "
-            f"[Download]({github_download_url(repo, tag, asset.name)}) |"
+            f"| {os_label} | {pkg_label} | "
+            f"[{asset.name}]({github_download_url(repo, tag, asset.name)}) |"
         )
     lines.extend(["", "Verify downloads against `SHA256SUMS.txt`.", "", "---", ""])
     return lines
@@ -259,7 +276,7 @@ def generate_release_notes(
     asset_dir: Path,
     changelog: Path,
 ) -> str:
-    lines = [f"## Stremio Native {tag}", "", PROJECT_DESCRIPTION, ""]
+    lines = [f"## Stremio Oxide {tag}", "", PROJECT_DESCRIPTION, ""]
     lines.extend(render_downloads(repo, tag, sorted_assets(asset_dir)))
     lines.extend(["### Release notes", ""])
     lines.extend(changelog_section(changelog, tag))

@@ -1,4 +1,4 @@
-app-name = Stremio Native
+app-name = Stremio Oxide
 downloads-title = Downloads
 downloads-empty = No downloads yet
 download-count = { $count ->

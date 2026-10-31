@@ -20,7 +20,7 @@ if not exist "%ISCC_EXE%" (
   exit /b 1
 )
 
-echo Building Stremio %APP_VERSION%...
+echo Building Stremio Oxide %APP_VERSION%...
 if not defined SKIP_BUILD (
   cargo build --release --package stremio-native
   if errorlevel 1 exit /b %errorlevel%
@@ -31,18 +31,22 @@ if not defined SKIP_BUILD (
 if not defined TARGET_ARCH set "TARGET_ARCH=x64"
 if not defined BUILD_ROOT set "BUILD_ROOT=%CD%\target\release"
 
+if exist "%BUILD_ROOT%\stremio-native.exe" (
+  copy /y "%BUILD_ROOT%\stremio-native.exe" "%BUILD_ROOT%\stremio-oxide.exe" >nul
+)
+
 echo Staging the app-local MSVC runtime for %TARGET_ARCH%...
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stage_windows_msvc_runtime.ps1 -BuildRoot "%BUILD_ROOT%" -Architecture "%TARGET_ARCH%"
 if errorlevel 1 exit /b %errorlevel%
 
 if /i "%TARGET_ARCH%"=="arm64" (
-  set "OUTPUT_NAME=StremioSetup-v%APP_VERSION%-arm64"
+  set "OUTPUT_NAME=StremioOxideSetup-v%APP_VERSION%-arm64"
   set "ARCH_ALLOWED=arm64"
-  set "UPDATER_ARCHIVE=%CD%\artifacts\stremio-native-v%APP_VERSION%-aarch64-pc-windows-msvc.zip"
+  set "PORTABLE_ARCHIVE=%CD%\artifacts\stremio-oxide-v%APP_VERSION%-windows-arm64.zip"
 ) else (
-  set "OUTPUT_NAME=StremioSetup-v%APP_VERSION%-x64"
+  set "OUTPUT_NAME=StremioOxideSetup-v%APP_VERSION%-x64"
   set "ARCH_ALLOWED=x64compatible"
-  set "UPDATER_ARCHIVE=%CD%\artifacts\stremio-native-v%APP_VERSION%-x86_64-pc-windows-msvc.zip"
+  set "PORTABLE_ARCHIVE=%CD%\artifacts\stremio-oxide-v%APP_VERSION%-windows-x64.zip"
 )
 
 echo Creating the installer...
@@ -50,23 +54,34 @@ echo Creating the installer...
 if errorlevel 1 exit /b %errorlevel%
 
 set "INSTALLER=%CD%\artifacts\%OUTPUT_NAME%.exe"
-set "UPDATER_PACKAGE_DIR=%CD%\artifacts\updater-package"
-
 if not exist "%INSTALLER%" (
   echo Expected installer was not created: %INSTALLER%
   exit /b 1
 )
 
-if not exist "%UPDATER_PACKAGE_DIR%" mkdir "%UPDATER_PACKAGE_DIR%"
-if exist "%UPDATER_PACKAGE_DIR%\stremio-installer.exe" del /q "%UPDATER_PACKAGE_DIR%\stremio-installer.exe"
-copy /y "%INSTALLER%" "%UPDATER_PACKAGE_DIR%\stremio-installer.exe" >nul
+echo Creating the portable application archive...
+set "PORTABLE_STAGE_DIR=%CD%\artifacts\stremio-oxide-portable"
+if exist "%PORTABLE_STAGE_DIR%" rmdir /s /q "%PORTABLE_STAGE_DIR%"
+mkdir "%PORTABLE_STAGE_DIR%"
+if exist "%BUILD_ROOT%\stremio-oxide.exe" copy /y "%BUILD_ROOT%\stremio-oxide.exe" "%PORTABLE_STAGE_DIR%\" >nul
+if exist "%BUILD_ROOT%\stremio-native.exe" copy /y "%BUILD_ROOT%\stremio-native.exe" "%PORTABLE_STAGE_DIR%\" >nul
+if exist "%BUILD_ROOT%\libmpv-2.dll" copy /y "%BUILD_ROOT%\libmpv-2.dll" "%PORTABLE_STAGE_DIR%\" >nul
+
+if exist "%BUILD_ROOT%\msvc-runtime" (
+  mkdir "%PORTABLE_STAGE_DIR%\msvc-runtime"
+  xcopy /y /e "%BUILD_ROOT%\msvc-runtime" "%PORTABLE_STAGE_DIR%\msvc-runtime\" >nul
+)
+
+if exist "%BUILD_ROOT%\licenses" (
+  mkdir "%PORTABLE_STAGE_DIR%\licenses"
+  xcopy /y /e "%BUILD_ROOT%\licenses" "%PORTABLE_STAGE_DIR%\licenses\" >nul
+)
+
+if not exist "%CD%\artifacts" mkdir "%CD%\artifacts"
+if exist "%PORTABLE_ARCHIVE%" del /q "%PORTABLE_ARCHIVE%"
+tar -a -c -f "%PORTABLE_ARCHIVE%" -C "%PORTABLE_STAGE_DIR%" .
 if errorlevel 1 exit /b %errorlevel%
 
-if exist "%UPDATER_ARCHIVE%" del /q "%UPDATER_ARCHIVE%"
-tar -a -c -f "%UPDATER_ARCHIVE%" -C "%UPDATER_PACKAGE_DIR%" stremio-installer.exe
-if errorlevel 1 exit /b %errorlevel%
+rmdir /s /q "%PORTABLE_STAGE_DIR%"
 
-del /q "%UPDATER_PACKAGE_DIR%\stremio-installer.exe"
-rmdir "%UPDATER_PACKAGE_DIR%"
-
-echo Installer and updater archive created in %CD%\artifacts.
+echo Installer and portable archive created in %CD%\artifacts.

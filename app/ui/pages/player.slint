@@ -1374,6 +1374,7 @@ export component PlayerPage inherits Rectangle {
                     width: parent.width;
                     unit: 16px;
                     title: episode.title;
+                    description: episode.description;
                     released: episode.released;
                     thumbnail: episode.thumbnail;
                     episode-number: episode.episode-num;
@@ -3392,7 +3393,7 @@ export component PlayerPage inherits Rectangle {
     }
 
     // NextVideoPopup Overlay ("Up Next" card) matching stremio-web/src/routes/Player/NextVideoPopup
-    if (controls-visible && show-next-video-popup && has-next-episode) : next-video-popup := PopupMenuSurface {
+    if (show-next-video-popup && has-next-episode) : next-video-popup := PopupMenuSurface {
         x: parent.width - next-video-popup.width - 32px;
         y: parent.height - next-video-popup.height - 112px;
         width: min(560px, parent.width - 64px);

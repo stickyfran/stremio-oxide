@@ -162,7 +162,7 @@ pub fn default_player_layout() -> PlayerLayoutV1 {
 pub fn default_theme(layout: HomeLayoutPreset) -> ThemeManifestV1 {
     ThemeManifestV1 {
         version: 1,
-        name: "Stremio Native".to_owned(),
+        name: "Stremio Oxide".to_owned(),
         layout,
         colors: ThemeColors {
             background: "#0c0b11".to_owned(),

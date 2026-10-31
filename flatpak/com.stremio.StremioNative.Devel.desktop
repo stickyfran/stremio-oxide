@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Stremio Native (Devel)
+Name=Stremio Oxide (Devel)
 Comment=Ultra-Fast & Lightweight Native Stremio Desktop Client
 Exec=stremio-native %U
 Icon=com.stremio.StremioNative.Devel
