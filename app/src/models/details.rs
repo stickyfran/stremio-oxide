@@ -99,6 +99,17 @@ pub fn open_details_route(
         true
     });
     ui.set_details_loading(!ready);
+    if !ready {
+        let ui_weak = ui.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_secs(8), move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                if ui.get_details_loading() {
+                    tracing::warn!("details loading timed out; clearing loading spinner");
+                    ui.set_details_loading(false);
+                }
+            }
+        });
+    }
 }
 
 pub fn load_meta_details_for_video(
@@ -854,15 +865,28 @@ pub fn sync(
     };
 
     let _span = tracing::info_span!("extract_meta_resource").entered();
-    let Some(meta_item) =
-        meta_details
-            .meta_items
-            .iter()
-            .find_map(|resource| match &resource.content {
-                Some(Loadable::Ready(item)) if item.preview.id == selected_id => Some(item),
+    let meta_item_opt = meta_details
+        .meta_items
+        .iter()
+        .find_map(|resource| match &resource.content {
+            Some(Loadable::Ready(item)) if item.preview.id == selected_id => Some(item),
+            _ => None,
+        });
+
+    let Some(meta_item) = meta_item_opt else {
+        // If all meta items finished loading (or failed) and none succeeded, release the loading lock.
+        let still_loading = meta_details.meta_items.iter().any(|r| matches!(&r.content, Some(Loadable::Loading) | None));
+        if !still_loading && !meta_details.meta_items.is_empty() {
+            ui.set_details_loading(false);
+            let any_error = meta_details.meta_items.iter().find_map(|r| match &r.content {
+                Some(Loadable::Err(e)) => Some(e.to_string()),
                 _ => None,
-            })
-    else {
+            });
+            if let Some(err) = any_error {
+                tracing::warn!(%selected_id, %err, "metadata failed to load for details view");
+                ui.set_error_message(err.into());
+            }
+        }
         return;
     };
     let detail_title = meta_item.preview.name.as_str();

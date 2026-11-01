@@ -94,7 +94,9 @@ fn sequential_executor() -> Option<&'static SyncSender<SequentialFuture>> {
 
 fn run_sequential(handle: &Handle, receiver: Receiver<SequentialFuture>) {
     while let Ok(future) = receiver.recv() {
-        handle.block_on(future);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle.block_on(future);
+        }));
     }
 }
 
@@ -194,8 +196,8 @@ fn get_http_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Stremio/4.4.168 Chrome/110.0.0.0 Safari/537.36")
             .default_headers(headers)
-            .timeout(std::time::Duration::from_secs(15))
-            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(12))
+            .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("Failed to build HTTP client")
     })
@@ -284,24 +286,36 @@ impl DesktopEnv {
         let log_url = sanitized_url_for_log(&url_str);
         tracing::debug!(method = ?parts.method, url = %log_url, "Sending Core API request");
 
-        let mut req_builder = client.request(method, &url_str);
+        let mut retries = 0;
+        let (resp, elapsed) = loop {
+            let mut req_builder = client.request(method.clone(), &url_str);
 
-        for (key, val) in parts.headers.iter() {
-            req_builder = req_builder.header(key.as_str(), val.as_bytes());
-        }
+            for (key, val) in parts.headers.iter() {
+                req_builder = req_builder.header(key.as_str(), val.as_bytes());
+            }
 
-        if parts.method != http::Method::GET {
-            req_builder = req_builder.json(&body);
-        }
+            if parts.method != http::Method::GET {
+                req_builder = req_builder.json(&body);
+            }
 
-        let start = std::time::Instant::now();
-        let resp = req_builder.send().await.map_err(|error| {
-            let error = error.without_url();
-            tracing::error!(url = %log_url, error = %error, "Core API request failed");
-            EnvError::Fetch(error.to_string())
-        })?;
-
-        let elapsed = start.elapsed().as_millis();
+            let start = std::time::Instant::now();
+            match req_builder.send().await {
+                Ok(resp) if resp.status().is_server_error() && retries < 2 && parts.method == http::Method::GET => {
+                    retries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
+                }
+                Ok(resp) => break (resp, start.elapsed().as_millis()),
+                Err(_) if retries < 2 && parts.method == http::Method::GET => {
+                    retries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
+                }
+                Err(error) => {
+                    let error = error.without_url();
+                    tracing::error!(url = %log_url, error = %error, "Core API request failed");
+                    return Err(EnvError::Fetch(error.to_string()));
+                }
+            }
+        };
         if elapsed > 300 {
             tracing::warn!(
                 url = %log_url,

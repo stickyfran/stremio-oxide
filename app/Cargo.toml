@@ -1,6 +1,6 @@
 [package]
 name = "stremio-native"
-version = "0.99.7"
+version = "0.99.8"
 authors = ["perpetus <perpetus.github@gmail.com>"]
 edition = "2024"
 license = "GPL-3.0-only"
@@ -47,8 +47,8 @@ notify.workspace = true
 turso = { workspace = true }
 chrono = { workspace = true }
 chacha20poly1305.workspace = true
-crash-handler.workspace = true
-minidumper.workspace = true
+crash-handler = { workspace = true, optional = true }
+minidumper = { workspace = true, optional = true }
 mimalloc = "0.1.52"
 libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 arboard = { version = "3.6.1", default-features = false }
@@ -105,6 +105,7 @@ default = [
     "in-process",
 ]
 in-process = ["core-env/in-process", "server-connector/in-process"]
+crash-reporter = ["dep:crash-handler", "dep:minidumper"]
 plugins = ["dep:mlua"]
 profiling = ["hotpath/hotpath", "hotpath/hotpath-alloc", "hotpath/tokio", "hotpath/reqwest-0-12"]
 
