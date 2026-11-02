@@ -104,7 +104,11 @@ impl HttpCacheEntry {
     }
 
     fn is_expired(&self, now: i64) -> bool {
-        now.saturating_sub(self.validation_time()) > MAX_AGE_SECONDS
+        let max_age = match self.resource_kind.as_str() {
+            "catalog" | "addon_catalog" | "legacy_catalog" => 6 * 3600,
+            _ => MAX_AGE_SECONDS,
+        };
+        now.saturating_sub(self.validation_time()) > max_age
     }
 
     fn should_revalidate(&self, now: i64) -> bool {
@@ -137,18 +141,25 @@ where
                 && (200..300).contains(&entry.status)
                 && !entry.is_expired(now) =>
         {
-            match serde_json::from_slice::<OUT>(&entry.body) {
-                Ok(value) => {
-                    schedule_access_touch(request.cache_key.clone(), now);
-                    if entry.should_revalidate(now) {
-                        schedule_revalidation::<OUT>(request, entry, client);
-                    }
-                    return Ok(value);
+            if is_empty_catalog_payload(request.resource_kind.as_str(), &entry.body) {
+                tracing::warn!("discarding cached empty/poisoned catalog payload");
+                if let Err(error) = delete_entry(&request.cache_key).await {
+                    tracing::debug!(%error, "corrupt catalog cache entry deletion failed");
                 }
-                Err(error) => {
-                    tracing::debug!(%error, "discarding corrupt cached JSON response");
-                    if let Err(error) = delete_entry(&request.cache_key).await {
-                        tracing::debug!(%error, "corrupt HTTP cache entry deletion failed");
+            } else {
+                match serde_json::from_slice::<OUT>(&entry.body) {
+                    Ok(value) => {
+                        schedule_access_touch(request.cache_key.clone(), now);
+                        if entry.should_revalidate(now) {
+                            schedule_revalidation::<OUT>(request, entry, client);
+                        }
+                        return Ok(value);
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, "discarding corrupt cached JSON response");
+                        if let Err(error) = delete_entry(&request.cache_key).await {
+                            tracing::debug!(%error, "corrupt HTTP cache entry deletion failed");
+                        }
                     }
                 }
             }
@@ -168,7 +179,7 @@ where
     let value = serde_json::from_slice::<OUT>(&response.body)
         .map_err(|error| EnvError::Fetch(error.to_string()))?;
 
-    if response_is_storable(&response) {
+    if response_is_storable(&request, &response) {
         let stored_at = chrono::Utc::now().timestamp();
         spawn_on_runtime(async move {
             if let Err(error) = write_response(&request, response, stored_at).await {
@@ -230,7 +241,7 @@ where
             return;
         }
 
-        if !response_is_storable(&response)
+        if !response_is_storable(&request, &response)
             || serde_json::from_slice::<OUT>(&response.body).is_err()
         {
             return;
@@ -382,11 +393,32 @@ async fn send_request(
     })
 }
 
-fn response_is_storable(response: &NetworkResponse) -> bool {
+fn is_empty_catalog_payload(resource_kind: &str, body: &[u8]) -> bool {
+    if !matches!(resource_kind, "catalog" | "addon_catalog" | "legacy_catalog") {
+        return false;
+    }
+    if body.is_empty() {
+        return true;
+    }
+    if let Ok(text) = std::str::from_utf8(body) {
+        let trimmed = text.trim();
+        if trimmed == "{}"
+            || trimmed.contains(r#""metas":[]"#)
+            || trimmed.contains(r#""metas": []"#)
+            || trimmed.contains(r#""metas":  []"#)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn response_is_storable(request: &CacheRequest, response: &NetworkResponse) -> bool {
     (200..300).contains(&response.status)
         && response.body.len() <= MAX_ENTRY_BYTES
         && !response.no_store
         && !response.vary_star
+        && !is_empty_catalog_payload(request.resource_kind.as_str(), &response.body)
 }
 
 fn header_string(
@@ -542,6 +574,16 @@ async fn mark_validated(
 
 pub(crate) async fn maintain() -> Result<(), String> {
     let mut conn = get_db_conn().await.map_err(|error| error.to_string())?;
+    // Purge any corrupted or empty catalog entries
+    let _ = conn
+        .execute(
+            "DELETE FROM http_cache
+             WHERE resource_kind IN ('catalog', 'addon_catalog', 'legacy_catalog')
+               AND (size_bytes < 50 OR length(body) < 50)",
+            (),
+        )
+        .await;
+
     let cutoff = chrono::Utc::now().timestamp() - MAX_AGE_SECONDS;
     conn.execute(
         "DELETE FROM http_cache
@@ -859,5 +901,78 @@ mod tests {
 
         assert!(entry.should_revalidate(10_001));
         assert!(!entry.is_expired(10_001));
+    }
+
+    #[test]
+    fn empty_catalogs_are_rejected_from_cache_storage() {
+        use super::{NetworkResponse, is_empty_catalog_payload, response_is_storable};
+
+        let empty_body = b"{\"metas\":[]}".to_vec();
+        let empty_with_age = b"{\"metas\":[],\"cacheMaxAge\":43200}".to_vec();
+        let valid_body = b"{\"metas\":[{\"id\":\"tt123\",\"name\":\"Movie\"}]}".to_vec();
+
+        assert!(is_empty_catalog_payload("catalog", &empty_body));
+        assert!(is_empty_catalog_payload("catalog", &empty_with_age));
+        assert!(!is_empty_catalog_payload("catalog", &valid_body));
+        assert!(!is_empty_catalog_payload("meta", &empty_body));
+
+        let request = CacheRequest {
+            cache_key: "test".to_string(),
+            resource_kind: ResourceKind::Catalog,
+            url: "https://v3-cinemeta.strem.io/catalog/movie/top.json".to_string(),
+            headers: http::HeaderMap::new(),
+        };
+
+        let empty_resp = NetworkResponse {
+            status: 200,
+            body: empty_body,
+            etag: None,
+            last_modified: None,
+            no_store: false,
+            no_cache: false,
+            vary_star: false,
+        };
+        assert!(!response_is_storable(&request, &empty_resp));
+
+        let valid_resp = NetworkResponse {
+            status: 200,
+            body: valid_body,
+            etag: None,
+            last_modified: None,
+            no_store: false,
+            no_cache: false,
+            vary_star: false,
+        };
+        assert!(response_is_storable(&request, &valid_resp));
+    }
+
+    #[test]
+    fn catalog_cache_ttl_is_bounded_to_hours_not_months() {
+        let catalog_entry = HttpCacheEntry {
+            resource_kind: "catalog".to_owned(),
+            status: 200,
+            body: Vec::new(),
+            etag: None,
+            last_modified: None,
+            stored_at: 10_000,
+            validated_at: 10_000,
+        };
+
+        // After 7 hours (25_200s), catalog is expired
+        assert!(catalog_entry.is_expired(10_000 + 7 * 3600));
+        // Within 5 hours, catalog is valid
+        assert!(!catalog_entry.is_expired(10_000 + 5 * 3600));
+
+        let meta_entry = HttpCacheEntry {
+            resource_kind: "meta".to_owned(),
+            status: 200,
+            body: Vec::new(),
+            etag: None,
+            last_modified: None,
+            stored_at: 10_000,
+            validated_at: 10_000,
+        };
+        // Meta still valid after 7 hours
+        assert!(!meta_entry.is_expired(10_000 + 7 * 3600));
     }
 }

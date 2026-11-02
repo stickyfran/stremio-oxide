@@ -357,6 +357,14 @@ async fn run_startup_maintenance() -> anyhow::Result<()> {
     // The active image pipeline uses the bounded memory and filesystem caches.
     conn.execute("DROP TABLE IF EXISTS image_cache", ()).await?;
     prune_logs(&conn).await?;
+    let _ = conn
+        .execute(
+            "DELETE FROM http_cache
+             WHERE resource_kind IN ('catalog', 'addon_catalog', 'legacy_catalog')
+               AND (length(body) < 50 OR body LIKE '%\"metas\":[]%' OR body LIKE '%\"metas\": []%')",
+            (),
+        )
+        .await;
     drop(conn);
     core_env::maintain_http_cache()
         .await

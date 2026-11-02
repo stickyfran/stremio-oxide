@@ -118,6 +118,7 @@ pub fn open_details_route(
         },
     );
 
+    let mut has_preview = false;
     // Optimistically prefill from board / discover / library catalogs if available
     if let Ok(model) = rt.model() {
         let preview = model
@@ -163,6 +164,7 @@ pub fn open_details_route(
 
         if let Some(preview) = preview {
             prefill_details_from_preview(ui, &preview);
+            has_preview = true;
         }
     }
 
@@ -193,7 +195,7 @@ pub fn open_details_route(
         );
         true
     });
-    ui.set_details_loading(!ready);
+    ui.set_details_loading(!ready && !has_preview);
     if !ready {
         let ui_weak = ui.as_weak();
         slint::Timer::single_shot(std::time::Duration::from_secs(8), move || {
@@ -245,14 +247,22 @@ pub fn load_meta_details_for_video(
 /// that video's streams, while a metadata-only route lets Core select the
 /// appropriate video after the metadata response arrives.
 fn details_selection(meta_path: ResourcePath, video_id: Option<String>) -> DetailsSelected {
-    let stream_path = video_id
+    let effective_video_id = video_id
         .filter(|value| !value.is_empty())
-        .map(|id| ResourcePath {
-            resource: "stream".to_owned(),
-            r#type: meta_path.r#type.clone(),
-            id,
-            extra: vec![],
+        .or_else(|| {
+            if meta_path.r#type == "movie" {
+                Some(meta_path.id.clone())
+            } else {
+                None
+            }
         });
+
+    let stream_path = effective_video_id.map(|id| ResourcePath {
+        resource: "stream".to_owned(),
+        r#type: meta_path.r#type.clone(),
+        id,
+        extra: vec![],
+    });
 
     DetailsSelected {
         meta_path,
