@@ -1083,6 +1083,34 @@ async fn finish_startup(
         deep_link::handle(command, &ui, &runtime, &navigation);
     }
     tracing::info!("background application startup completed");
+    // Startup watchdog with bounded backoff: checks at 4s and 10s if board catalogs failed/unloaded
+    {
+        let rt_watch = runtime.clone();
+        let ui_weak_watch = ui.as_weak();
+        let nav_watch = navigation.clone();
+        tokio::spawn(async move {
+            for delay in [4, 6] {
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                let is_board_empty = rt_watch.model().ok().is_some_and(|model| {
+                    model.board.catalogs.iter().take(3).any(|cat| {
+                        cat.first().is_none_or(|p| p.content.is_none() || matches!(&p.content, Some(stremio_core::models::common::Loadable::Err(_))))
+                    })
+                });
+                if is_board_empty {
+                    tracing::info!("startup watchdog detected unloaded board catalogs; auto-reloading");
+                    if let Some(loader) = crate::models::board::get_catalog_loader() {
+                        let _ = loader.try_send(0);
+                    }
+                    rt_watch.dispatch(stremio_core::runtime::RuntimeAction {
+                        field: Some(crate::AppModelField::Board),
+                        action: stremio_core::runtime::msg::Action::CatalogsWithExtra(
+                            stremio_core::runtime::msg::ActionCatalogsWithExtra::LoadRange(0..5),
+                        ),
+                    });
+                }
+            }
+        });
+    }
     slint::Timer::single_shot(std::time::Duration::from_secs(3), || {
         crate::event_loop::trim_process_memory(false);
     });
@@ -2479,7 +2507,7 @@ fn storage_value<T>(
     }
 }
 
-fn sync_tab_from_model(
+pub(crate) fn sync_tab_from_model(
     tab: Tab,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
     ui: &MainWindow,

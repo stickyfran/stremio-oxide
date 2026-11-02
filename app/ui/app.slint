@@ -1087,6 +1087,7 @@ export component MainWindow inherits Window {
     }
     callback navigation-back();
     callback navigation-forward();
+    callback request-reload-current-view();
     callback calendar-previous();
     callback calendar-next();
     callback calendar-item-selected(string, string, string);
@@ -1256,6 +1257,7 @@ export component MainWindow inherits Window {
         KeyBinding { keys: @keys("0"); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.tab-changed(6); } }
         KeyBinding { keys: @keys(Backspace); enabled: !root.effective-show-player && !FocusTracker.text-input-focused; activated => { root.navigation-back(); } }
         KeyBinding { keys: @keys(Control + Backspace); enabled: !root.effective-show-player; activated => { root.navigation-forward(); } }
+        KeyBinding { keys: @keys(F5); enabled: !root.effective-show-player; activated => { root.request-reload-current-view(); } }
         KeyBinding {
             keys: @keys(Control + "/");
             enabled: !root.effective-show-player;

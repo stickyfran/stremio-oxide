@@ -27,6 +27,10 @@ use url::Url;
 static LAST_SYNC_STATE: OnceLock<Mutex<Option<SyncFingerprint>>> = OnceLock::new();
 static BOARD_CATALOG_LOADER: OnceLock<tokio::sync::mpsc::Sender<usize>> = OnceLock::new();
 
+pub(crate) fn get_catalog_loader() -> Option<tokio::sync::mpsc::Sender<usize>> {
+    BOARD_CATALOG_LOADER.get().cloned()
+}
+
 pub fn setup(
     ui: &MainWindow,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,

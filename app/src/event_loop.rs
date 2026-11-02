@@ -542,7 +542,11 @@ pub fn start_event_loop(
                             .and_then(|id| model.ctx.library.items.get(id))
                             .map(|item| (!item.removed, item.watched(), !item.state.no_notif))
                             .unwrap_or((false, false, true));
-                    let details_projection_changed = if meta_details_changed {
+                    let force_details_reset = models::details::take_reset_projection_fingerprint();
+                    if force_details_reset {
+                        last_details_projection_fingerprint = None;
+                    }
+                    let details_projection_changed = if meta_details_changed || force_details_reset {
                         details_route
                             .as_ref()
                             .is_some_and(|(_media_id, presentation)| {
@@ -552,14 +556,14 @@ pub fn start_event_loop(
                                     *presentation,
                                 );
                                 let changed =
-                                    last_details_projection_fingerprint != Some(fingerprint);
+                                    force_details_reset || last_details_projection_fingerprint != Some(fingerprint);
                                 last_details_projection_fingerprint = Some(fingerprint);
                                 changed
                             })
                     } else {
                         false
                     };
-                    let details_sync_needed = meta_details_changed && details_projection_changed;
+                    let details_sync_needed = (meta_details_changed || force_details_reset) && details_projection_changed;
                     let details_stream_sync_needed =
                         meta_details_changed && details_route_id.is_some();
                     let details_library_sync_needed =

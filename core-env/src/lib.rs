@@ -22,6 +22,20 @@ use stremio_core::{
 };
 
 mod http_cache;
+pub mod dns;
+
+static DNS_CACHE: LazyLock<dns::DnsCache> = LazyLock::new(dns::DnsCache::default);
+static DOH_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_doh_client() -> &'static reqwest::Client {
+    DOH_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .danger_accept_invalid_certs(true) // Direct IP DoH connects to 1.1.1.1 or 8.8.8.8
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static TOKIO_HANDLE: OnceLock<Handle> = OnceLock::new();
@@ -310,6 +324,42 @@ impl DesktopEnv {
                     tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
                 }
                 Err(error) => {
+                    let is_connect_error = error.is_connect();
+                    // Detect if this host might be suffering from local DNS poisoning or connection refusal
+                    if is_connect_error && retries < 3 {
+                        if let Ok(parsed_url) = url::Url::parse(&url_str) {
+                            if let Some(host) = parsed_url.host_str() {
+                                if !host.ends_with(".local") && !host.ends_with(".lan") && host != "localhost" && host != "127.0.0.1" {
+                                    tracing::info!(host = %host, "attempting anti-tamper DoH resolution bypass for unreachable host");
+                                    let doh_client = get_doh_client();
+                                    if let Ok(resolved_ips) = dns::resolve_via_doh(doh_client, host, dns::SecureDnsProvider::Cloudflare).await {
+                                        if let Some(real_ip) = resolved_ips.first() {
+                                            tracing::info!(host = %host, real_ip = %real_ip, "successfully bypassed DNS block via Cloudflare DoH");
+                                            DNS_CACHE.insert(host.to_string(), resolved_ips.clone(), std::time::Duration::from_secs(300));
+                                            
+                                            // Reconstruct URL pointing directly to the resolved IP while preserving Host header
+                                            let mut bypassed_url = parsed_url.clone();
+                                            if bypassed_url.set_host(Some(&real_ip.to_string())).is_ok() {
+                                                let bypassed_url_str = bypassed_url.to_string();
+                                                let mut bypass_builder = client.request(method.clone(), &bypassed_url_str);
+                                                for (key, val) in parts.headers.iter() {
+                                                    bypass_builder = bypass_builder.header(key.as_str(), val.as_bytes());
+                                                }
+                                                bypass_builder = bypass_builder.header("Host", host);
+                                                if parts.method != http::Method::GET {
+                                                    bypass_builder = bypass_builder.json(&body);
+                                                }
+                                                if let Ok(bypass_resp) = bypass_builder.send().await {
+                                                    break (bypass_resp, start.elapsed().as_millis());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let error = error.without_url();
                     tracing::error!(url = %log_url, error = %error, "Core API request failed");
                     return Err(EnvError::Fetch(error.to_string()));
