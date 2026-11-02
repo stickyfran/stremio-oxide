@@ -115,7 +115,7 @@ pub async fn init_db(database_path: &Path) -> anyhow::Result<()> {
 
     tokio::spawn(async {
         // Keep cleanup I/O out of the cold-start and first-frame window.
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         if let Err(error) = run_startup_maintenance().await {
             tracing::warn!(%error, "deferred database maintenance failed");
         }
@@ -357,14 +357,6 @@ async fn run_startup_maintenance() -> anyhow::Result<()> {
     // The active image pipeline uses the bounded memory and filesystem caches.
     conn.execute("DROP TABLE IF EXISTS image_cache", ()).await?;
     prune_logs(&conn).await?;
-    let _ = conn
-        .execute(
-            "DELETE FROM http_cache
-             WHERE resource_kind IN ('catalog', 'addon_catalog', 'legacy_catalog')
-               AND (length(body) < 50 OR body LIKE '%\"metas\":[]%' OR body LIKE '%\"metas\": []%')",
-            (),
-        )
-        .await;
     drop(conn);
     core_env::maintain_http_cache()
         .await
@@ -409,6 +401,7 @@ pub async fn get_setting(key: &str) -> anyhow::Result<Option<String>> {
     } else {
         Ok(None)
     };
+    while let Ok(Some(_)) = rows.next().await {}
     tracing::info!(
         key = %key,
         elapsed_ms = start.elapsed().as_millis(),

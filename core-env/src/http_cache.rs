@@ -1,9 +1,9 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::IpAddr,
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -24,6 +24,12 @@ const CATALOG_RETRY_BASE_DELAY_MS: u64 = 250;
 
 static REVALIDATING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static WRITES_SINCE_MAINTENANCE: AtomicUsize = AtomicUsize::new(0);
+static PENDING_ACCESS_TOUCHES: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+static ACCESS_TOUCH_FLUSHER_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+fn pending_access_touches() -> &'static Mutex<HashMap<String, i64>> {
+    PENDING_ACCESS_TOUCHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResourceKind {
@@ -141,25 +147,18 @@ where
                 && (200..300).contains(&entry.status)
                 && !entry.is_expired(now) =>
         {
-            if is_empty_catalog_payload(request.resource_kind.as_str(), &entry.body) {
-                tracing::warn!("discarding cached empty/poisoned catalog payload");
-                if let Err(error) = delete_entry(&request.cache_key).await {
-                    tracing::debug!(%error, "corrupt catalog cache entry deletion failed");
-                }
-            } else {
-                match serde_json::from_slice::<OUT>(&entry.body) {
-                    Ok(value) => {
-                        schedule_access_touch(request.cache_key.clone(), now);
-                        if entry.should_revalidate(now) {
-                            schedule_revalidation::<OUT>(request, entry, client);
-                        }
-                        return Ok(value);
+            match serde_json::from_slice::<OUT>(&entry.body) {
+                Ok(value) => {
+                    schedule_access_touch(request.cache_key.clone(), now);
+                    if entry.should_revalidate(now) {
+                        schedule_revalidation::<OUT>(request, entry, client);
                     }
-                    Err(error) => {
-                        tracing::debug!(%error, "discarding corrupt cached JSON response");
-                        if let Err(error) = delete_entry(&request.cache_key).await {
-                            tracing::debug!(%error, "corrupt HTTP cache entry deletion failed");
-                        }
+                    return Ok(value);
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "discarding corrupt cached JSON response");
+                    if let Err(error) = delete_entry(&request.cache_key).await {
+                        tracing::debug!(%error, "corrupt HTTP cache entry deletion failed");
                     }
                 }
             }
@@ -179,7 +178,7 @@ where
     let value = serde_json::from_slice::<OUT>(&response.body)
         .map_err(|error| EnvError::Fetch(error.to_string()))?;
 
-    if response_is_storable(&request, &response) {
+    if response_is_storable(&response) {
         let stored_at = chrono::Utc::now().timestamp();
         spawn_on_runtime(async move {
             if let Err(error) = write_response(&request, response, stored_at).await {
@@ -241,7 +240,7 @@ where
             return;
         }
 
-        if !response_is_storable(&request, &response)
+        if !response_is_storable(&response)
             || serde_json::from_slice::<OUT>(&response.body).is_err()
         {
             return;
@@ -393,32 +392,11 @@ async fn send_request(
     })
 }
 
-fn is_empty_catalog_payload(resource_kind: &str, body: &[u8]) -> bool {
-    if !matches!(resource_kind, "catalog" | "addon_catalog" | "legacy_catalog") {
-        return false;
-    }
-    if body.is_empty() {
-        return true;
-    }
-    if let Ok(text) = std::str::from_utf8(body) {
-        let trimmed = text.trim();
-        if trimmed == "{}"
-            || trimmed.contains(r#""metas":[]"#)
-            || trimmed.contains(r#""metas": []"#)
-            || trimmed.contains(r#""metas":  []"#)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn response_is_storable(request: &CacheRequest, response: &NetworkResponse) -> bool {
+fn response_is_storable(response: &NetworkResponse) -> bool {
     (200..300).contains(&response.status)
         && response.body.len() <= MAX_ENTRY_BYTES
         && !response.no_store
         && !response.vary_star
-        && !is_empty_catalog_payload(request.resource_kind.as_str(), &response.body)
 }
 
 fn header_string(
@@ -453,7 +431,7 @@ async fn read_entry(cache_key: &str) -> Result<Option<HttpCacheEntry>, String> {
         return Ok(None);
     };
 
-    Ok(Some(HttpCacheEntry {
+    let entry = HttpCacheEntry {
         resource_kind: row.get(0).map_err(|error| error.to_string())?,
         status: row.get(1).map_err(|error| error.to_string())?,
         body: row.get(2).map_err(|error| error.to_string())?,
@@ -461,7 +439,10 @@ async fn read_entry(cache_key: &str) -> Result<Option<HttpCacheEntry>, String> {
         last_modified: row.get(4).map_err(|error| error.to_string())?,
         stored_at: row.get(5).map_err(|error| error.to_string())?,
         validated_at: row.get(6).map_err(|error| error.to_string())?,
-    }))
+    };
+    // Drain remaining rows so Turso statement completes cleanly without aborting.
+    while let Ok(Some(_)) = rows.next().await {}
+    Ok(Some(entry))
 }
 
 async fn write_response(
@@ -515,22 +496,46 @@ async fn write_response(
 }
 
 fn schedule_access_touch(cache_key: String, now: i64) {
-    spawn_on_runtime(async move {
-        let Ok(conn) = get_db_conn().await else {
-            return;
-        };
-        // Evitar tormenta de UPDATEs: actualizar solo si accessed_at es anterior a 300 segundos (5 min)
+    let mut pending = pending_access_touches().lock().unwrap_or_else(|p| p.into_inner());
+    pending.insert(cache_key, now);
+    if pending.len() >= 64 {
+        drop(pending);
+        spawn_on_runtime(async move {
+            flush_access_touches().await;
+        });
+    } else if ACCESS_TOUCH_FLUSHER_SCHEDULED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        drop(pending);
+        spawn_on_runtime(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            ACCESS_TOUCH_FLUSHER_SCHEDULED.store(false, Ordering::Release);
+            flush_access_touches().await;
+        });
+    }
+}
+
+pub(crate) async fn flush_access_touches() {
+    let touches: Vec<(String, i64)> = {
+        let mut pending = pending_access_touches().lock().unwrap_or_else(|p| p.into_inner());
+        pending.drain().collect()
+    };
+    if touches.is_empty() {
+        return;
+    }
+    let Ok(conn) = get_db_conn().await else {
+        return;
+    };
+    for (cache_key, now) in touches {
         let min_timestamp = now - 300;
-        if let Err(error) = conn
+        let _ = conn
             .execute(
                 "UPDATE http_cache SET accessed_at = ? WHERE cache_key = ? AND accessed_at < ?",
                 (now, cache_key, min_timestamp),
             )
-            .await
-        {
-            tracing::debug!(%error, "HTTP cache access timestamp update failed");
-        }
-    });
+            .await;
+    }
 }
 
 async fn delete_entry(cache_key: &str) -> Result<(), String> {
@@ -574,15 +579,6 @@ async fn mark_validated(
 
 pub(crate) async fn maintain() -> Result<(), String> {
     let mut conn = get_db_conn().await.map_err(|error| error.to_string())?;
-    // Purge any corrupted or empty catalog entries
-    let _ = conn
-        .execute(
-            "DELETE FROM http_cache
-             WHERE resource_kind IN ('catalog', 'addon_catalog', 'legacy_catalog')
-               AND (size_bytes < 50 OR length(body) < 50)",
-            (),
-        )
-        .await;
 
     let cutoff = chrono::Utc::now().timestamp() - MAX_AGE_SECONDS;
     conn.execute(
@@ -901,49 +897,6 @@ mod tests {
 
         assert!(entry.should_revalidate(10_001));
         assert!(!entry.is_expired(10_001));
-    }
-
-    #[test]
-    fn empty_catalogs_are_rejected_from_cache_storage() {
-        use super::{NetworkResponse, is_empty_catalog_payload, response_is_storable};
-
-        let empty_body = b"{\"metas\":[]}".to_vec();
-        let empty_with_age = b"{\"metas\":[],\"cacheMaxAge\":43200}".to_vec();
-        let valid_body = b"{\"metas\":[{\"id\":\"tt123\",\"name\":\"Movie\"}]}".to_vec();
-
-        assert!(is_empty_catalog_payload("catalog", &empty_body));
-        assert!(is_empty_catalog_payload("catalog", &empty_with_age));
-        assert!(!is_empty_catalog_payload("catalog", &valid_body));
-        assert!(!is_empty_catalog_payload("meta", &empty_body));
-
-        let request = CacheRequest {
-            cache_key: "test".to_string(),
-            resource_kind: ResourceKind::Catalog,
-            url: "https://v3-cinemeta.strem.io/catalog/movie/top.json".to_string(),
-            headers: http::HeaderMap::new(),
-        };
-
-        let empty_resp = NetworkResponse {
-            status: 200,
-            body: empty_body,
-            etag: None,
-            last_modified: None,
-            no_store: false,
-            no_cache: false,
-            vary_star: false,
-        };
-        assert!(!response_is_storable(&request, &empty_resp));
-
-        let valid_resp = NetworkResponse {
-            status: 200,
-            body: valid_body,
-            etag: None,
-            last_modified: None,
-            no_store: false,
-            no_cache: false,
-            vary_star: false,
-        };
-        assert!(response_is_storable(&request, &valid_resp));
     }
 
     #[test]

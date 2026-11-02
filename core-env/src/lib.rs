@@ -436,6 +436,7 @@ pub async fn load_profile_scope(
         .map(|row| row.get::<String>(0))
         .transpose()
         .map_err(|error| EnvError::StorageReadError(error.to_string()))?;
+    while let Ok(Some(_)) = rows.next().await {}
     drop(rows);
     let Some(value) = value else {
         return Ok(None);
@@ -732,6 +733,7 @@ pub async fn flush_storage() {
 /// Prevents new core-storage database work and releases its retained handles.
 pub async fn shutdown_database() {
     flush_storage().await;
+    http_cache::flush_access_touches().await;
     let _initializing = DB_CONNECTION_INIT.lock().await;
     DB_CONNECTION
         .write()
@@ -804,6 +806,7 @@ impl Env for DesktopEnv {
                 } else {
                     None
                 };
+                while let Ok(Some(_)) = rows.next().await {}
                 drop(rows);
                 res
             };
