@@ -1083,47 +1083,6 @@ async fn finish_startup(
         deep_link::handle(command, &ui, &runtime, &navigation);
     }
     tracing::info!("background application startup completed");
-    // Startup watchdog with bounded backoff: checks at 3s and 7s if board catalogs failed/unloaded
-    {
-        let rt_watch = runtime.clone();
-        tokio::spawn(async move {
-            for delay in [3, 4] {
-                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                let is_board_empty = rt_watch.model().ok().is_some_and(|model| {
-                    let has_empty_or_failed = model.board.catalogs.iter().take(3).any(|cat| {
-                        cat.first().is_none_or(|p| match &p.content {
-                            None | Some(stremio_core::models::common::Loadable::Loading) | Some(stremio_core::models::common::Loadable::Err(_)) => true,
-                            Some(stremio_core::models::common::Loadable::Ready(items)) => items.is_empty(),
-                        })
-                    });
-                    has_empty_or_failed || model.board.catalogs.is_empty()
-                });
-                if is_board_empty {
-                    tracing::info!("startup watchdog detected unloaded/empty board catalogs; performing genuine catalog reset and reload");
-                    // CatalogsWithExtra::catalogs_update ignores LoadRange when content.is_some()!
-                    // Dispatched Action::Unload followed by Action::Load forces stremio-core to rebuild from scratch.
-                    rt_watch.dispatch(stremio_core::runtime::RuntimeAction {
-                        field: Some(crate::AppModelField::Board),
-                        action: stremio_core::runtime::msg::Action::Unload,
-                    });
-                    rt_watch.dispatch(stremio_core::runtime::RuntimeAction {
-                        field: Some(crate::AppModelField::Board),
-                        action: stremio_core::runtime::msg::Action::Load(
-                            stremio_core::runtime::msg::ActionLoad::CatalogsWithExtra(
-                                stremio_core::models::catalogs_with_extra::Selected {
-                                    r#type: None,
-                                    extra: vec![],
-                                },
-                            ),
-                        ),
-                    });
-                    if let Some(loader) = crate::models::board::get_catalog_loader() {
-                        let _ = loader.try_send(0);
-                    }
-                }
-            }
-        });
-    }
     slint::Timer::single_shot(std::time::Duration::from_secs(3), || {
         crate::event_loop::trim_process_memory(false);
     });
