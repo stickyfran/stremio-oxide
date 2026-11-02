@@ -72,9 +72,7 @@ rustflags = [
 [target.'cfg(all(target_arch = "x86_64", target_os = "linux"))']
 # Keep official x64 artifacts reproducible across CI runners; `native` would
 # silently make the release depend on whichever CPU happened to build it.
-# Use mold linker to reduce link-time RAM usage dramatically and link in 1-2 seconds.
-linker = "clang"
-rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-fuse-ld=mold"]
+rustflags = ["-C", "target-cpu=x86-64-v3"]
 
 # Keep debug builds responsive without optimizing the entire dependency graph.
 # These crates own the application's image decode, hashing/compression, and
