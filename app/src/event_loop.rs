@@ -370,6 +370,7 @@ pub fn start_event_loop(
         let mut last_auth_projection: Option<(String, Option<String>)> = None;
         let mut last_calendar_fingerprint = None;
         let mut last_details_projection_fingerprint = None;
+        let mut last_board_catalogs_len = 0;
         let last_stream_fingerprint = Arc::new(std::sync::Mutex::new(None));
         let last_details_id = Arc::new(std::sync::Mutex::new(None));
         while let Some(event) = rx.next().await {
@@ -500,6 +501,16 @@ pub fn start_event_loop(
                         )),
                         _ => None,
                     });
+
+                    let current_board_catalogs_len = model.board.catalogs.len();
+                    if last_board_catalogs_len == 0 && current_board_catalogs_len > 0 {
+                        last_board_catalogs_len = current_board_catalogs_len;
+                        if let Some(loader) = crate::models::board::get_catalog_loader() {
+                            let _ = loader.try_send(0);
+                        }
+                    } else if current_board_catalogs_len == 0 {
+                        last_board_catalogs_len = 0;
+                    }
 
                     let board_sync_needed = (first_render
                         || fields.contains(&AppModelField::ContinueWatching)

@@ -20,7 +20,7 @@ use stremio_core::{
     models::player::Selected,
     runtime::{
         Runtime, RuntimeAction,
-        msg::{Action, ActionLoad},
+        msg::{Action, ActionCatalogsWithExtra, ActionLoad},
     },
 };
 
@@ -680,44 +680,51 @@ fn download_filename(title: &str, link: &str) -> String {
 }
 
 pub fn trigger_initial_load(runtime: &Arc<Runtime<DesktopEnv, AppModel>>) {
-    let rt = runtime.clone();
-    tokio::spawn(async move {
-        rt.dispatch(RuntimeAction {
-            field: None,
-            action: Action::Load(ActionLoad::CatalogWithFilters(None)),
-        });
-        rt.dispatch(RuntimeAction {
-            field: Some(AppModelField::Board),
-            action: Action::Load(ActionLoad::CatalogsWithExtra(
-                stremio_core::models::catalogs_with_extra::Selected {
+    runtime.dispatch(RuntimeAction {
+        field: None,
+        action: Action::Load(ActionLoad::CatalogWithFilters(None)),
+    });
+    runtime.dispatch(RuntimeAction {
+        field: Some(AppModelField::Board),
+        action: Action::Load(ActionLoad::CatalogsWithExtra(
+            stremio_core::models::catalogs_with_extra::Selected {
+                r#type: None,
+                extra: vec![],
+            },
+        )),
+    });
+    // Immediately request the first rows so stremio-core does not wait for a scroll event
+    runtime.dispatch(RuntimeAction {
+        field: Some(AppModelField::Board),
+        action: Action::CatalogsWithExtra(ActionCatalogsWithExtra::LoadRange(
+            0..crate::models::CATALOG_PRELOAD_ROWS + 1,
+        )),
+    });
+    if let Some(loader) = crate::models::board::get_catalog_loader() {
+        let _ = loader.try_send(0);
+    }
+    runtime.dispatch(RuntimeAction {
+        field: Some(AppModelField::LocalSearch),
+        action: Action::Load(ActionLoad::LocalSearch),
+    });
+    runtime.dispatch(RuntimeAction {
+        field: None,
+        action: Action::Load(ActionLoad::LibraryWithFilters(
+            stremio_core::models::library_with_filters::Selected {
+                request: LibraryRequest {
                     r#type: None,
-                    extra: vec![],
+                    sort: Sort::LastWatched,
+                    page: Default::default(),
                 },
-            )),
-        });
-        rt.dispatch(RuntimeAction {
-            field: Some(AppModelField::LocalSearch),
-            action: Action::Load(ActionLoad::LocalSearch),
-        });
-        rt.dispatch(RuntimeAction {
-            field: None,
-            action: Action::Load(ActionLoad::LibraryWithFilters(
-                stremio_core::models::library_with_filters::Selected {
-                    request: LibraryRequest {
-                        r#type: None,
-                        sort: Sort::LastWatched,
-                        page: Default::default(),
-                    },
-                },
-            )),
-        });
-        rt.dispatch(RuntimeAction {
-            field: None,
-            action: Action::Load(ActionLoad::InstalledAddonsWithFilters(
-                stremio_core::models::installed_addons_with_filters::Selected {
-                    request: InstalledAddonsRequest { r#type: None },
-                },
-            )),
-        });
+            },
+        )),
+    });
+    runtime.dispatch(RuntimeAction {
+        field: None,
+        action: Action::Load(ActionLoad::InstalledAddonsWithFilters(
+            stremio_core::models::installed_addons_with_filters::Selected {
+                request: InstalledAddonsRequest { r#type: None },
+            },
+        )),
     });
 }

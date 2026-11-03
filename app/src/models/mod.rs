@@ -35,7 +35,7 @@ use stremio_core::{
 };
 
 const CATALOG_PREVIEW_SIZE: usize = 10;
-const CATALOG_PRELOAD_ROWS: usize = 5;
+pub const CATALOG_PRELOAD_ROWS: usize = 5;
 const CATALOG_VISIBILITY_QUEUE_CAPACITY: usize = 32;
 
 #[derive(Clone, Copy, Debug)]
@@ -214,6 +214,12 @@ pub(crate) fn spawn_catalog_visibility_loader(
                 visible_catalog_load_range(scope.catalogs(&model), first_visible, last_visible)
             });
             let Some(range) = range else {
+                tracing::debug!(
+                    ?scope,
+                    first_visible,
+                    last_visible,
+                    "catalog loader skipped: no visible rows to load or catalogs not selected"
+                );
                 continue;
             };
 
@@ -234,7 +240,9 @@ pub(crate) fn queue_visible_catalog(sender: &tokio::sync::mpsc::Sender<usize>, i
     // A full queue already contains more visible rows than a viewport can
     // display. Dropping another index keeps the UI callback non-blocking; the
     // worker coalesces the queued indices into a preload window.
-    let _ = sender.try_send(index);
+    if let Err(error) = sender.try_send(index) {
+        tracing::debug!(index, %error, "catalog queue try_send dropped index (queue full or closed)");
+    }
 }
 
 fn visible_catalog_load_range(

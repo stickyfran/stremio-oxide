@@ -27,6 +27,10 @@ use url::Url;
 static LAST_SYNC_STATE: OnceLock<Mutex<Option<SyncFingerprint>>> = OnceLock::new();
 static BOARD_CATALOG_LOADER: OnceLock<tokio::sync::mpsc::Sender<usize>> = OnceLock::new();
 
+pub fn get_catalog_loader() -> Option<&'static tokio::sync::mpsc::Sender<usize>> {
+    BOARD_CATALOG_LOADER.get()
+}
+
 pub fn setup(
     ui: &MainWindow,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
@@ -42,11 +46,6 @@ pub fn setup(
             queue_visible_catalog(&catalog_loader, index);
         }
     });
-
-    // Proactively queue row 0 (which loads rows 0..CATALOG_PRELOAD_ROWS) so that
-    // catalog fetching never hangs if Slint delegates haven't attached their
-    // init hooks yet or if the window is initially not focused.
-    let _ = catalog_loader.try_send(0);
 
     ui.on_board_item_selected({
         let runtime = runtime.clone();

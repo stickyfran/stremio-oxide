@@ -1065,6 +1065,7 @@ async fn finish_startup(
         pm
     };
 
+    callbacks::trigger_initial_load(&runtime);
     if let Ok(initial_tab) = Tab::try_from(navigation.active_tab_index()) {
         sync_tab_from_model(initial_tab, &runtime, &ui, &ui_weak, &navigation);
         if initial_tab == Tab::Calendar && models::calendar::ensure_loaded(&runtime) {
@@ -1072,7 +1073,6 @@ async fn finish_startup(
         }
     }
     ui.set_loading(false);
-    callbacks::trigger_initial_load(&runtime);
     let command_task = deep_link::start_command_receiver(
         commands,
         ui.as_weak(),
