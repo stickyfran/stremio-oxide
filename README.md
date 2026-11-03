@@ -56,6 +56,35 @@ install -m755 target/release/stremio-native ~/.local/bin/stremio-oxide
 
 Consulte [ARCHITECTURE.md](ARCHITECTURE.md) para el detalle tecnico exhaustivo sobre el modelo de concurrencia, topologia de crates, pipeline de renderizado y arquitectura de compilacion.
 
+## Known Issues
+
+- **Cold Startup Race Condition (Intermittent Catalog Loading)**: Under specific thread scheduling conditions during cold boot, `stremio-core`'s catalog plan may execute before active profile storage hydration finishes, leaving catalog models with `content: None` and showing persistent skeleton placeholders. Navigating back and forth or switching tabs forces a reload. Work is underway to make the startup lifecycle fully deterministic and eliminate any dependency on explicit re-initialization.
+
+## Roadmap & Upcoming Releases
+
+The next releases focus on refining the native experience, visual consistency, and end-to-end media management:
+
+### 1. Robust Lifecycle & Deterministic Startup
+- **Zero-Friction Boot Pipeline**: Completely eliminate startup race conditions by decoupling UI readiness from network and database initialization.
+- **Permanent State Self-Healing**: Guarantee that catalogs, library sync, and addons hydrate reliably without requiring user intervention, tab switching, or app restarts.
+
+### 2. Search & Filter Bar UI Alignment
+- **Cohesive Search Bar Geometry**: Harmonize margins, baselines, and paddings between search inputs and filter selectors across Discover and Search pages.
+- **Adaptive Layout**: Ensure search filter dropdowns and active token tags align seamlessly across varying window widths and DPI scaling factors.
+
+### 3. High-Performance Fullscreen Trailer Experience
+- **Optimized Trailer Startup**: Fast-path URL resolution and player pre-warming to drastically decrease time-to-first-frame for video trailers.
+- **Integrated Fullscreen Trailer Overlay**: Redesign the Details view to embed trailers into an immersive backdrop and full-viewport presentation mode with instant playback controls.
+- **Spatial Utilization**: Enhance screen real estate usage in movie and series detail views so promotional media and synopses feel dynamic rather than constrained to small side panels.
+
+### 4. End-to-End Download Manager & Batch Ingestion
+- **Source Selection & Torrent/Debrid Ingestion**: Introduce an interactive stream picker when initiating downloads (direct torrent stream via rqbit or HTTP Debrid source).
+- **Single Episode, Movie & Full Season Batching**: Allow users to queue an entire season of a series with one click, automatically resolving episode streams and verifying disk quotas.
+- **Actionable Downloads View with Visual Telemetry**:
+  - Real-time progress bars, download speed, peer health, and estimated time of completion (ETA).
+  - Explicit file management (pause, resume, delete, verify integrity, open containing folder).
+  - Native background execution with system notification on download completion.
+
 ## Agradecimientos y Componentes de Terceros
 
 Este proyecto integra y se basa en los siguientes desarrollos de la comunidad de codigo abierto:
