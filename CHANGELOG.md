@@ -2,6 +2,21 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.84 - 2026-11-04
+
+### Derived image cache
+
+- Added role- and DPI-aware image variants so posters, backdrops, logos, thumbnails, and avatars can no longer collide in the decoded-memory cache.
+- Added a persistent cache of compressed thumbnails generated at the size requested by the UI, separate from the source-image cache.
+- Derived thumbnails are encoded after the decoded image is published to the UI, using JPEG for opaque art and PNG when alpha is present.
+- Warm starts now read and decode the small derived thumbnail first, avoiding source decode and downscale; missing or invalid derivatives fall back safely to the local source and then the network.
+- Added a separate bounded disk budget and maintenance for derivatives, plus separate source/derived decode, hit, fallback, encoding, and eviction metrics.
+- Source downloads are single-flight across variants, while each variant keeps its own decode, memory entry, and derived file.
+
+### Tray and desktop
+
+- The tray now uses the monochrome white glyph with a translucent dark outline, so it stays visible on both light and dark panels; Linux SNI hosts use the embedded pixmap instead of the missing hicolor icon name, and Windows regenerates `tray.ico` with the same contrast treatment.
+
 ## 0.99.83 - 2026-11-04
 
 ### Cold start and cache resilience
