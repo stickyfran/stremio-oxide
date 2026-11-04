@@ -13,7 +13,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use stremio_core::{
     constants::PROFILE_STORAGE_KEY,
@@ -108,12 +108,16 @@ fn ensure_flusher_running(sender: &SyncSender<SequentialFuture>) {
             let _ = tokio::task::spawn_blocking(move || {
                 loop {
                     let next = {
-                        let mut q = SEQUENTIAL_OVERFLOW.lock().unwrap_or_else(|p| p.into_inner());
+                        let mut q = SEQUENTIAL_OVERFLOW
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
                         q.pop_front()
                     };
                     let Some(future) = next else {
                         FLUSHER_ACTIVE.store(false, Ordering::Release);
-                        let q = SEQUENTIAL_OVERFLOW.lock().unwrap_or_else(|p| p.into_inner());
+                        let q = SEQUENTIAL_OVERFLOW
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
                         if !q.is_empty()
                             && FLUSHER_ACTIVE
                                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
@@ -140,7 +144,9 @@ fn submit_sequential(
     sender: &SyncSender<SequentialFuture>,
     future: SequentialFuture,
 ) -> Result<(), SequentialFuture> {
-    let mut overflow = SEQUENTIAL_OVERFLOW.lock().unwrap_or_else(|p| p.into_inner());
+    let mut overflow = SEQUENTIAL_OVERFLOW
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     if !overflow.is_empty() {
         overflow.push_back(future);
         drop(overflow);
@@ -328,17 +334,45 @@ impl DesktopEnv {
 }
 
 static DB: OnceLock<RwLock<Option<turso::Database>>> = OnceLock::new();
-static DB_CONNECTION: LazyLock<RwLock<Option<turso::Connection>>> =
-    LazyLock::new(|| RwLock::new(None));
-static DB_CONNECTION_INIT: AsyncMutex<()> = AsyncMutex::const_new(());
-/// Serializes protocol-level access to the shared Turso connection.
+
+/// Maximum number of independent Turso connections used by core storage.
 ///
-/// `turso::Connection::clone()` is an `Arc` clone: two tasks that clone it
-/// share transaction state, so concurrent `BEGIN`/`COMMIT` can interleave and
-/// commit each other's work. Every caller now holds this guard while using the
-/// connection.
-static DB_CONNECTION_ACCESS: LazyLock<Arc<AsyncMutex<()>>> =
-    LazyLock::new(|| Arc::new(AsyncMutex::const_new(())));
+/// A single shared connection serialized every read, write and profile access,
+/// so one slow operation (or a credential-vault round trip) stalled the whole
+/// catalog cache. Turso's WAL mode supports concurrent readers, so a small pool
+/// lets catalog reads proceed while another task writes.
+const DB_POOL_MAX_CONNECTIONS: usize = 8;
+const DB_POOL_ENV: &str = "STREMIO_DB_POOL_CONNECTIONS";
+
+fn configured_db_pool_connections() -> usize {
+    std::env::var(DB_POOL_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|connections| (1..=32).contains(connections))
+        .unwrap_or(DB_POOL_MAX_CONNECTIONS)
+}
+/// WAL still allows only one writer at a time. A larger busy timeout absorbs
+/// short write bursts (cache insert + access touch + maintenance) instead of
+/// failing the request.
+const DB_BUSY_TIMEOUT_MS: u64 = 5_000;
+
+struct ConnectionPool {
+    idle: Mutex<Vec<turso::Connection>>,
+    permits: Arc<Semaphore>,
+}
+
+static DB_POOL: LazyLock<Arc<ConnectionPool>> = LazyLock::new(|| {
+    Arc::new(ConnectionPool {
+        idle: Mutex::new(Vec::new()),
+        permits: Arc::new(Semaphore::new(configured_db_pool_connections())),
+    })
+});
+
+/// Serializes operations that touch the OS credential vault for a profile, so
+/// two tasks cannot migrate or delete the same secret concurrently. It is
+/// deliberately separate from the database pool: vault I/O must never hold a
+/// database connection.
+static PROFILE_VAULT_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 static CREDENTIAL_STORE: OnceLock<Arc<dyn credential_store::CredentialStore>> = OnceLock::new();
 static ACTIVE_PROFILE_ID: LazyLock<RwLock<String>> =
     LazyLock::new(|| RwLock::new("default".to_owned()));
@@ -357,7 +391,7 @@ pub fn set_active_profile_scope(profile_id: impl Into<String>) {
 pub async fn load_profile_scope(
     profile_id: &str,
 ) -> Result<Option<stremio_core::types::profile::Profile>, EnvError> {
-    let mut conn = get_db_conn().await?;
+    let conn = get_db_conn().await?;
     let mut rows = conn
         .query(
             "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = ?",
@@ -372,13 +406,18 @@ pub async fn load_profile_scope(
         .map(|row| row.get::<String>(0))
         .transpose()
         .map_err(|error| EnvError::StorageReadError(error.to_string()))?;
+    // Consume the statement before returning the connection to the pool.
+    while let Ok(Some(_)) = rows.next().await {}
     drop(rows);
+    // Release the connection before touching the OS credential vault: keyring
+    // round trips can take seconds and must not stall catalog cache reads.
+    drop(conn);
     let Some(value) = value else {
         return Ok(None);
     };
     let mut raw: serde_json::Value =
         serde_json::from_str(&value).map_err(|error| EnvError::Serde(error.to_string()))?;
-    rehydrate_profile_from_vault(&mut conn, profile_id, &mut raw).await?;
+    rehydrate_profile_from_vault(profile_id, &mut raw).await?;
     serde_json::from_value(raw)
         .map(Some)
         .map_err(|error| EnvError::Serde(error.to_string()))
@@ -457,13 +496,13 @@ async fn prepare_profile_for_storage(
 }
 
 async fn rehydrate_profile_from_vault(
-    conn: &mut turso::Connection,
     profile_id: &str,
     raw: &mut serde_json::Value,
 ) -> Result<(), EnvError> {
     let Some(key) = profile_auth_key(raw) else {
         return Ok(());
     };
+    let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
     let reference = vault_reference(profile_id)?;
     if key.as_str() == Some(AUTH_VAULT_SENTINEL) {
         let secret = credential_store()
@@ -491,6 +530,7 @@ async fn rehydrate_profile_from_vault(
     *key = serde_json::Value::String(AUTH_VAULT_SENTINEL.to_owned());
     let redacted =
         serde_json::to_string(raw).map_err(|error| EnvError::Serde(error.to_string()))?;
+    let mut conn = get_db_conn().await?;
     let transaction = conn
         .transaction()
         .await
@@ -521,9 +561,10 @@ async fn rehydrate_profile_from_vault(
 
 #[cfg(feature = "in-process")]
 fn in_process_router() -> Result<axum::Router, EnvError> {
-    Err(EnvError::Other("in-process router disabled; use HTTP loopback".to_owned()))
+    Err(EnvError::Other(
+        "in-process router disabled; use HTTP loopback".to_owned(),
+    ))
 }
-
 
 /// Returned when a database is installed after core storage has already
 /// initialized its database handle.
@@ -545,68 +586,83 @@ pub fn install_database(database: turso::Database) -> Result<(), DatabaseAlready
         .map_err(|_| DatabaseAlreadyInstalled)
 }
 
-/// A borrowed handle to the shared Turso connection.
+/// A leased Turso connection. It is returned to the pool on drop.
 ///
-/// The inner guard serializes all protocol-level access so a clone of the
-/// underlying `Connection` cannot interleave transactions with another task.
+/// Each lease is an independent connection, so two tasks can read concurrently
+/// and transactions cannot interleave with another task's work.
 pub(crate) struct DbConn {
-    conn: turso::Connection,
-    _guard: OwnedMutexGuard<()>,
+    conn: Option<turso::Connection>,
+    _permit: OwnedSemaphorePermit,
 }
 
 impl Deref for DbConn {
     type Target = turso::Connection;
 
     fn deref(&self) -> &Self::Target {
-        &self.conn
+        self.conn
+            .as_ref()
+            .expect("database connection is present until drop")
     }
 }
 
 impl DerefMut for DbConn {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.conn
+        self.conn
+            .as_mut()
+            .expect("database connection is present until drop")
     }
 }
 
-pub(crate) async fn get_db_conn() -> Result<DbConn, EnvError> {
-    let guard = DB_CONNECTION_ACCESS.clone().lock_owned().await;
-    if let Some(conn) = read_database_slot(&DB_CONNECTION) {
-        return Ok(DbConn {
-            conn,
-            _guard: guard,
-        });
+impl Drop for DbConn {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            DB_POOL
+                .idle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(conn);
+        }
     }
+}
 
-    let _initializing = DB_CONNECTION_INIT.lock().await;
-    if let Some(conn) = read_database_slot(&DB_CONNECTION) {
-        return Ok(DbConn {
-            conn,
-            _guard: guard,
-        });
-    }
-
+async fn create_db_connection() -> Result<turso::Connection, EnvError> {
     let db = DB.get().and_then(read_database_slot).ok_or_else(|| {
         EnvError::Other(
             "application database must be installed before core storage is used".to_owned(),
         )
     })?;
     let conn = db.connect().map_err(|e| EnvError::Other(e.to_string()))?;
-    conn.execute_batch(
+    conn.execute_batch(&format!(
         "PRAGMA synchronous = NORMAL;
          PRAGMA temp_store = MEMORY;
          PRAGMA cache_size = -2000;
          PRAGMA mmap_size = 30000000;
-         PRAGMA busy_timeout = 1000;",
-    )
+         PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS};"
+    ))
     .await
     .map_err(|e| EnvError::Other(e.to_string()))?;
-    *DB_CONNECTION
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(conn.clone());
+    Ok(conn)
+}
 
+pub(crate) async fn get_db_conn() -> Result<DbConn, EnvError> {
+    let permit = DB_POOL
+        .permits
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| EnvError::Other("core database pool is closed".to_owned()))?;
+    let pooled = DB_POOL
+        .idle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pop();
+    let conn = match pooled {
+        Some(conn) => conn,
+        None => create_db_connection().await?,
+    };
     Ok(DbConn {
-        conn,
-        _guard: guard,
+        conn: Some(conn),
+        _permit: permit,
     })
 }
 
@@ -668,11 +724,13 @@ pub async fn flush_storage() {
 /// Prevents new core-storage database work and releases its retained handles.
 pub async fn shutdown_database() {
     flush_storage().await;
-    let _initializing = DB_CONNECTION_INIT.lock().await;
-    DB_CONNECTION
-        .write()
+    http_cache::flush_access_touches().await;
+    http_cache::log_metrics_summary("shutdown");
+    DB_POOL
+        .idle
+        .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
+        .clear();
     if let Some(database) = DB.get() {
         database
             .write()
@@ -708,7 +766,6 @@ impl Env for DesktopEnv {
         let key = key.to_owned();
         let profile_id = active_profile_scope();
         async move {
-            let mut conn = get_db_conn().await?;
             let cached_value_str = if is_debounced_key(&key) {
                 let cache_key = (profile_id.clone(), key.clone());
                 let pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
@@ -720,6 +777,7 @@ impl Env for DesktopEnv {
             let value_str = if let Some(cached) = cached_value_str {
                 Some(cached)
             } else {
+                let conn = get_db_conn().await?;
                 let mut rows = conn
                     .query(
                         "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = ?",
@@ -740,7 +798,11 @@ impl Env for DesktopEnv {
                 } else {
                     None
                 };
+                // Consume the statement before returning the connection to the
+                // pool, and release it before any credential-vault I/O.
+                while let Ok(Some(_)) = rows.next().await {}
                 drop(rows);
+                drop(conn);
                 res
             };
 
@@ -750,7 +812,7 @@ impl Env for DesktopEnv {
             let mut json: serde_json::Value = serde_json::from_str(&value_str)
                 .map_err(|error| EnvError::Serde(error.to_string()))?;
             if key == PROFILE_STORAGE_KEY {
-                rehydrate_profile_from_vault(&mut conn, &profile_id, &mut json).await?;
+                rehydrate_profile_from_vault(&profile_id, &mut json).await?;
             }
             serde_json::from_value(json)
                 .map(Some)
@@ -770,8 +832,8 @@ impl Env for DesktopEnv {
             None => None,
         };
         async move {
-            let conn = get_db_conn().await?;
             if key == PROFILE_STORAGE_KEY && value_json.is_none() {
+                let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
                 let reference = vault_reference(&profile_id)?;
                 credential_store()
                     .delete(&reference)
@@ -780,6 +842,7 @@ impl Env for DesktopEnv {
             }
             if let Some(mut value) = value_json {
                 if key == PROFILE_STORAGE_KEY {
+                    let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
                     prepare_profile_for_storage(&profile_id, &mut value).await?;
                 }
                 let val = serde_json::to_string(&value)
@@ -805,10 +868,11 @@ impl Env for DesktopEnv {
                     }
                 }
 
+                let conn = get_db_conn().await?;
                 conn.execute(
                     "INSERT INTO profile_core_storage (profile_id, key, value) VALUES (?, ?, ?)
                      ON CONFLICT(profile_id, key) DO UPDATE SET value = excluded.value WHERE value != excluded.value",
-                    (profile_id, key, val),
+                    (profile_id.as_str(), key.as_str(), val),
                 )
                 .await
                 .map_err(|e| EnvError::StorageWriteError(e.to_string()))?;
@@ -818,9 +882,10 @@ impl Env for DesktopEnv {
                     let mut pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
                     pending.remove(&cache_key);
                 }
+                let conn = get_db_conn().await?;
                 conn.execute(
                     "DELETE FROM profile_core_storage WHERE profile_id = ? AND key = ?",
-                    (profile_id, key),
+                    (profile_id.as_str(), key.as_str()),
                 )
                 .await
                 .map_err(|e| EnvError::StorageWriteError(e.to_string()))?;

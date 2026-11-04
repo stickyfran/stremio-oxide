@@ -65,6 +65,7 @@ mod mpv_integration;
 pub mod network_tools;
 mod paths;
 mod performance;
+mod pip_aspect;
 mod playback;
 mod player_features;
 #[cfg(feature = "plugins")]
@@ -74,12 +75,11 @@ pub mod profiles;
 pub mod ratings;
 pub mod runtime_host;
 pub mod secure_settings;
+pub mod server_readiness;
 mod shaders;
 mod shortcuts;
 mod single_instance;
-pub mod server_readiness;
 pub mod startup_metrics;
-mod pip_aspect;
 mod taskbar_media;
 mod theme_studio;
 mod thumbnail_preview;
@@ -107,13 +107,19 @@ fn main() -> anyhow::Result<()> {
     // SAFETY: Called at the very beginning of `main()` before spawning any threads,
     // tasks, or runtime executors. No concurrent environment access can occur.
     if std::env::var_os("MIMALLOC_ARENA_EAGER_COMMIT").is_none() {
-        unsafe { std::env::set_var("MIMALLOC_ARENA_EAGER_COMMIT", "0"); }
+        unsafe {
+            std::env::set_var("MIMALLOC_ARENA_EAGER_COMMIT", "0");
+        }
     }
     if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
-        unsafe { std::env::set_var("MIMALLOC_PURGE_DELAY", "0"); }
+        unsafe {
+            std::env::set_var("MIMALLOC_PURGE_DELAY", "0");
+        }
     }
     if std::env::var_os("MIMALLOC_PURGE_DECOMMITS").is_none() {
-        unsafe { std::env::set_var("MIMALLOC_PURGE_DECOMMITS", "1"); }
+        unsafe {
+            std::env::set_var("MIMALLOC_PURGE_DECOMMITS", "1");
+        }
     }
 
     if crash_handler::run_helper_from_args()? {
@@ -259,6 +265,18 @@ async fn run_app(
     ui.set_settings_build_version(env!("STREMIO_BUILD_VERSION").into());
     ui.set_settings_shell_version(env!("CARGO_PKG_VERSION").into());
     ui.set_settings_hardware_acceleration(initial_config.hardware_acceleration);
+    ui.set_onboarding_hwdec_label(
+        if cfg!(target_os = "windows") {
+            "GPU decoding (D3D11VA)"
+        } else if cfg!(target_os = "macos") {
+            "GPU decoding (VideoToolbox)"
+        } else if cfg!(target_os = "linux") {
+            "GPU decoding (VA-API/NVDEC)"
+        } else {
+            "GPU decoding"
+        }
+        .into(),
+    );
     ui.set_settings_thumbnail_previews(initial_config.thumbnail_previews_enabled);
     ui.set_settings_tidb_show_intro(initial_config.tidb_show_intro);
     ui.set_settings_tidb_show_recap(initial_config.tidb_show_recap);
@@ -436,7 +454,9 @@ impl AppSession {
                 Ok(Ok(Some(source))) => tracing::info!(?source, "stremio-runtime stopped"),
                 Ok(Ok(None)) => tracing::info!("stremio-runtime stopped"),
                 Ok(Err(error)) => tracing::warn!(%error, "error joining stremio-runtime"),
-                Err(_) => tracing::warn!("stremio-runtime did not stop in time; continuing shutdown"),
+                Err(_) => {
+                    tracing::warn!("stremio-runtime did not stop in time; continuing shutdown")
+                }
             }
         } else {
             self.server_task.abort();
@@ -638,7 +658,11 @@ async fn finish_startup(
 
         loop {
             attempt += 1;
-            tracing::info!(attempt, max_retries = max_startup_retries, "launching stremio-runtime engine");
+            tracing::info!(
+                attempt,
+                max_retries = max_startup_retries,
+                "launching stremio-runtime engine"
+            );
 
             match stremio_runtime::start(server_cfg.clone()).await {
                 Ok(handle) => {
@@ -699,7 +723,9 @@ async fn finish_startup(
                 lock.as_ref().is_some_and(|h| h.is_running())
             };
             if !is_alive {
-                tracing::warn!("streaming server process died unexpectedly; initiating auto-recovery");
+                tracing::warn!(
+                    "streaming server process died unexpectedly; initiating auto-recovery"
+                );
                 server_notifier_task.mark_failed();
                 let ui_weak = server_ui_weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -756,7 +782,9 @@ async fn finish_startup(
     // Fast-path: wait a brief window (up to 350ms) for the background streaming server.
     // If it is ready (the usual case when sockets bind quickly), profile.settings.streaming_server_url
     // is set directly to the effective URL and StreamingServer::new will immediately succeed.
-    let _ = server_readiness.wait_ready(Duration::from_millis(350)).await;
+    let _ = server_readiness
+        .wait_ready(Duration::from_millis(350))
+        .await;
     let server_url = server_readiness.current_url();
     startup_storage.profile.settings.streaming_server_url = url::Url::parse(&server_url)?;
 
@@ -832,7 +860,10 @@ async fn finish_startup(
         let rx_url = server_readiness.watch_url();
         tokio::spawn(async move {
             let sync_server = |url_str: &str| {
-                tracing::info!(effective_url = url_str, "streaming server readiness confirmed; synchronizing core model");
+                tracing::info!(
+                    effective_url = url_str,
+                    "streaming server readiness confirmed; synchronizing core model"
+                );
                 if let Ok(parsed_url) = url::Url::parse(url_str)
                     && let Ok(model) = rt.model()
                     && model.ctx.profile.settings.streaming_server_url != parsed_url
@@ -2251,7 +2282,10 @@ async fn select_startup_profile(
     ui: &MainWindow,
     profiles: Vec<profiles::LocalProfile>,
     active_profile: profiles::ProfileId,
-) -> anyhow::Result<(profiles::ProfileId, Option<stremio_core::types::profile::Profile>)> {
+) -> anyhow::Result<(
+    profiles::ProfileId,
+    Option<stremio_core::types::profile::Profile>,
+)> {
     let initial_preflight = preflight_profile(&active_profile).await;
     let items = profile_items(&profiles);
     ui.set_local_profiles(slint::ModelRc::new(slint::VecModel::from(items)));
@@ -2356,7 +2390,8 @@ async fn load_startup_storage(
         if let Some(profile) = preloaded_profile {
             Ok(Some(profile))
         } else {
-            DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY).await
+            DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY)
+                .await
         }
     };
     let auxiliary_buckets_future = async {
@@ -2519,7 +2554,14 @@ fn sync_tab_from_model(
                 .map(|model| (model.library.clone(), model.continue_watching.clone()));
             if let Some((library, continue_watching_library)) = snapshot {
                 if continue_watching {
-                    models::library::sync(ui, &continue_watching_library, ui_weak, runtime, navigation, true);
+                    models::library::sync(
+                        ui,
+                        &continue_watching_library,
+                        ui_weak,
+                        runtime,
+                        navigation,
+                        true,
+                    );
                 } else {
                     models::library::sync(ui, &library, ui_weak, runtime, navigation, false);
                 }

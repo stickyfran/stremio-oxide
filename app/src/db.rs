@@ -114,8 +114,8 @@ pub async fn init_db(database_path: &Path) -> anyhow::Result<()> {
     );
 
     tokio::spawn(async {
-        // Keep cleanup I/O out of the cold-start and first-frame window.
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Keep cleanup I/O out of the cold-start and first catalog burst.
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         if let Err(error) = run_startup_maintenance().await {
             tracing::warn!(%error, "deferred database maintenance failed");
         }
@@ -577,6 +577,7 @@ pub async fn close_and_checkpoint_db() {
         drop(conn);
     }
 
+    crate::image_cache::log_image_metrics("shutdown");
     core_env::shutdown_database().await;
     if let Some(database) = DB.get().and_then(|slot| lock_slot(slot).take()) {
         drop(database);

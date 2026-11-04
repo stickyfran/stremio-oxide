@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -35,6 +35,61 @@ static REFRESH_URLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static READY_CACHE_DIRS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 static REFRESH_PENDING: AtomicBool = AtomicBool::new(false);
 static MAINTENANCE_STARTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Default)]
+struct ImageMetrics {
+    memory_hits: AtomicU64,
+    disk_hits: AtomicU64,
+    downloads: AtomicU64,
+    failures: AtomicU64,
+    decodes: AtomicU64,
+    decode_micros: AtomicU64,
+    disk_read_micros: AtomicU64,
+}
+
+static IMAGE_METRICS: OnceLock<ImageMetrics> = OnceLock::new();
+static IMAGE_METRICS_SUMMARY_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+fn image_metrics() -> &'static ImageMetrics {
+    IMAGE_METRICS.get_or_init(ImageMetrics::default)
+}
+
+fn record_decode(elapsed: Duration) {
+    let metrics = image_metrics();
+    metrics.decodes.fetch_add(1, Ordering::Relaxed);
+    metrics.decode_micros.fetch_add(
+        elapsed.as_micros().try_into().unwrap_or(u64::MAX),
+        Ordering::Relaxed,
+    );
+}
+
+pub fn log_image_metrics(label: &str) {
+    let metrics = image_metrics();
+    tracing::info!(
+        label,
+        memory_hits = metrics.memory_hits.load(Ordering::Relaxed),
+        disk_hits = metrics.disk_hits.load(Ordering::Relaxed),
+        downloads = metrics.downloads.load(Ordering::Relaxed),
+        failures = metrics.failures.load(Ordering::Relaxed),
+        decodes = metrics.decodes.load(Ordering::Relaxed),
+        decode_ms = metrics.decode_micros.load(Ordering::Relaxed) / 1_000,
+        disk_read_ms = metrics.disk_read_micros.load(Ordering::Relaxed) / 1_000,
+        "image cache metrics"
+    );
+}
+
+fn schedule_metrics_summary() {
+    if IMAGE_METRICS_SUMMARY_SCHEDULED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    core_env::spawn_on_runtime(async {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        log_image_metrics("startup");
+    });
+}
 
 const MEMORY_CAPACITY_BYTES: u64 = 48 * 1024 * 1024;
 const MEMORY_IDLE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -120,6 +175,7 @@ pub fn get_cached_image_url(url: &str) -> slint::Image {
 
 pub fn request_image(url: &str) {
     if !url.is_empty() {
+        schedule_metrics_summary();
         let _ = get_image(url, true);
     }
 }
@@ -130,6 +186,7 @@ fn get_image(url: &str, request_on_miss: bool) -> slint::Image {
 
     if let Some(buffer) = memory_image_cache().get(url) {
         crate::performance::counters().record_image_memory_hit();
+        image_metrics().memory_hits.fetch_add(1, Ordering::Relaxed);
         return slint::Image::from_rgba8(buffer);
     }
 
@@ -288,6 +345,7 @@ async fn process_fetch(job: FetchJob) {
     let result = match load_from_disk(&job.url).await {
         Some(buffer) => {
             crate::performance::counters().record_image_disk_hit();
+            image_metrics().disk_hits.fetch_add(1, Ordering::Relaxed);
             Ok(buffer)
         }
         None => download_and_cache(&job.url).await,
@@ -301,6 +359,7 @@ async fn process_fetch(job: FetchJob) {
         }
         Err(error) => {
             crate::performance::counters().record_image_failure();
+            image_metrics().failures.fetch_add(1, Ordering::Relaxed);
             let attempts = job.previous_attempts.saturating_add(1);
             let backoff_seconds = 2_u64.saturating_pow(attempts.min(6)).max(2);
             download_state().insert(
@@ -330,6 +389,7 @@ fn sanitized_url_for_log(raw: &str) -> String {
 async fn load_from_disk(url: &str) -> Option<ImageEntry> {
     let _permit = disk_semaphore().clone().acquire_owned().await.ok()?;
     let path = cache_path(url);
+    let read_started = Instant::now();
     let bytes = tokio::task::spawn_blocking(move || {
         let mut file = std::fs::File::open(&path).ok()?;
         let metadata = file.metadata().ok()?;
@@ -347,6 +407,14 @@ async fn load_from_disk(url: &str) -> Option<ImageEntry> {
     .await
     .ok()
     .flatten()?;
+    image_metrics().disk_read_micros.fetch_add(
+        read_started
+            .elapsed()
+            .as_micros()
+            .try_into()
+            .unwrap_or(u64::MAX),
+        Ordering::Relaxed,
+    );
 
     decode(bytes).await.ok().map(|(decoded, _bytes)| decoded)
 }
@@ -360,6 +428,7 @@ async fn download_and_cache(url: &str) -> Result<ImageEntry, String> {
         .map_err(|_| "image network queue closed".to_owned())?;
     let bytes = download_with_retry(url).await?;
     crate::performance::counters().record_image_download();
+    image_metrics().downloads.fetch_add(1, Ordering::Relaxed);
 
     let (decoded, bytes) = decode(bytes).await?;
     let path = cache_path(url);
@@ -450,7 +519,9 @@ async fn decode(bytes: Vec<u8>) -> Result<(ImageEntry, Vec<u8>), String> {
         .await
         .map_err(|_| "image decode queue closed".to_owned())?;
     tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
         let decoded = decode_image(&bytes)?;
+        record_decode(started.elapsed());
         Ok((decoded, bytes))
     })
     .await
@@ -494,8 +565,10 @@ fn decode_image(bytes: &[u8]) -> Result<ImageEntry, String> {
     decode_from_decoder(decoder, role)
 }
 
-
-fn decode_from_decoder<D: image::ImageDecoder>(decoder: D, role: ImageRole) -> Result<ImageEntry, String> {
+fn decode_from_decoder<D: image::ImageDecoder>(
+    decoder: D,
+    role: ImageRole,
+) -> Result<ImageEntry, String> {
     let (max_width, max_height) = role.max_dimensions();
     let (width, height) = decoder.dimensions();
 
@@ -536,11 +609,7 @@ fn decode_from_decoder<D: image::ImageDecoder>(decoder: D, role: ImageRole) -> R
 
     let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
     let image = if image.width() > max_width || image.height() > max_height {
-        image.resize(
-            max_width,
-            max_height,
-            image::imageops::FilterType::Triangle,
-        )
+        image.resize(max_width, max_height, image::imageops::FilterType::Triangle)
     } else {
         image
     };

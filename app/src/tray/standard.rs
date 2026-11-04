@@ -17,6 +17,7 @@ pub(super) fn create(actions: TrayActions) -> anyhow::Result<Tray> {
 
     let TrayActions {
         open_window,
+        toggle_window,
         open_settings,
         open_logs,
         check_update,
@@ -24,6 +25,7 @@ pub(super) fn create(actions: TrayActions) -> anyhow::Result<Tray> {
         quit,
     } = actions;
     tray.on_open_window(open_window);
+    tray.on_toggle_window(toggle_window);
     tray.on_open_settings(open_settings);
     tray.on_open_logs(open_logs);
     tray.on_check_update(check_update);

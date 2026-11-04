@@ -110,13 +110,16 @@ export component AppTray inherits SystemTrayIcon {
     in property <bool> update-installing: false;
 
     callback open-window();
+    callback toggle-window();
     callback open-settings();
     callback open-logs();
     callback check-update();
     callback install-update();
     callback quit();
 
-    clicked => { root.open-window(); }
+    // Left click on the notification-area icon toggles the main window.
+    // The menu item below still opens it unconditionally.
+    clicked => { root.toggle-window(); }
 
     Menu {
         MenuItem {
@@ -876,6 +879,8 @@ export component MainWindow inherits Window {
     in-out property <float> update-download-progress: 0.0;
     in-out property <bool> onboarding-dialog-open: false;
     in-out property <styled-text> onboarding-changelog-text;
+    // Platform decoder label; set from Rust so Linux never advertises D3D11VA.
+    in property <string> onboarding-hwdec-label: "GPU decoding";
     in-out property <string> update-dialog-version: "";
     in-out property <styled-text> update-dialog-notes;
     in-out property <bool> update-dialog-can-install: false;
@@ -2976,6 +2981,7 @@ export component MainWindow inherits Window {
             unit: root.ui-unit;
             open: root.onboarding-dialog-open;
             changelog-text: root.onboarding-changelog-text;
+            hwdec-label: root.onboarding-hwdec-label;
             available-languages: root.settings-interface-language-options;
             selected-upscaler-preset: root.player-active-shader-preset;
             upscaler-preset-available: root.player-shader-preset-available;
@@ -3233,7 +3239,7 @@ export component MainWindow inherits Window {
             root.update-dialog-open = state == "update-dialog";
             if (state == "update-dialog") {
                 root.update-dialog-version = "5.0.0";
-                root.update-dialog-notes = @markdown("* **GPU 4K Upscaler Shaders**: Integrated Anime4K (HQ) & AMD FSR spatial upscaler presets.\n* **ThumbFast Seek Bar Preview**: Hover over seek bar for real-time video thumbnail frames.\n* **High-Performance Rust Engine**: libmpv 60fps rendering, hardware acceleration (D3D11VA).\n* **Discord Rich Presence & Seeding**: Live status broadcast on Discord.");
+                root.update-dialog-notes = @markdown("* **GPU 4K Upscaler Shaders**: Integrated Anime4K (HQ) & AMD FSR spatial upscaler presets.\n* **ThumbFast Seek Bar Preview**: Hover over seek bar for real-time video thumbnail frames.\n* **High-Performance Rust Engine**: libmpv 60fps rendering, hardware-accelerated GPU decoding.\n* **Discord Rich Presence & Seeding**: Live status broadcast on Discord.");
             }
             root.debug-preview-state = state;
             if (root.debug-preview-page == 8) {

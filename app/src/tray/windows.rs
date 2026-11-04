@@ -13,7 +13,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::mem::size_of;
+use std::rc::Rc;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use slint::winit_030::{WinitWindowAccessor, winit};
 use slint::{ComponentHandle, SharedString, Weak};
@@ -61,6 +63,10 @@ thread_local! {
     static PREVIOUS_PANEL_WNDPROC: Cell<WNDPROC> = const { Cell::new(None) };
     /// Kept so the icon can be re-created when Explorer restarts.
     static TRAY_ICON: Cell<Option<HICON>> = const { Cell::new(None) };
+    /// Left-click action, stored here because the `WNDPROC` has no user context.
+    static TRAY_TOGGLE: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+    /// Coalesces `WM_LBUTTONUP` and `NIN_SELECT` when both arrive for one click.
+    static LAST_TOGGLE: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 pub(super) struct Tray {
@@ -79,12 +85,15 @@ pub(super) fn create(actions: TrayActions) -> anyhow::Result<Tray> {
 
     let TrayActions {
         open_window,
+        toggle_window,
         open_settings,
         open_logs,
         check_update,
         install_update,
         quit,
     } = actions;
+    let toggle_window: Rc<dyn Fn()> = Rc::from(toggle_window);
+    TRAY_TOGGLE.with(|slot| *slot.borrow_mut() = Some(toggle_window));
     // Every activation dismisses the popup first, the way a menu would.
     panel.on_open_window(dismissing(open_window));
     panel.on_open_settings(dismissing(open_settings));
@@ -121,6 +130,8 @@ impl Drop for Tray {
             destroy_host_window(self.host);
         }
         TRAY_ICON.with(|slot| slot.set(None));
+        TRAY_TOGGLE.with(|slot| *slot.borrow_mut() = None);
+        LAST_TOGGLE.with(|slot| slot.set(None));
         PANEL.with(|slot| *slot.borrow_mut() = None);
     }
 }
@@ -276,6 +287,22 @@ unsafe fn remove_notification_icon(host: HWND) {
     }
 }
 
+/// The shell may deliver both `WM_LBUTTONUP` and `NIN_SELECT` for one physical
+/// click; ignore the second event inside the debounce window.
+fn should_toggle_now() -> bool {
+    const DEBOUNCE: Duration = Duration::from_millis(300);
+    LAST_TOGGLE.with(|slot| {
+        let now = Instant::now();
+        let mut last = slot.borrow_mut();
+        if last.is_some_and(|previous| now.saturating_duration_since(previous) < DEBOUNCE) {
+            false
+        } else {
+            *last = Some(now);
+            true
+        }
+    })
+}
+
 unsafe extern "system" fn tray_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -284,12 +311,21 @@ unsafe extern "system" fn tray_wnd_proc(
 ) -> LRESULT {
     if msg == TRAY_CALLBACK_MESSAGE {
         let event = lparam.0 as u32;
-        if matches!(
-            event,
-            WM_LBUTTONUP | WM_RBUTTONUP | WM_CONTEXTMENU | NIN_SELECT | NIN_KEYSELECT
-        ) {
-            show_panel();
-            return LRESULT(0);
+        match event {
+            WM_LBUTTONUP | NIN_SELECT | NIN_KEYSELECT => {
+                if should_toggle_now() {
+                    let action = TRAY_TOGGLE.with(|slot| slot.borrow().as_ref().cloned());
+                    if let Some(action) = action {
+                        action();
+                    }
+                }
+                return LRESULT(0);
+            }
+            WM_RBUTTONUP | WM_CONTEXTMENU => {
+                show_panel();
+                return LRESULT(0);
+            }
+            _ => {}
         }
     } else if msg == taskbar_created_message() {
         let icon = TRAY_ICON.with(|slot| slot.get());

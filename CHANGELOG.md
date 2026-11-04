@@ -2,6 +2,32 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.8 - 2026-11-04
+
+### Cold start and cache resilience
+
+- Removed the 2-second HTTP cache read timeout that converted slow cache hits into network requests under SQLite contention.
+- Replaced the serialized Turso connection with a small connection pool, moved credential-vault I/O outside the database lock, and added `STREMIO_DB_POOL_CONNECTIONS` for benchmarking (default 8, range 1–32).
+- Added resource-specific revalidation windows for manifests, catalogs, metadata, and legacy resources instead of the previous global 60-second policy.
+- Bounded background revalidation to two concurrent requests with jitter, per-host exponential backoff, and de-duplication of identical in-flight requests.
+- Added protection against stale responses overwriting newer cache entries, plus stale-on-error fallback within the retention window.
+- Added a session-only in-memory stream cache, scoped per profile, with a two-minute TTL, bounded memory, and no persistence of signed stream URLs.
+- Added aggregate HTTP and image cache metrics at startup and shutdown, including hits, misses, revalidation results, response bytes, slow reads, image downloads, and decode time.
+
+### Tray and desktop
+
+- Left-clicking the tray now toggles the main window; “Open Stremio Oxide” always restores it.
+- Tray restoration remembers the previous size, maximized, and fullscreen state and reapplies it after the recreated window surface exists.
+- Wayland minimized or covered windows are restored by recreating the surface, with focus retries and generation-based cancellation of obsolete restores.
+- Picture-in-picture remains visible instead of being hidden by a tray toggle.
+- The onboarding hardware-decoder label is now platform-specific: D3D11VA on Windows, VA-API/NVDEC on Linux, and VideoToolbox on macOS.
+
+### Validation
+
+- Release build completed successfully.
+- Unit tests: 165 application tests and 18 core-environment tests passing.
+- Release smoke benchmark: zero old cache-read timeouts and zero slow cache reads across repeated cold processes; stream cache hits observed; remaining measured cost is repeated image decoding rather than SQLite contention.
+
 ## 0.99.1 - 2026-10-28
 
 ### Performance and Memory Optimization

@@ -28,6 +28,7 @@ export component OnboardingModal inherits Rectangle {
     in property <string> upscaler-status: "Checking GPU support…";
     in-out property <float> seek-duration-seconds: 10.0;
     in-out property <bool> hardware-acceleration-enabled: true;
+    in property <string> hwdec-label: "GPU decoding";
     in-out property <bool> auto-subtitles-enabled: true;
     in-out property <bool> discord-rpc-enabled: true;
     in-out property <bool> background-playback-enabled: true;
@@ -472,7 +473,7 @@ export component OnboardingModal inherits Rectangle {
                             spacing: 2px;
 
                             Text { text: @tr("Hardware Acceleration"); color: Theme.primary-foreground; font-size: 13px; font-weight: 600; }
-                            Text { text: @tr("GPU decoding (D3D11VA)"); color: Theme.text-muted; font-size: 11px; }
+                            Text { text: root.hwdec-label; color: Theme.text-muted; font-size: 11px; }
                         }
 
                         ToggleSwitch {

@@ -1,10 +1,11 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::IpAddr,
     sync::{
-        Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use base64::Engine as _;
@@ -17,13 +18,90 @@ use crate::{get_db_conn, sanitized_url_for_log, spawn_on_runtime};
 const MAX_CACHE_BYTES: i64 = 256 * 1024 * 1024;
 const MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_AGE_SECONDS: i64 = 30 * 24 * 60 * 60;
-const REVALIDATE_AFTER_SECONDS: i64 = 60;
 const MAINTENANCE_WRITE_INTERVAL: usize = 64;
 const CATALOG_MAX_RETRIES: usize = 3;
 const CATALOG_RETRY_BASE_DELAY_MS: u64 = 250;
+/// A cache read this slow means the database was contended. It is only logged:
+/// falling back to the network would turn a cache hit into a slow request.
+const SLOW_CACHE_READ: Duration = Duration::from_millis(500);
+const STREAM_TTL: Duration = Duration::from_secs(120);
+const STREAM_MAX_ENTRIES: usize = 64;
+const STREAM_MAX_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CONCURRENT_REVALIDATIONS: usize = 2;
 
 static REVALIDATING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static REVALIDATION_LIMITER: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+static MISS_LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+static CACHE_GENERATIONS: OnceLock<Mutex<HashMap<String, CacheGeneration>>> = OnceLock::new();
+static HOST_BACKOFF: OnceLock<Mutex<HashMap<String, HostBackoff>>> = OnceLock::new();
+static STREAM_CACHE: OnceLock<Mutex<HashMap<String, StreamEntry>>> = OnceLock::new();
+static STREAM_CACHE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static WRITES_SINCE_MAINTENANCE: AtomicUsize = AtomicUsize::new(0);
+static PENDING_ACCESS_TOUCHES: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+static ACCESS_TOUCH_FLUSHER_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static METRICS_SUMMARY_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Default)]
+struct CacheMetrics {
+    hit_fresh: AtomicU64,
+    hit_stale: AtomicU64,
+    miss: AtomicU64,
+    revalidate_scheduled: AtomicU64,
+    revalidate_304: AtomicU64,
+    revalidate_200: AtomicU64,
+    network_error: AtomicU64,
+    stale_served_on_error: AtomicU64,
+    singleflight_joined: AtomicU64,
+    stream_hit: AtomicU64,
+    response_bytes: AtomicU64,
+    slow_reads: AtomicU64,
+}
+
+static METRICS: OnceLock<CacheMetrics> = OnceLock::new();
+
+fn metrics() -> &'static CacheMetrics {
+    METRICS.get_or_init(CacheMetrics::default)
+}
+
+/// Emits one aggregate line after startup so benchmarks have a stable summary
+/// without logging every request.
+pub(crate) fn schedule_metrics_summary() {
+    if METRICS_SUMMARY_SCHEDULED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    spawn_on_runtime(async {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        log_metrics_summary("startup");
+    });
+}
+
+pub(crate) fn log_metrics_summary(label: &str) {
+    let metrics = metrics();
+    tracing::info!(
+        label,
+        hit_fresh = metrics.hit_fresh.load(Ordering::Relaxed),
+        hit_stale = metrics.hit_stale.load(Ordering::Relaxed),
+        miss = metrics.miss.load(Ordering::Relaxed),
+        revalidate_scheduled = metrics.revalidate_scheduled.load(Ordering::Relaxed),
+        revalidate_304 = metrics.revalidate_304.load(Ordering::Relaxed),
+        revalidate_200 = metrics.revalidate_200.load(Ordering::Relaxed),
+        network_error = metrics.network_error.load(Ordering::Relaxed),
+        stale_served_on_error = metrics.stale_served_on_error.load(Ordering::Relaxed),
+        singleflight_joined = metrics.singleflight_joined.load(Ordering::Relaxed),
+        stream_hit = metrics.stream_hit.load(Ordering::Relaxed),
+        response_bytes = metrics.response_bytes.load(Ordering::Relaxed),
+        slow_reads = metrics.slow_reads.load(Ordering::Relaxed),
+        "HTTP cache metrics"
+    );
+}
+
+fn pending_access_touches() -> &'static Mutex<HashMap<String, i64>> {
+    PENDING_ACCESS_TOUCHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResourceKind {
@@ -33,6 +111,7 @@ pub(crate) enum ResourceKind {
     Meta,
     LegacyCatalog,
     LegacyMeta,
+    Stream,
 }
 
 impl ResourceKind {
@@ -44,6 +123,31 @@ impl ResourceKind {
             Self::Meta => "meta",
             Self::LegacyCatalog => "legacy_catalog",
             Self::LegacyMeta => "legacy_meta",
+            Self::Stream => "stream",
+        }
+    }
+
+    /// How long the cached representation can be used without even scheduling
+    /// a background revalidation. Values are intentionally conservative for
+    /// addon data, which rarely exposes reliable cache directives.
+    fn fresh_for_seconds(self, has_validator: bool) -> i64 {
+        match self {
+            Self::Manifest | Self::AddonCatalog => 6 * 60 * 60,
+            Self::Catalog | Self::LegacyCatalog => {
+                if has_validator {
+                    15 * 60
+                } else {
+                    6 * 60 * 60
+                }
+            }
+            Self::Meta | Self::LegacyMeta => {
+                if has_validator {
+                    60 * 60
+                } else {
+                    6 * 60 * 60
+                }
+            }
+            Self::Stream => 2 * 60,
         }
     }
 }
@@ -73,7 +177,16 @@ impl CacheRequest {
 
         let resource_kind = classify_path(&url)?;
         let canonical_url = url.to_string();
-        let cache_key = cache_key(&canonical_url, &parts.headers);
+        let cache_key = if resource_kind == ResourceKind::Stream {
+            let profile = crate::active_profile_scope();
+            blake3::hash(
+                format!("{profile}\n{}", cache_key(&canonical_url, &parts.headers)).as_bytes(),
+            )
+            .to_hex()
+            .to_string()
+        } else {
+            cache_key(&canonical_url, &parts.headers)
+        };
         Some(Self {
             cache_key,
             resource_kind,
@@ -107,8 +220,12 @@ impl HttpCacheEntry {
         now.saturating_sub(self.validation_time()) > MAX_AGE_SECONDS
     }
 
-    fn should_revalidate(&self, now: i64) -> bool {
-        self.validated_at == 0 || now.saturating_sub(self.validated_at) >= REVALIDATE_AFTER_SECONDS
+    fn should_revalidate(&self, now: i64, kind: ResourceKind) -> bool {
+        if self.validated_at == 0 {
+            return true;
+        }
+        let has_validator = self.etag.is_some() || self.last_modified.is_some();
+        now.saturating_sub(self.validated_at) >= kind.fresh_for_seconds(has_validator)
     }
 }
 
@@ -130,32 +247,51 @@ pub(crate) async fn fetch<OUT>(
 where
     for<'de> OUT: Deserialize<'de> + Send + 'static,
 {
+    if request.resource_kind == ResourceKind::Stream {
+        return fetch_stream::<OUT>(request, client).await;
+    }
+    schedule_metrics_summary();
+
     let now = chrono::Utc::now().timestamp();
-    match read_entry(&request.cache_key).await {
-        Ok(Some(entry))
-            if entry.resource_kind == request.resource_kind.as_str()
-                && (200..300).contains(&entry.status)
-                && !entry.is_expired(now) =>
-        {
-            match serde_json::from_slice::<OUT>(&entry.body) {
-                Ok(value) => {
-                    schedule_access_touch(request.cache_key.clone(), now);
-                    if entry.should_revalidate(now) {
-                        schedule_revalidation::<OUT>(request, entry, client);
+    let read_started = Instant::now();
+    let cache_lookup = read_entry(&request.cache_key).await;
+    let read_elapsed = read_started.elapsed();
+    if read_elapsed >= SLOW_CACHE_READ {
+        metrics().slow_reads.fetch_add(1, Ordering::Relaxed);
+        tracing::warn!(
+            cache_key = %request.cache_key,
+            elapsed_ms = read_elapsed.as_millis(),
+            "slow HTTP cache read"
+        );
+    }
+
+    let mut stale_entry = None;
+    match cache_lookup {
+        Ok(Some(entry)) if entry.resource_kind == request.resource_kind.as_str() => {
+            if (200..300).contains(&entry.status) && !entry.is_expired(now) {
+                match serde_json::from_slice::<OUT>(&entry.body) {
+                    Ok(value) => {
+                        metrics().hit_fresh.fetch_add(1, Ordering::Relaxed);
+                        schedule_access_touch(request.cache_key.clone(), now);
+                        if entry.should_revalidate(now, request.resource_kind) {
+                            schedule_revalidation::<OUT>(request, entry, client);
+                        }
+                        return Ok(value);
                     }
-                    return Ok(value);
-                }
-                Err(error) => {
-                    tracing::debug!(%error, "discarding corrupt cached JSON response");
-                    if let Err(error) = delete_entry(&request.cache_key).await {
-                        tracing::debug!(%error, "corrupt HTTP cache entry deletion failed");
+                    Err(error) => {
+                        tracing::debug!(%error, "discarding corrupt cached JSON response");
+                        if let Err(error) = delete_entry(&request.cache_key).await {
+                            tracing::debug!(%error, "corrupt HTTP cache entry deletion failed");
+                        }
                     }
                 }
+            } else if !entry.is_expired(now) {
+                stale_entry = Some(entry);
             }
         }
         Ok(Some(_)) => {
             if let Err(error) = delete_entry(&request.cache_key).await {
-                tracing::debug!(%error, "expired HTTP cache entry deletion failed");
+                tracing::debug!(%error, "mismatched HTTP cache entry deletion failed");
             }
         }
         Ok(None) => {}
@@ -164,20 +300,364 @@ where
         }
     }
 
-    let response = send_request_with_retry(&client, &request, None).await?;
-    let value = serde_json::from_slice::<OUT>(&response.body)
-        .map_err(|error| EnvError::Fetch(error.to_string()))?;
-
-    if response_is_storable(&response) {
-        let stored_at = chrono::Utc::now().timestamp();
-        spawn_on_runtime(async move {
-            if let Err(error) = write_response(&request, response, stored_at).await {
-                tracing::debug!(%error, "HTTP cache write failed");
+    let miss_lock = miss_lock(&request.cache_key);
+    let joined = miss_lock.lock.try_lock().is_err();
+    let _miss_guard = miss_lock.lock.lock().await;
+    if joined {
+        metrics()
+            .singleflight_joined
+            .fetch_add(1, Ordering::Relaxed);
+        // Another request may have populated the cache while this one waited.
+        if let Ok(Some(entry)) = read_entry(&request.cache_key).await
+            && entry.resource_kind == request.resource_kind.as_str()
+            && (200..300).contains(&entry.status)
+            && !entry.is_expired(now)
+            && let Ok(value) = serde_json::from_slice::<OUT>(&entry.body)
+        {
+            metrics().hit_fresh.fetch_add(1, Ordering::Relaxed);
+            schedule_access_touch(request.cache_key.clone(), now);
+            if entry.should_revalidate(now, request.resource_kind) {
+                schedule_revalidation::<OUT>(request, entry, client);
             }
-        });
+            return Ok(value);
+        }
+    }
+
+    metrics().miss.fetch_add(1, Ordering::Relaxed);
+    let generation = begin_foreground_generation(&request.cache_key);
+    let response = match send_request_with_retry(&client, &request, None).await {
+        Ok(response) => response,
+        Err(error) => {
+            metrics().network_error.fetch_add(1, Ordering::Relaxed);
+            if let Some(value) = stale_entry
+                .as_ref()
+                .and_then(|entry| stale_value::<OUT>(entry))
+            {
+                metrics()
+                    .stale_served_on_error
+                    .fetch_add(1, Ordering::Relaxed);
+                metrics().hit_stale.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(
+                    url = %sanitized_url_for_log(&request.url),
+                    %error,
+                    "serving stale HTTP cache entry after network failure"
+                );
+                return Ok(value);
+            }
+            return Err(error);
+        }
+    };
+
+    let value = match serde_json::from_slice::<OUT>(&response.body) {
+        Ok(value) => value,
+        Err(error) => {
+            metrics().network_error.fetch_add(1, Ordering::Relaxed);
+            if let Some(value) = stale_entry
+                .as_ref()
+                .and_then(|entry| stale_value::<OUT>(entry))
+            {
+                metrics()
+                    .stale_served_on_error
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(
+                    url = %sanitized_url_for_log(&request.url),
+                    %error,
+                    "serving stale HTTP cache entry after invalid network response"
+                );
+                return Ok(value);
+            }
+            return Err(EnvError::Fetch(error.to_string()));
+        }
+    };
+
+    if response_is_storable(&response)
+        && foreground_generation_is_current(&request.cache_key, generation)
+    {
+        metrics()
+            .response_bytes
+            .fetch_add(response.body.len() as u64, Ordering::Relaxed);
+        let stored_at = chrono::Utc::now().timestamp();
+        if let Err(error) = write_response(&request, response, stored_at).await {
+            tracing::debug!(%error, "HTTP cache write failed");
+        }
     }
 
     Ok(value)
+}
+
+#[derive(Clone)]
+struct StreamEntry {
+    body: Vec<u8>,
+    stored_at: Instant,
+}
+
+/// Session-only stream cache. Signed/debrid URLs are deliberately never
+/// persisted: entries live in memory for two minutes and are scoped by the
+/// active profile through the cache key.
+async fn fetch_stream<OUT>(request: CacheRequest, client: reqwest::Client) -> Result<OUT, EnvError>
+where
+    for<'de> OUT: Deserialize<'de> + Send + 'static,
+{
+    schedule_metrics_summary();
+    if let Some(body) = read_stream_entry(&request.cache_key) {
+        match serde_json::from_slice::<OUT>(&body) {
+            Ok(value) => {
+                metrics().stream_hit.fetch_add(1, Ordering::Relaxed);
+                return Ok(value);
+            }
+            Err(error) => {
+                tracing::debug!(%error, "discarding corrupt in-memory stream response");
+                remove_stream_entry(&request.cache_key);
+            }
+        }
+    }
+
+    let miss_lock = miss_lock(&request.cache_key);
+    let joined = miss_lock.lock.try_lock().is_err();
+    let _miss_guard = miss_lock.lock.lock().await;
+    if joined && let Some(body) = read_stream_entry(&request.cache_key) {
+        if let Ok(value) = serde_json::from_slice::<OUT>(&body) {
+            metrics().stream_hit.fetch_add(1, Ordering::Relaxed);
+            metrics()
+                .singleflight_joined
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(value);
+        }
+        remove_stream_entry(&request.cache_key);
+    }
+
+    metrics().miss.fetch_add(1, Ordering::Relaxed);
+    let response = match send_request_with_retry(&client, &request, None).await {
+        Ok(response) => response,
+        Err(error) => {
+            metrics().network_error.fetch_add(1, Ordering::Relaxed);
+            return Err(error);
+        }
+    };
+    let value = serde_json::from_slice::<OUT>(&response.body)
+        .map_err(|error| EnvError::Fetch(error.to_string()))?;
+    if response_is_storable(&response) {
+        metrics()
+            .response_bytes
+            .fetch_add(response.body.len() as u64, Ordering::Relaxed);
+        write_stream_entry(request.cache_key, response.body);
+    }
+    Ok(value)
+}
+
+fn stream_cache() -> &'static Mutex<HashMap<String, StreamEntry>> {
+    STREAM_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn read_stream_entry(cache_key: &str) -> Option<Vec<u8>> {
+    let mut cache = stream_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let expired = cache
+        .get(cache_key)
+        .is_some_and(|entry| entry.stored_at.elapsed() > STREAM_TTL);
+    if expired {
+        if let Some(entry) = cache.remove(cache_key) {
+            STREAM_CACHE_BYTES.fetch_sub(entry.body.len(), Ordering::Relaxed);
+        }
+        return None;
+    }
+    cache.get(cache_key).map(|entry| entry.body.clone())
+}
+
+fn remove_stream_entry(cache_key: &str) {
+    let mut cache = stream_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(entry) = cache.remove(cache_key) {
+        STREAM_CACHE_BYTES.fetch_sub(entry.body.len(), Ordering::Relaxed);
+    }
+}
+
+fn write_stream_entry(cache_key: String, body: Vec<u8>) {
+    if body.len() > STREAM_MAX_BYTES {
+        return;
+    }
+    let mut cache = stream_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(previous) = cache.remove(&cache_key) {
+        STREAM_CACHE_BYTES.fetch_sub(previous.body.len(), Ordering::Relaxed);
+    }
+    while !cache.is_empty()
+        && (cache.len() >= STREAM_MAX_ENTRIES
+            || STREAM_CACHE_BYTES.load(Ordering::Relaxed) + body.len() > STREAM_MAX_BYTES)
+    {
+        let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.stored_at)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        if let Some(entry) = cache.remove(&oldest_key) {
+            STREAM_CACHE_BYTES.fetch_sub(entry.body.len(), Ordering::Relaxed);
+        }
+    }
+    STREAM_CACHE_BYTES.fetch_add(body.len(), Ordering::Relaxed);
+    cache.insert(
+        cache_key,
+        StreamEntry {
+            body,
+            stored_at: Instant::now(),
+        },
+    );
+}
+
+fn stale_value<OUT>(entry: &HttpCacheEntry) -> Option<OUT>
+where
+    for<'de> OUT: Deserialize<'de>,
+{
+    (200..300)
+        .contains(&entry.status)
+        .then(|| serde_json::from_slice::<OUT>(&entry.body).ok())
+        .flatten()
+}
+
+struct MissLock {
+    cache_key: String,
+    lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Drop for MissLock {
+    fn drop(&mut self) {
+        let Some(locks) = MISS_LOCKS.get() else {
+            return;
+        };
+        let mut locks = locks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if Arc::strong_count(&self.lock) == 2 {
+            locks.remove(&self.cache_key);
+        }
+    }
+}
+
+fn miss_lock(cache_key: &str) -> MissLock {
+    let locks = MISS_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut locks = locks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lock = locks
+        .entry(cache_key.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone();
+    MissLock {
+        cache_key: cache_key.to_owned(),
+        lock,
+    }
+}
+
+#[derive(Clone, Default)]
+struct CacheGeneration {
+    sequence: u64,
+    foreground: u64,
+}
+
+fn begin_foreground_generation(cache_key: &str) -> u64 {
+    let mut generations = CACHE_GENERATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let generation = generations.entry(cache_key.to_owned()).or_default();
+    generation.sequence = generation.sequence.wrapping_add(1);
+    generation.foreground = generation.foreground.wrapping_add(1);
+    generation.foreground
+}
+
+fn begin_revalidation_generation(cache_key: &str) -> u64 {
+    let mut generations = CACHE_GENERATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let generation = generations.entry(cache_key.to_owned()).or_default();
+    generation.sequence = generation.sequence.wrapping_add(1);
+    generation.sequence
+}
+
+fn foreground_generation_is_current(cache_key: &str, foreground: u64) -> bool {
+    let Some(generations) = CACHE_GENERATIONS.get() else {
+        return true;
+    };
+    generations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(cache_key)
+        .is_none_or(|generation| generation.foreground == foreground)
+}
+
+fn revalidation_generation_is_current(cache_key: &str, sequence: u64) -> bool {
+    let Some(generations) = CACHE_GENERATIONS.get() else {
+        return true;
+    };
+    generations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(cache_key)
+        .is_none_or(|generation| generation.sequence == sequence)
+}
+
+fn revalidation_limiter() -> &'static Arc<tokio::sync::Semaphore> {
+    REVALIDATION_LIMITER
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REVALIDATIONS)))
+}
+
+struct HostBackoff {
+    failures: u32,
+    retry_at: Instant,
+}
+
+fn host_key(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+}
+
+fn host_is_backing_off(url: &str) -> bool {
+    let Some(host) = host_key(url) else {
+        return false;
+    };
+    HOST_BACKOFF
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&host)
+        .is_some_and(|backoff| Instant::now() < backoff.retry_at)
+}
+
+fn record_host_success(url: &str) {
+    let Some(host) = host_key(url) else {
+        return;
+    };
+    HOST_BACKOFF
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&host);
+}
+
+fn record_host_failure(url: &str) {
+    let Some(host) = host_key(url) else {
+        return;
+    };
+    let mut backoffs = HOST_BACKOFF
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let failure = backoffs.entry(host).or_insert(HostBackoff {
+        failures: 0,
+        retry_at: Instant::now(),
+    });
+    failure.failures = failure.failures.saturating_add(1);
+    let delay_seconds = 5_u64
+        .saturating_mul(1_u64 << failure.failures.saturating_sub(1).min(5))
+        .min(300);
+    failure.retry_at = Instant::now() + Duration::from_secs(delay_seconds);
 }
 
 fn schedule_revalidation<OUT>(request: CacheRequest, entry: HttpCacheEntry, client: reqwest::Client)
@@ -187,9 +667,28 @@ where
     let Some(guard) = RevalidationGuard::acquire(request.cache_key.clone()) else {
         return;
     };
+    metrics()
+        .revalidate_scheduled
+        .fetch_add(1, Ordering::Relaxed);
 
     spawn_on_runtime(async move {
         let _guard = guard;
+        let jitter_ms = request
+            .cache_key
+            .get(..4)
+            .and_then(|prefix| u16::from_str_radix(prefix, 16).ok())
+            .map_or(0, |value| u64::from(value % 250));
+        if jitter_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
+        }
+        let _permit = match revalidation_limiter().acquire().await {
+            Ok(permit) => permit,
+            Err(_) => return,
+        };
+        if host_is_backing_off(&request.url) {
+            return;
+        }
+        let generation = begin_revalidation_generation(&request.cache_key);
         let validators = Validators {
             etag: entry.etag.clone(),
             last_modified: entry.last_modified.clone(),
@@ -197,10 +696,23 @@ where
         let response = match send_request(&client, &request, Some(&validators)).await {
             Ok(response) => response,
             Err(error) => {
+                metrics().network_error.fetch_add(1, Ordering::Relaxed);
+                record_host_failure(&request.url);
                 tracing::debug!(%error, "HTTP cache background revalidation failed");
                 return;
             }
         };
+        if response.status >= 500
+            || response.status == reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16()
+        {
+            record_host_failure(&request.url);
+        } else {
+            record_host_success(&request.url);
+        }
+        if !revalidation_generation_is_current(&request.cache_key, generation) {
+            tracing::debug!("discarding stale background revalidation result");
+            return;
+        }
         let now = chrono::Utc::now().timestamp();
 
         if response.no_store || response.vary_star {
@@ -211,6 +723,7 @@ where
         }
 
         if response.status == reqwest::StatusCode::NOT_MODIFIED.as_u16() {
+            metrics().revalidate_304.fetch_add(1, Ordering::Relaxed);
             let validated_at = if entry.validated_at == 0 || response.no_cache {
                 0
             } else {
@@ -236,6 +749,10 @@ where
             return;
         }
 
+        metrics().revalidate_200.fetch_add(1, Ordering::Relaxed);
+        metrics()
+            .response_bytes
+            .fetch_add(response.body.len() as u64, Ordering::Relaxed);
         if let Err(error) = write_response(&request, response, now).await {
             tracing::debug!(%error, "HTTP cache revalidation write failed");
         }
@@ -417,7 +934,7 @@ async fn read_entry(cache_key: &str) -> Result<Option<HttpCacheEntry>, String> {
         return Ok(None);
     };
 
-    Ok(Some(HttpCacheEntry {
+    let entry = HttpCacheEntry {
         resource_kind: row.get(0).map_err(|error| error.to_string())?,
         status: row.get(1).map_err(|error| error.to_string())?,
         body: row.get(2).map_err(|error| error.to_string())?,
@@ -425,7 +942,12 @@ async fn read_entry(cache_key: &str) -> Result<Option<HttpCacheEntry>, String> {
         last_modified: row.get(4).map_err(|error| error.to_string())?,
         stored_at: row.get(5).map_err(|error| error.to_string())?,
         validated_at: row.get(6).map_err(|error| error.to_string())?,
-    }))
+    };
+    // Turso keeps the connection busy until the statement is fully consumed.
+    // Draining the remaining rows prevents later queries on the shared
+    // connection from stalling during the cold-start catalog burst.
+    while let Ok(Some(_)) = rows.next().await {}
+    Ok(Some(entry))
 }
 
 async fn write_response(
@@ -479,11 +1001,44 @@ async fn write_response(
 }
 
 fn schedule_access_touch(cache_key: String, now: i64) {
-    spawn_on_runtime(async move {
-        let Ok(conn) = get_db_conn().await else {
-            return;
-        };
-        // Evitar tormenta de UPDATEs: actualizar solo si accessed_at es anterior a 300 segundos (5 min)
+    let mut pending = pending_access_touches()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pending.insert(cache_key, now);
+    if pending.len() >= 64 {
+        drop(pending);
+        spawn_on_runtime(async move {
+            flush_access_touches().await;
+        });
+    } else if ACCESS_TOUCH_FLUSHER_SCHEDULED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_ok()
+    {
+        drop(pending);
+        spawn_on_runtime(async move {
+            // Debounce the write burst produced by cold-start cache hits.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            ACCESS_TOUCH_FLUSHER_SCHEDULED.store(false, Ordering::Release);
+            flush_access_touches().await;
+        });
+    }
+}
+
+/// Writes the coalesced `accessed_at` updates in a single burst.
+pub(crate) async fn flush_access_touches() {
+    let touches: Vec<(String, i64)> = {
+        let mut pending = pending_access_touches()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pending.drain().collect()
+    };
+    if touches.is_empty() {
+        return;
+    }
+    let Ok(conn) = get_db_conn().await else {
+        return;
+    };
+    for (cache_key, now) in touches {
         let min_timestamp = now - 300;
         if let Err(error) = conn
             .execute(
@@ -494,7 +1049,7 @@ fn schedule_access_touch(cache_key: String, now: i64) {
         {
             tracing::debug!(%error, "HTTP cache access timestamp update failed");
         }
-    });
+    }
 }
 
 async fn delete_entry(cache_key: &str) -> Result<(), String> {
@@ -641,6 +1196,7 @@ fn classify_path(url: &url::Url) -> Option<ResourceKind> {
             "catalog" => return Some(ResourceKind::Catalog),
             "addon_catalog" => return Some(ResourceKind::AddonCatalog),
             "meta" => return Some(ResourceKind::Meta),
+            "stream" => return Some(ResourceKind::Stream),
             _ => {}
         }
     }
@@ -695,8 +1251,8 @@ impl Drop for RevalidationGuard {
 mod tests {
     use super::{
         CATALOG_MAX_RETRIES, CacheRequest, HttpCacheEntry, ResourceKind, cache_key,
-        catalog_retry_delay, http_status_message, is_transient_http_status,
-        send_request_with_retry,
+        catalog_retry_delay, http_status_message, is_transient_http_status, read_stream_entry,
+        remove_stream_entry, send_request_with_retry, write_stream_entry,
     };
     use base64::Engine as _;
     use http::Request;
@@ -728,7 +1284,10 @@ mod tests {
             classify("https://example.com/meta/series/tt1.json"),
             Some(ResourceKind::Meta)
         );
-        assert_eq!(classify("https://example.com/stream/movie/tt1.json"), None);
+        assert_eq!(
+            classify("https://example.com/stream/movie/tt1.json"),
+            Some(ResourceKind::Stream)
+        );
         assert_eq!(
             classify("https://example.com/subtitles/movie/tt1.json"),
             None
@@ -853,7 +1412,110 @@ mod tests {
             validated_at: 0,
         };
 
-        assert!(entry.should_revalidate(10_001));
+        assert!(entry.should_revalidate(10_001, ResourceKind::Meta));
         assert!(!entry.is_expired(10_001));
+    }
+
+    #[test]
+    fn revalidation_policy_uses_resource_and_validator_specific_windows() {
+        let mut entry = HttpCacheEntry {
+            resource_kind: "catalog".to_owned(),
+            status: 200,
+            body: Vec::new(),
+            etag: None,
+            last_modified: None,
+            stored_at: 10_000,
+            validated_at: 10_000,
+        };
+        assert!(!entry.should_revalidate(10_000 + 14 * 60, ResourceKind::Catalog));
+        assert!(!entry.should_revalidate(10_000 + 16 * 60, ResourceKind::Catalog));
+        assert!(entry.should_revalidate(10_000 + 7 * 60 * 60, ResourceKind::Catalog));
+
+        entry.etag = Some("v1".to_owned());
+        assert!(!entry.should_revalidate(10_000 + 14 * 60, ResourceKind::Catalog));
+        assert!(entry.should_revalidate(10_000 + 16 * 60, ResourceKind::Catalog));
+
+        entry.validated_at = 10_000;
+        entry.etag = None;
+        assert!(!entry.should_revalidate(10_000 + 5 * 60 * 60, ResourceKind::Meta));
+        assert!(entry.should_revalidate(10_000 + 7 * 60 * 60, ResourceKind::Meta));
+    }
+
+    #[test]
+    fn stream_cache_is_bounded_and_expires_entries() {
+        let key = "stream-test-entry";
+        write_stream_entry(key.to_owned(), vec![1, 2, 3]);
+        assert_eq!(read_stream_entry(key), Some(vec![1, 2, 3]));
+        remove_stream_entry(key);
+        assert!(read_stream_entry(key).is_none());
+    }
+
+    #[test]
+    fn stream_cache_evicts_to_its_entry_limit() {
+        for index in 0..super::STREAM_MAX_ENTRIES + 8 {
+            write_stream_entry(format!("bounded-stream-{index}"), vec![index as u8]);
+        }
+        assert!(
+            super::stream_cache()
+                .lock()
+                .expect("cache not poisoned")
+                .len()
+                <= super::STREAM_MAX_ENTRIES
+        );
+        for index in 0..super::STREAM_MAX_ENTRIES + 8 {
+            remove_stream_entry(&format!("bounded-stream-{index}"));
+        }
+    }
+
+    #[test]
+    fn miss_locks_are_released_after_the_last_waiter() {
+        let key = "miss-lock-cleanup";
+        {
+            let _first = super::miss_lock(key);
+            let _second = super::miss_lock(key);
+        }
+        assert!(
+            !super::MISS_LOCKS
+                .get()
+                .expect("locks initialized")
+                .lock()
+                .expect("locks not poisoned")
+                .contains_key(key)
+        );
+    }
+
+    #[test]
+    fn foreground_generations_cancel_older_revalidations() {
+        let key = "generation-test-key";
+        let first_foreground = super::begin_foreground_generation(key);
+        let revalidation = super::begin_revalidation_generation(key);
+        assert!(super::foreground_generation_is_current(
+            key,
+            first_foreground
+        ));
+        assert!(super::revalidation_generation_is_current(key, revalidation));
+
+        let second_foreground = super::begin_foreground_generation(key);
+        assert!(!super::revalidation_generation_is_current(
+            key,
+            revalidation
+        ));
+        assert!(!super::foreground_generation_is_current(
+            key,
+            first_foreground
+        ));
+        assert!(super::foreground_generation_is_current(
+            key,
+            second_foreground
+        ));
+    }
+
+    #[test]
+    fn host_backoff_clears_after_a_success() {
+        let url = "https://backoff.example.com/catalog/movie/top.json";
+        super::record_host_failure(url);
+        assert!(super::host_is_backing_off(url));
+        super::record_host_success(url);
+        assert!(!super::host_is_backing_off(url));
     }
 }
