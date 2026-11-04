@@ -1,5 +1,6 @@
 # Regenerates app/assets/tray.ico: a white monochrome notification-area glyph
-# (same shape as app/ui/assets/images/tray-icon.svg) in several PNG-compressed sizes.
+# with a translucent dark outline (same shape and contrast as
+# app/ui/assets/images/tray-icon.svg) in several PNG-compressed sizes.
 Add-Type -AssemblyName System.Drawing
 $sizes = 16, 20, 24, 32, 48, 64
 $pngs = foreach ($s in $sizes) {
@@ -12,7 +13,13 @@ $pngs = foreach ($s in $sizes) {
     $path = New-Object System.Drawing.Drawing2D.GraphicsPath ([System.Drawing.Drawing2D.FillMode]::Alternate)
     $path.AddPolygon([System.Drawing.PointF[]]@((P 12 1), (P 23 12), (P 12 23), (P 1 12)))
     $path.AddPolygon([System.Drawing.PointF[]]@((P 9.5 8), (P 16 12), (P 9.5 16)))
+    # Paint the outline first and the white glyph over it, matching the SVG's
+    # paint-order="stroke fill". Alpha 115/255 is the same 45% used by the SVG.
+    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(115, 0, 0, 0)), ([single](1.5 * $k))
+    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $g.DrawPath($pen, $path)
     $g.FillPath([System.Drawing.Brushes]::White, $path)
+    $pen.Dispose()
     $g.Dispose()
     $ms = New-Object System.IO.MemoryStream
     $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)

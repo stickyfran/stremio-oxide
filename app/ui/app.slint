@@ -99,7 +99,9 @@ export { CrashDialog } from "crash_dialog.slint";
 
 
 export component AppTray inherits SystemTrayIcon {
-    icon: @image-url("assets/images/app_icon_window.png");
+    // The tray uses the monochrome glyph, not the full-colour application icon.
+    // Its white fill plus translucent outline stays legible on light and dark panels.
+    icon: @image-url("assets/images/tray-icon.svg");
     title: "Stremio Oxide";
     tooltip: "Stremio Oxide";
 

@@ -41,8 +41,12 @@ impl ::ksni::Tray for KsniTray {
         "stremio-oxide".into()
     }
 
+    // STREMIO-NATIVE PATCH: do not advertise a missing hicolor icon name.
+    // Several SNI hosts prefer icon_name over icon_pixmap and render a blank or
+    // placeholder icon when the name is not installed. The app ships the tray
+    // glyph as an embedded ARGB pixmap, so an empty name makes that authoritative.
     fn icon_name(&self) -> std::string::String {
-        "stremio-oxide".into()
+        std::string::String::new()
     }
 
     fn activate(&mut self, x: i32, y: i32) {

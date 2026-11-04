@@ -69,6 +69,14 @@ their only caller and are marked `#[expect(dead_code)]` rather than deleted, to
 keep the re-vendor diff clean. `ConstantDeceleration` itself is still live: it
 drives the fling after a touchpad or drag release.
 
+### `items/system_tray/ksni.rs`
+
+The platform tray backend used to advertise `icon_name = "stremio-oxide"`.
+That name is not installed in the host's hicolor theme, and several
+StatusNotifierItem hosts prefer `icon_name` over the ARGB `icon_pixmap`, which
+left the tray blank or showing a placeholder. The patch returns an empty
+`icon_name` so the embedded, theme-independent pixmap is always used.
+
 ## Re-vendoring a new Slint release
 
 1. Bump the `slint` / `slint-build` versions in the root `Cargo.toml` and build
