@@ -812,9 +812,9 @@ fn apply_player_episode_selector(
 ) {
     let next_episode_thumbnail_url = url::Url::parse(&projection.next_episode_thumbnail_url).ok();
     let next_episode_poster =
-        crate::image_cache::get_poster_image(&next_episode_thumbnail_url, ui_weak);
+        crate::image_cache::get_thumbnail_image(&next_episode_thumbnail_url, ui_weak);
     let series_logo_url = url::Url::parse(&projection.series_logo_url).ok();
-    let series_logo = crate::image_cache::get_poster_image(&series_logo_url, ui_weak);
+    let series_logo = crate::image_cache::get_logo_image(&series_logo_url, ui_weak);
     let episodes = projection
         .episodes
         .into_iter()
@@ -830,7 +830,7 @@ fn apply_player_episode_selector(
                     .map(url::Url::as_str)
                     .unwrap_or_default()
                     .into(),
-                thumbnail: crate::image_cache::get_poster_image(&thumbnail_url, ui_weak),
+                thumbnail: crate::image_cache::get_thumbnail_image(&thumbnail_url, ui_weak),
                 season: episode.season,
                 episode_num: episode.episode_num,
                 is_upcoming: episode.is_upcoming,
@@ -1448,7 +1448,7 @@ impl NativePlaybackBridge {
                             .map(ToString::to_string)
                             .unwrap_or_default();
                         let parsed_logo = url::Url::parse(&logo_url).ok();
-                        let series_logo = crate::image_cache::get_poster_image(&parsed_logo, &ui_weak);
+                        let series_logo = crate::image_cache::get_logo_image(&parsed_logo, &ui_weak);
                         ui.set_player_series_name(name.into());
                         ui.set_player_series_runtime(runtime.into());
                         ui.set_player_series_release_year(year.into());

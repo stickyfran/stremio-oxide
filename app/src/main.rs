@@ -222,7 +222,7 @@ async fn run_app(
         ui.set_avatar_letter(avatar_letter.into());
         if let Some(ref url_str) = early_auth.avatar_url {
             if let Ok(url) = url::Url::parse(url_str) {
-                let img = image_cache::get_poster_image(&Some(url), &ui.as_weak());
+                let img = image_cache::get_avatar_image(&Some(url), &ui.as_weak());
                 ui.set_avatar_image(img);
                 ui.set_has_avatar_image(true);
             }
@@ -901,7 +901,10 @@ async fn finish_startup(
             }
         });
     }
-    ui.on_request_poster(|url| image_cache::request_image(url.as_str()));
+    ui.on_request_poster({
+        let ui_weak = ui_weak.clone();
+        move |url| image_cache::request_poster_image(url.as_str(), &ui_weak)
+    });
 
     {
         let rt = runtime.clone();

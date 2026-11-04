@@ -918,7 +918,7 @@ pub fn sync(
         .map(url::Url::as_str)
         .unwrap_or_default();
     ui.set_detail_logo_url(logo_url.into());
-    ui.set_detail_logo(crate::image_cache::get_poster_image(
+    ui.set_detail_logo(crate::image_cache::get_logo_image(
         &meta_item.preview.logo,
         ui_weak,
     ));
@@ -928,7 +928,7 @@ pub fn sync(
         .as_ref()
         .or(meta_item.preview.poster.as_ref());
     ui.set_detail_background_url(background.map(url::Url::as_str).unwrap_or_default().into());
-    ui.set_detail_background(crate::image_cache::get_poster_image_ref(
+    ui.set_detail_background(crate::image_cache::get_backdrop_image_ref(
         background, ui_weak,
     ));
     ui.set_detail_has_trailer(!meta_item.preview.trailer_streams.is_empty());
@@ -957,7 +957,7 @@ pub fn sync(
         let poster = crate::image_cache::get_poster_image(&meta_item.preview.poster, ui_weak);
         ui.set_discover_preview_poster(poster);
         ui.set_discover_preview_logo_url(logo_url.into());
-        let logo = crate::image_cache::get_poster_image(&meta_item.preview.logo, ui_weak);
+        let logo = crate::image_cache::get_logo_image(&meta_item.preview.logo, ui_weak);
         ui.set_discover_preview_logo(logo);
 
         // Sync genres from links
@@ -1045,7 +1045,7 @@ pub fn sync(
         let poster = crate::image_cache::get_poster_image(&meta_item.preview.poster, ui_weak);
         ui.set_library_preview_poster(poster);
         ui.set_library_preview_logo_url(logo_url.into());
-        let logo = crate::image_cache::get_poster_image(&meta_item.preview.logo, ui_weak);
+        let logo = crate::image_cache::get_logo_image(&meta_item.preview.logo, ui_weak);
         ui.set_library_preview_logo(logo);
 
         let slint_genres = projected_links(meta_item, &["genre", "genres"]);
@@ -1121,7 +1121,7 @@ pub fn sync(
 
         let poster = crate::image_cache::get_poster_image(&meta_item.preview.poster, ui_weak);
         ui.set_detail_poster(poster);
-        let logo = crate::image_cache::get_poster_image(&meta_item.preview.logo, ui_weak);
+        let logo = crate::image_cache::get_logo_image(&meta_item.preview.logo, ui_weak);
         ui.set_detail_logo(logo);
 
         let genres = projected_links(meta_item, &["genre", "genres"]);
@@ -1305,7 +1305,7 @@ pub fn sync(
                     .thumbnail
                     .as_ref()
                     .and_then(|url_str| url::Url::parse(url_str).ok());
-                let thumb_img = crate::image_cache::get_poster_image(&thumb_url, ui_weak);
+                let thumb_img = crate::image_cache::get_thumbnail_image(&thumb_url, ui_weak);
 
                 episode_fingerprint.str(&video.id);
                 episode_fingerprint.str(&video.title);

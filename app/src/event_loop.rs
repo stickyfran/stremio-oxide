@@ -66,7 +66,7 @@ pub(crate) fn project_stream_selection_views(
                     .thumbnail
                     .as_deref()
                     .and_then(|thumbnail| url::Url::parse(thumbnail).ok())
-                    .map(|thumbnail| image_cache::get_poster_image(&Some(thumbnail), ui_weak))
+                    .map(|thumbnail| image_cache::get_thumbnail_image(&Some(thumbnail), ui_weak))
                     .unwrap_or_default(),
                 thumbnail_url: link.thumbnail.unwrap_or_default().into(),
                 progress: link.progress,
@@ -832,7 +832,7 @@ pub fn start_event_loop(
 
                                     if let Some(url_str) = avatar_url {
                                         if let Ok(url) = url::Url::parse(url_str) {
-                                            let img = image_cache::get_poster_image(
+                                            let img = image_cache::get_avatar_image(
                                                 &Some(url),
                                                 &ui_weak_for_sync,
                                             );
@@ -866,7 +866,7 @@ pub fn start_event_loop(
                                     ui.set_event_modal_id(id.into());
                                     ui.set_event_modal_title(title.into());
                                     ui.set_event_modal_message(message.into());
-                                    ui.set_event_modal_artwork(image_cache::get_poster_image(
+                                    ui.set_event_modal_artwork(image_cache::get_backdrop_image(
                                         &Some(image_url),
                                         &ui_weak_for_sync,
                                     ));

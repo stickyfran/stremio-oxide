@@ -469,6 +469,8 @@ Snapshots con: respuesta idéntica, una inserción, un borrado, reordenamiento, 
 
 ### Fase 5 — Imágenes, primero reducir trabajo y sólo después cambiar formato
 
+La especificación detallada de la caché de thumbnails derivados está en `Roadmap_Cache_Thumbnails_Derivados.md`. Ese documento desarrolla esta fase; las condiciones de medición, fallback y no persistencia de RGBA de esta sección se mantienen.
+
 No comenzar guardando RGBA en disco.
 
 #### Orden de implementación
@@ -551,7 +553,8 @@ Además de medias, guardar p50/p95 y el peor caso. Comparar bytes de red, númer
 - Ejecutar la matriz de tray en Wayland/X11 y la prueba manual de Windows.
 - Benchmark de 20–30 arranques para confirmar la reducción de lecturas lentas.
 - Comparar pools de 2/4/8 conexiones si el benchmark muestra contención.
-- Fases 3, 5 y 6 permanecen condicionadas a evidencia de parpadeo, coste de decodificación o necesidad real de restaurar la vista. No se implementaron porque el roadmap exige medirlas primero.
+- La Fase 5 ya tiene una implementación compilada y testeada, especificada en `Roadmap_Cache_Thumbnails_Derivados.md`; falta el benchmark en ejecución y la revisión visual antes de considerarla cerrada.
+- Las Fases 3 y 6 permanecen condicionadas a evidencia de parpadeo o necesidad real de restaurar la vista.
 
 ### Validación inicial en debug
 

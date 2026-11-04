@@ -541,10 +541,10 @@ pub(crate) fn update_media_card_cols_in_place(
 /// the existing `ModelRc`s alive avoids rebuilding every catalog row when a
 /// poster becomes available.
 pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> usize {
-    let images = urls
-        .iter()
-        .filter_map(|url| cached_image(url).map(|image| (url.as_str(), image)))
-        .collect::<HashMap<_, _>>();
+    let images = cached_role_images(urls, crate::image_cache::ImageRole::Poster);
+    let logo_images = cached_role_images(urls, crate::image_cache::ImageRole::Logo);
+    let backdrop_images = cached_role_images(urls, crate::image_cache::ImageRole::Backdrop);
+    let thumbnail_images = cached_role_images(urls, crate::image_cache::ImageRole::Thumbnail);
     let active_tab = ui.get_active_tab();
     let show_details = ui.get_show_details();
     let show_player = ui.get_show_player();
@@ -583,7 +583,7 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
             }
             3 => {
                 // Addons
-                updated += patch_addons(&ui.get_addons_list(), &images);
+                updated += patch_addons(&ui.get_addons_list(), &logo_images);
             }
             5 => {
                 // Calendar
@@ -619,11 +619,11 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
         updated += patch_search_suggestions(&suggestions, &images);
     }
 
-    updated += patch_episode_items(&ui.get_detail_episodes(), &images);
-    updated += patch_episode_items(&ui.get_player_episodes(), &images);
+    updated += patch_episode_items(&ui.get_detail_episodes(), &thumbnail_images);
+    updated += patch_episode_items(&ui.get_player_episodes(), &thumbnail_images);
 
     let mut addon_details = ui.get_addon_details_addon();
-    if let Some(logo) = lookup_image(&images, addon_details.logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&logo_images, addon_details.logo_url.as_str()) {
         addon_details.logo = logo.clone();
         ui.set_addon_details_addon(addon_details);
         updated += 1;
@@ -635,12 +635,12 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
         updated += 1;
     }
     let detail_logo_url = ui.get_detail_logo_url();
-    if let Some(logo) = lookup_image(&images, detail_logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&logo_images, detail_logo_url.as_str()) {
         ui.set_detail_logo(logo.clone());
         updated += 1;
     }
     let detail_background_url = ui.get_detail_background_url();
-    if let Some(background) = lookup_image(&images, detail_background_url.as_str()) {
+    if let Some(background) = lookup_image(&backdrop_images, detail_background_url.as_str()) {
         ui.set_detail_background(background.clone());
         updated += 1;
     }
@@ -650,22 +650,28 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
         updated += 1;
     }
     let discover_preview_logo_url = ui.get_discover_preview_logo_url();
-    if let Some(logo) = lookup_image(&images, discover_preview_logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&logo_images, discover_preview_logo_url.as_str()) {
         ui.set_discover_preview_logo(logo.clone());
         updated += 1;
     }
     let player_series_logo_url = ui.get_player_series_logo_url();
-    if let Some(logo) = lookup_image(&images, player_series_logo_url.as_str()) {
+    if let Some(logo) = lookup_image(&logo_images, player_series_logo_url.as_str()) {
         ui.set_player_series_logo(logo.clone());
         updated += 1;
     }
-
     updated
 }
 
-fn cached_image(url: &str) -> Option<slint::Image> {
-    let image = crate::image_cache::get_cached_image_url(url);
-    (image.size().width > 0).then_some(image)
+fn cached_role_images<'a>(
+    urls: &'a [String],
+    role: crate::image_cache::ImageRole,
+) -> HashMap<&'a str, slint::Image> {
+    urls.iter()
+        .filter_map(|url| {
+            let image = crate::image_cache::get_cached_image_for_role_url(url, role);
+            (image.size().width > 0).then_some((url.as_str(), image))
+        })
+        .collect()
 }
 
 fn lookup_image<'a>(

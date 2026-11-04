@@ -159,7 +159,7 @@ fn project_addon(
             .map(Url::as_str)
             .unwrap_or_default()
             .into(),
-        logo: crate::image_cache::get_poster_image(&descriptor.manifest.logo, ui_weak),
+        logo: crate::image_cache::get_logo_image(&descriptor.manifest.logo, ui_weak),
         is_installed: installed,
         transport_url: descriptor.transport_url.as_str().into(),
         configuration_url: descriptor
@@ -181,7 +181,7 @@ fn project_addon(
             .map(Url::as_str)
             .unwrap_or_default()
             .into(),
-        background_image: crate::image_cache::get_poster_image(
+        background_image: crate::image_cache::get_backdrop_image(
             &descriptor.manifest.background,
             ui_weak,
         ),

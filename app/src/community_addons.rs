@@ -632,7 +632,7 @@ fn project_community_addon(
         version: score.into(),
         description: addon.description.into(),
         logo_url: addon.logo.unwrap_or_default().into(),
-        logo: crate::image_cache::get_poster_image(&logo, ui_weak),
+        logo: crate::image_cache::get_logo_image(&logo, ui_weak),
         is_installed: false,
         transport_url: addon.manifest_url.into(),
         configuration_url: addon.configuration_url.unwrap_or_default().into(),
@@ -644,7 +644,7 @@ fn project_community_addon(
         supports_anime,
         supports_tv,
         background_url: addon.background.unwrap_or_default().into(),
-        background_image: crate::image_cache::get_poster_image(&background, ui_weak),
+        background_image: crate::image_cache::get_backdrop_image(&background, ui_weak),
         adult: addon.adult,
         p2p: addon.p2p,
     }
