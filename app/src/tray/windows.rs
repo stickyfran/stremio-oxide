@@ -293,11 +293,13 @@ fn should_toggle_now() -> bool {
     const DEBOUNCE: Duration = Duration::from_millis(300);
     LAST_TOGGLE.with(|slot| {
         let now = Instant::now();
-        let mut last = slot.borrow_mut();
-        if last.is_some_and(|previous| now.saturating_duration_since(previous) < DEBOUNCE) {
+        if slot
+            .get()
+            .is_some_and(|previous| now.saturating_duration_since(previous) < DEBOUNCE)
+        {
             false
         } else {
-            *last = Some(now);
+            slot.set(Some(now));
             true
         }
     })

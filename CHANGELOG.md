@@ -2,6 +2,17 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.85 - 2026-11-04
+
+### Windows release build
+
+- Fixed the notification-area click debounce so it uses `Cell::get`/`Cell::set` instead of calling `borrow_mut` on a `Cell`. This restores the Windows x64 and ARM64 release builds.
+
+### Tray and playback
+
+- Linux StatusNotifierItem hosts now receive a private white tray icon theme instead of falling back to the orange application icon; the tray menu header uses the same monochrome glyph.
+- Hiding the main window to the system tray now pauses active playback once, so video does not keep running behind the panel and the player returns in a paused state.
+
 ## 0.99.84 - 2026-11-04
 
 ### Derived image cache

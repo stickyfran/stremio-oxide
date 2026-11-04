@@ -41,12 +41,21 @@ impl ::ksni::Tray for KsniTray {
         "stremio-oxide".into()
     }
 
-    // STREMIO-NATIVE PATCH: do not advertise a missing hicolor icon name.
-    // Several SNI hosts prefer icon_name over icon_pixmap and render a blank or
-    // placeholder icon when the name is not installed. The app ships the tray
-    // glyph as an embedded ARGB pixmap, so an empty name makes that authoritative.
+    // STREMIO-NATIVE PATCH: some SNI hosts ignore icon_pixmap when icon_name is
+    // empty and fall back to the desktop application's (orange) icon. Publish a
+    // real themed name backed by the extra icon theme path below, keeping the
+    // embedded ARGB pixmap as the host-independent fallback.
     fn icon_name(&self) -> std::string::String {
-        std::string::String::new()
+        if ensure_tray_icon_theme().is_empty() {
+            // If the private theme cannot be written, fall back to the pixmap.
+            std::string::String::new()
+        } else {
+            TRAY_ICON_NAME.into()
+        }
+    }
+
+    fn icon_theme_path(&self) -> std::string::String {
+        ensure_tray_icon_theme()
     }
 
     fn activate(&mut self, x: i32, y: i32) {
@@ -232,6 +241,49 @@ impl PlatformTray {
             });
         }
     }
+}
+
+const TRAY_ICON_NAME: &str = "stremio-oxide-tray";
+const TRAY_ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <path fill="#ffffff" fill-rule="evenodd" stroke="#000000" stroke-opacity="0.45"
+        stroke-width="1.5" stroke-linejoin="round" paint-order="stroke fill"
+        d="M10.6 2.4Q12 1 13.4 2.4L21.6 10.6Q23 12 21.6 13.4L13.4 21.6Q12 23 10.6 21.6L2.4 13.4Q1 12 2.4 10.6ZM9.5 8L16 12L9.5 16Z"/>
+</svg>
+"##;
+const TRAY_ICON_THEME: &str = "[Icon Theme]\nName=Stremio Oxide Tray\nDirectories=scalable/status\n\n[scalable/status]\nSize=24\nType=Scalable\nContext=Status\n";
+
+/// Some StatusNotifierItem hosts resolve `icon_name` through the desktop icon
+/// theme even when an ARGB pixmap is supplied, and end up showing the orange
+/// application icon. Give them a private, valid white tray icon instead.
+fn ensure_tray_icon_theme() -> std::string::String {
+    use std::sync::OnceLock;
+    static PATH: OnceLock<std::string::String> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("stremio-oxide-tray-icons");
+        let status_dir = base.join("scalable").join("status");
+        if std::fs::create_dir_all(&status_dir).is_err() {
+            return std::string::String::new();
+        }
+        if !write_if_different(&base.join("index.theme"), TRAY_ICON_THEME.as_bytes()) {
+            return std::string::String::new();
+        }
+        let icon_path = status_dir.join(std::format!("{TRAY_ICON_NAME}.svg"));
+        if !write_if_different(&icon_path, TRAY_ICON_SVG.as_bytes()) {
+            return std::string::String::new();
+        }
+        base.to_string_lossy().into_owned()
+    })
+    .clone()
+}
+
+fn write_if_different(path: &std::path::Path, contents: &[u8]) -> bool {
+    if std::fs::read(path).is_ok_and(|current| current == contents) {
+        return true;
+    }
+    std::fs::write(path, contents).is_ok()
 }
 
 fn image_to_argb_icon(image: &Image) -> Result<::ksni::Icon, Error> {

@@ -126,7 +126,9 @@ export component AppTray inherits SystemTrayIcon {
     Menu {
         MenuItem {
             title: "Stremio Oxide";
-            icon: @image-url("assets/images/app_icon_window.png");
+            // Keep the tray menu header consistent with the monochrome tray
+            // glyph; the full-colour icon remains the window/taskbar icon.
+            icon: @image-url("assets/images/tray-icon.svg");
             enabled: false;
         }
         MenuSeparator { }

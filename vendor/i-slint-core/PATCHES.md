@@ -74,8 +74,15 @@ drives the fling after a touchpad or drag release.
 The platform tray backend used to advertise `icon_name = "stremio-oxide"`.
 That name is not installed in the host's hicolor theme, and several
 StatusNotifierItem hosts prefer `icon_name` over the ARGB `icon_pixmap`, which
-left the tray blank or showing a placeholder. The patch returns an empty
-`icon_name` so the embedded, theme-independent pixmap is always used.
+left the tray blank, showing a placeholder, or falling back to the orange
+application icon.
+
+The patch publishes `stremio-oxide-tray` through a private icon theme path in
+`$XDG_RUNTIME_DIR/stremio-oxide-tray-icons` (or the temp directory when the
+runtime directory is unavailable). That theme contains the same white glyph as
+the embedded ARGB pixmap, so hosts that resolve names still show the correct
+icon. If the private theme cannot be written, `icon_name` falls back to empty
+and the embedded pixmap remains authoritative.
 
 ## Re-vendoring a new Slint release
 

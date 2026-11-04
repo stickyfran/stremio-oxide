@@ -233,10 +233,30 @@ pub(crate) fn install_close_handler(ui: &MainWindow) {
             request_application_quit();
             CloseRequestResponse::KeepWindowShown
         } else {
+            if let Some(ui) = ui_weak.upgrade() {
+                pause_playback_for_tray(&ui);
+            }
             tracing::info!("main window closed to the system tray");
             CloseRequestResponse::HideWindow
         }
     });
+}
+
+/// Going to the notification area must not keep video playing behind the
+/// panel. Pause once, before the window disappears; resuming is explicit.
+fn should_pause_for_tray(show_player: bool, paused: bool, pip_active: bool) -> bool {
+    show_player && !paused && !pip_active
+}
+
+fn pause_playback_for_tray(ui: &MainWindow) {
+    if should_pause_for_tray(
+        ui.get_show_player(),
+        ui.get_player_paused(),
+        ui.get_player_pip_active(),
+    ) {
+        tracing::info!("pausing playback before hiding to the system tray");
+        ui.invoke_player_toggle_pause();
+    }
 }
 
 fn queue_show_window(ui: Weak<MainWindow>) {
@@ -278,6 +298,7 @@ fn toggle_window(ui: &MainWindow) {
         }
         capture_window_state(ui);
         crate::window_events::persist_window_geometry(window);
+        pause_playback_for_tray(ui);
         if let Err(error) = ui.hide() {
             tracing::warn!(%error, "failed to hide the main window to the system tray");
         } else {
@@ -421,7 +442,15 @@ fn apply_restore_target(ui: &MainWindow, target: RestoreTarget) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_hide_on_toggle;
+    use super::{should_hide_on_toggle, should_pause_for_tray};
+
+    #[test]
+    fn hiding_to_tray_pauses_only_active_non_pip_playback() {
+        assert!(should_pause_for_tray(true, false, false));
+        assert!(!should_pause_for_tray(false, false, false));
+        assert!(!should_pause_for_tray(true, true, false));
+        assert!(!should_pause_for_tray(true, false, true));
+    }
 
     #[test]
     fn tray_toggle_hides_only_when_visible_and_focused() {
