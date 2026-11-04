@@ -2,7 +2,7 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
-## 0.99.8 - 2026-11-04
+## 0.99.83 - 2026-11-04
 
 ### Cold start and cache resilience
 
