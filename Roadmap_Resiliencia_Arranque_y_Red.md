@@ -1,7 +1,7 @@
 # Roadmap: resiliencia de arranque, red y contenido
 
 **Fecha:** 2026-11-05
-**Estado:** Fases 0, 1 y 6.1 implementadas en `0.99.86`; Fases 2–5 y 6.2–6.4 pendientes.
+**Estado:** Fases 0, 1 y 6.1 implementadas en `0.99.86`; Fase 2 (reintento programado) y Fase 4 (fallback extendido) implementadas en `0.99.87`. Pendientes: Fase 3, Fase 5 y Fases 6.2–6.4.
 **Alcance:** recuperación del contenido remoto (catálogos y detalles), arranque en frío, cierre de la aplicación y los dos bugs colaterales confirmados (panics y cierre lento).
 **Documentos relacionados:** `Roadmap_Cache_Inteligente_y_Tray.md`, `Roadmap_Cache_Thumbnails_Derivados.md`.
 
@@ -154,9 +154,11 @@ Riesgo: medio. Hay que evitar bucles de recarga y dobles peticiones.
 
 ---
 
-### Fase 2 — Recuperación automática
+### Fase 2 — Recuperación automática (reintento programado implementado en 0.99.87)
 
 **Objetivo:** que en la mayoría de los casos el usuario ni lo note.
+
+Implementado en `0.99.87`: reintento programado de filas del Board en error, 3 intentos con backoff 5 s, 15 s y 45 s, sin contar `EmptyContent`, desactivable con `STREMIO_STARTUP_RESILIENCE=0`. El presupuesto se reinicia cuando el Board vuelve a estar sano. Pendientes: disparadores por conectividad D-Bus, foco de ventana y pestaña reactivada.
 
 Disparadores:
 
@@ -202,9 +204,11 @@ Riesgo: bajo-medio. El riesgo es añadir latencia; se mide.
 
 ---
 
-### Fase 4 — Endurecer el caché HTTP
+### Fase 4 — Endurecer el caché HTTP (fallback extendido implementado en 0.99.87)
 
 **Objetivo:** que la red no sea imprescindible para lo que ya se vio.
+
+Implementado en `0.99.87`: una entrada 2xx válida se conserva como fallback aunque supere la ventana de retención de 30 días; si la red falla, se sirve y sube `stale_served_on_error`. Pendientes: métrica separada por tipo de recurso e invalidación manual desde Ajustes.
 
 Trabajo:
 

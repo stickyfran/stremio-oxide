@@ -339,7 +339,9 @@ where
                         }
                     }
                 }
-            } else if !entry.is_expired(now) {
+            } else if (200..300).contains(&entry.status) || !entry.is_expired(now) {
+                // Keep any parseable 2xx body, even beyond the 30-day retention
+                // window, as a last-resort fallback when the network is down.
                 stale_entry = Some(entry);
             }
         }

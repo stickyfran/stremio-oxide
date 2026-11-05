@@ -8,7 +8,10 @@ use crate::{AppModel, AppModelField, MainWindow, NavigationController};
 use crate::{BoardSection, MediaCardItem};
 use core_env::DesktopEnv;
 use slint::{ComponentHandle, Model};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, AtomicU8, Ordering},
+};
 
 static SECTION_FINGERPRINTS: OnceLock<Mutex<Vec<SyncFingerprint>>> = OnceLock::new();
 use stremio_core::{
@@ -26,6 +29,110 @@ use url::Url;
 
 static LAST_SYNC_STATE: OnceLock<Mutex<Option<SyncFingerprint>>> = OnceLock::new();
 static BOARD_CATALOG_LOADER: OnceLock<tokio::sync::mpsc::Sender<usize>> = OnceLock::new();
+
+const AUTO_RETRY_MAX_ATTEMPTS: u8 = 3;
+static AUTO_RETRY_ATTEMPTS: AtomicU8 = AtomicU8::new(0);
+static AUTO_RETRY_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+/// Automatic recovery is on by default; set `STREMIO_STARTUP_RESILIENCE=0`
+/// to keep only the manual Retry action.
+fn startup_resilience_enabled() -> bool {
+    std::env::var("STREMIO_STARTUP_RESILIENCE")
+        .map(|value| value != "0")
+        .unwrap_or(true)
+}
+
+fn auto_retry_delay_secs(attempt: u8) -> u64 {
+    match attempt {
+        1 => 5,
+        2 => 15,
+        _ => 45,
+    }
+}
+
+/// `EmptyContent` means the addon answered successfully with an empty catalog
+/// (seasonal rows, for example); it is not a network failure and must not
+/// trigger a retry.
+fn loadable_is_real_error<R>(
+    content: Option<
+        &stremio_core::models::common::Loadable<
+            R,
+            stremio_core::models::common::ResourceError,
+        >,
+    >,
+) -> bool {
+    match content {
+        Some(stremio_core::models::common::Loadable::Err(
+            stremio_core::models::common::ResourceError::EmptyContent,
+        )) => false,
+        Some(stremio_core::models::common::Loadable::Err(_)) => true,
+        _ => false,
+    }
+}
+
+fn board_has_real_errors(board: &CatalogsWithExtra) -> bool {
+    board
+        .catalogs
+        .iter()
+        .any(|catalog| catalog.first().is_some_and(|page| loadable_is_real_error(page.content.as_ref())))
+}
+
+/// Retry counters reset only when the board is fully healthy again. Resetting
+/// on any error-free state would also reset it while `Unload` leaves the board
+/// empty or while rows are still loading, causing an endless retry loop.
+fn board_is_healthy(board: &CatalogsWithExtra) -> bool {
+    use stremio_core::models::common::Loadable;
+    let mut has_ready = false;
+    let mut has_pending = false;
+    for catalog in &board.catalogs {
+        let Some(page) = catalog.first() else {
+            continue;
+        };
+        match page.content.as_ref() {
+            Some(Loadable::Ready(_)) => has_ready = true,
+            Some(Loadable::Err(
+                stremio_core::models::common::ResourceError::EmptyContent,
+            ))
+            | None => {}
+            Some(Loadable::Err(_)) | Some(Loadable::Loading) => has_pending = true,
+        }
+    }
+    has_ready && !has_pending
+}
+
+/// Retries failed catalogs a bounded number of times with backoff. The manual
+/// Retry action remains available at any time.
+fn schedule_board_auto_retry(runtime: Arc<Runtime<DesktopEnv, AppModel>>) {
+    if !startup_resilience_enabled() {
+        return;
+    }
+    if AUTO_RETRY_SCHEDULED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let attempt = AUTO_RETRY_ATTEMPTS.fetch_add(1, Ordering::AcqRel) + 1;
+    if attempt > AUTO_RETRY_MAX_ATTEMPTS {
+        AUTO_RETRY_SCHEDULED.store(false, Ordering::Release);
+        return;
+    }
+    let delay = auto_retry_delay_secs(attempt);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        AUTO_RETRY_SCHEDULED.store(false, Ordering::Release);
+        let still_failing = runtime
+            .model()
+            .ok()
+            .is_some_and(|model| board_has_real_errors(&model.board));
+        if !still_failing {
+            return;
+        }
+        tracing::info!(attempt, "automatically retrying failed board catalogs");
+        runtime.dispatch(RuntimeAction {
+            field: Some(AppModelField::Board),
+            action: Action::Unload,
+        });
+        crate::callbacks::trigger_initial_load(&runtime);
+    });
+}
 
 pub fn get_catalog_loader() -> Option<&'static tokio::sync::mpsc::Sender<usize>> {
     BOARD_CATALOG_LOADER.get()
@@ -575,16 +682,15 @@ pub fn sync(
         && (has_continue_watching || board.catalogs.iter().any(|c| c.first().is_some_and(|p| matches!(&p.content, Some(stremio_core::models::common::Loadable::Ready(_))))));
     let is_loading = !has_content && (!any_catalogs || board.catalogs.iter().any(|c| c.first().is_none_or(|p| p.content.is_none() || matches!(&p.content, Some(stremio_core::models::common::Loadable::Loading)))));
     ui.set_board_loading(is_loading);
-    let has_errors = board.catalogs.iter().any(|catalog| {
-        catalog.first().is_some_and(|page| match &page.content {
-            Some(stremio_core::models::common::Loadable::Err(
-                stremio_core::models::common::ResourceError::EmptyContent,
-            )) => false,
-            Some(stremio_core::models::common::Loadable::Err(_)) => true,
-            _ => false,
-        })
-    });
+    let has_errors = board_has_real_errors(board);
     ui.set_board_has_errors(has_errors);
+    if has_errors {
+        schedule_board_auto_retry(runtime.clone());
+    } else if board_is_healthy(board) {
+        // A full success ends the retry episode, so a later network hiccup gets
+        // its own bounded set of automatic attempts.
+        AUTO_RETRY_ATTEMPTS.store(0, Ordering::Release);
+    }
 
     // Proactively keep initial catalog loading rolling if any top catalogs are still unloaded.
     if let Some(loader) = BOARD_CATALOG_LOADER.get() {
@@ -653,5 +759,36 @@ fn update_board_card_state(
 pub fn clear_sync_state() {
     if let Some(state) = LAST_SYNC_STATE.get() {
         *state.lock().unwrap() = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{auto_retry_delay_secs, loadable_is_real_error};
+    use stremio_core::models::common::{Loadable, ResourceError};
+    use stremio_core::types::resource::MetaItemPreview;
+
+    #[test]
+    fn automatic_retry_backoff_grows_and_is_bounded() {
+        assert_eq!(auto_retry_delay_secs(1), 5);
+        assert_eq!(auto_retry_delay_secs(2), 15);
+        assert_eq!(auto_retry_delay_secs(3), 45);
+        assert_eq!(auto_retry_delay_secs(9), 45);
+    }
+
+    #[test]
+    fn empty_catalogs_are_not_network_errors() {
+        let empty: Loadable<Vec<MetaItemPreview>, ResourceError> =
+            Loadable::Err(ResourceError::EmptyContent);
+        assert!(!loadable_is_real_error(Some(&empty)));
+
+        let failed: Loadable<Vec<MetaItemPreview>, ResourceError> =
+            Loadable::Err(ResourceError::UnexpectedResponse("network down".to_owned()));
+        assert!(loadable_is_real_error(Some(&failed)));
+
+        let ready: Loadable<Vec<MetaItemPreview>, ResourceError> =
+            Loadable::Ready(Vec::new());
+        assert!(!loadable_is_real_error(Some(&ready)));
+        assert!(!loadable_is_real_error::<Vec<MetaItemPreview>>(None));
     }
 }

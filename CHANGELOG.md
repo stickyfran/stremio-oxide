@@ -2,6 +2,14 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.87 - 2026-11-05
+
+### Automatic recovery
+
+- Failed board catalogs now retry automatically up to three times with 5 s, 15 s and 45 s backoff. The manual **Retry** action remains available, and the retry budget resets once the board loads successfully again.
+- Set `STREMIO_STARTUP_RESILIENCE=0` to disable automatic retries and keep only the manual action.
+- The HTTP cache keeps any previously valid 2xx body as a last-resort fallback beyond the 30-day retention window, so a total network failure can still serve known catalogs and metadata instead of an empty row.
+
 ## 0.99.86 - 2026-11-05
 
 ### Startup and content resilience
