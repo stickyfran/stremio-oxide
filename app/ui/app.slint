@@ -405,6 +405,7 @@ export component MainWindow inherits Window {
     in-out property <[MediaCardItem]> board-continue-watching: [];
     in-out property <[BoardSection]> board-sections: [];
     in-out property <bool> board-show-server-warning: false;
+    in-out property <bool> board-has-errors: false;
     in-out property <bool> board-loading: true;
     in-out property <[BoardSection]> search-sections: [];
     in-out property <[SearchSuggestion]> search-suggestions: [];
@@ -660,6 +661,7 @@ export component MainWindow inherits Window {
     in-out property <string> detail-trailer-selection-id: "";
     in property <bool> show-details: false;
     in-out property <bool> details-loading: false;
+    in-out property <string> detail-load-error: "";
     
     // Details Series View bindings
     in-out property <bool> detail-is-series: false;
@@ -1012,6 +1014,7 @@ export component MainWindow inherits Window {
     callback board-dismiss-server-warning();
     callback board-reload-server();
     callback board-open-server-settings();
+    callback board-retry();
 
     // Global search callbacks
     callback global-search-edited(string);
@@ -1073,6 +1076,7 @@ export component MainWindow inherits Window {
     callback details-season-changed(int);
     callback details-season-step(int);
     callback details-episode-changed(int, string);
+    callback details-retry();
     callback play-stream(string);
     callback download-stream(string);
     
@@ -1734,6 +1738,8 @@ export component MainWindow inherits Window {
                             ? root.debug-preview-state == "loading"
                             : root.board-loading;
                         show-server-warning: root.board-show-server-warning;
+                        has-errors: root.board-has-errors;
+                        retry => { board-retry(); }
                         item-selected(id, media-type, video-id) => {
                             board-item-selected(id, media-type, video-id);
                         }
@@ -2429,6 +2435,8 @@ export component MainWindow inherits Window {
             loading: root.debug-preview-enabled && root.debug-preview-page == 7
                 ? root.debug-preview-state == "details-loading"
                 : details-loading;
+            load-error: root.detail-load-error;
+            retry => { details-retry(); }
             username: root.username;
             avatar-image: root.avatar-image;
             has-avatar-image: root.has-avatar-image;

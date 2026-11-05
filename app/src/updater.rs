@@ -1230,13 +1230,13 @@ mod tests {
     #[test]
     fn resolve_asset_download_url_prefers_direct_releases_format() {
         let direct = resolve_asset_download_url(
-            "0.99.85",
+            "0.99.86",
             "stremio-oxide-linux",
             "https://api.github.com/repos/stickyfran/stremio-oxide/releases/assets/12345",
         );
         assert_eq!(
             direct,
-            "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.85/stremio-oxide-linux"
+            "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.86/stremio-oxide-linux"
         );
     }
 

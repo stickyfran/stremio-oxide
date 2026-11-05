@@ -354,7 +354,7 @@ fn resolve_trailer(
 }
 
 pub fn start_event_loop(
-    mut rx: futures::channel::mpsc::Receiver<RuntimeEvent<DesktopEnv, AppModel>>,
+    rx: futures::channel::mpsc::Receiver<RuntimeEvent<DesktopEnv, AppModel>>,
     runtime: Arc<Runtime<DesktopEnv, AppModel>>,
     ui_weak: slint::Weak<MainWindow>,
     playback_selections: Arc<PlaybackSelections>,
@@ -363,6 +363,12 @@ pub fn start_event_loop(
     discord_rpc: Arc<crate::discord::DiscordRpc>,
 ) {
     tokio::spawn(async move {
+        // Never drop the runtime receiver. Aborting this task during shutdown
+        // would disconnect the channel while stremio-core's worker threads are
+        // still dispatching, which panics in `Runtime::emit`
+        // (`emit event failed`) and, with `panic = "abort"`, kills the process.
+        // Leaking one receiver per process is harmless.
+        let rx = Box::leak(Box::new(rx));
         let mut first_render = true;
         let mut last_discord_enabled: Option<bool> = None;
         let mut last_profile_catalogs_fingerprint = None;

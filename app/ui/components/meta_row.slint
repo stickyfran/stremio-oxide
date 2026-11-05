@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { ButtonSurface } from "button.slint";
+import { ButtonSurface, PillButton } from "button.slint";
 import { HorizontalScroll } from "horizontal_scroll.slint";
 import { SkeletonBlock } from "feedback.slint";
 
@@ -54,6 +54,7 @@ export component MetaRow inherits Rectangle {
     in property <length> unit: Theme.root-font-size;
     in property <string> title: "";
     in property <string> message: "";
+    in property <bool> show-retry: false;
     in property <bool> show-see-all: false;
     in property <string> see-all-label: @tr("BUTTON_SEE_ALL" => "See All");
     in property <length> content-width: root.width;
@@ -62,6 +63,7 @@ export component MetaRow inherits Rectangle {
     in property <bool> show-edge-fades: false;
     in-out property <length> content-scroll-offset: 0px;
     callback see-all-requested;
+    callback retry-requested;
 
     height: 3 * root.unit + root.content-height;
     background: transparent;
@@ -110,6 +112,16 @@ export component MetaRow inherits Rectangle {
         font-size: 1.3 * root.unit;
         wrap: word-wrap;
         overflow: elide;
+    }
+
+    if (root.message != "" && root.show-retry) : PillButton {
+        x: 0.5 * root.unit;
+        y: 3 * root.unit + min(root.content-height, 3.6 * root.unit) + 0.5 * root.unit;
+        width: 7 * root.unit;
+        height: 2.5 * root.unit;
+        unit: root.unit;
+        label: @tr("RETRY" => "Retry");
+        clicked => { root.retry-requested(); }
     }
 
     content-scroll := HorizontalScroll {

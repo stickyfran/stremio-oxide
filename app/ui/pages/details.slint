@@ -70,6 +70,7 @@ export component DetailsPage inherits Rectangle {
     in-out property <string> ranking-mode: "Smart";
     in-out property <bool> show-filtered: false;
     in property <bool> loading: false;
+    in property <string> load-error: "";
     in property <bool> is-in-library: false;
     in property <bool> is-watched: false;
     in property <bool> has-trailer: false;
@@ -127,6 +128,7 @@ export component DetailsPage inherits Rectangle {
     in property <IconData> icon-clapperboard;
     callback play-stream(string);
     callback close;
+    callback retry;
 
     in property <length> unit: Theme.root-font-size;
     property <length> drawer-width: 39 * root.unit;
@@ -830,6 +832,42 @@ export component DetailsPage inherits Rectangle {
                     source: root.default-avatar-icon;
                     image-fit: cover;
                 }
+            }
+        }
+    }
+
+    if (root.load-error != "") : Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.unit;
+        width: min(parent.width - 4 * root.unit, 46 * root.unit);
+        height: 6.5 * root.unit;
+        border-radius: 1 * root.unit;
+        background: Theme.card-background;
+        border-width: 1px;
+        border-color: Theme.overlay-hover;
+        z: 60;
+
+        HorizontalLayout {
+            padding-left: 1.5 * root.unit;
+            padding-right: 1.5 * root.unit;
+            spacing: 1 * root.unit;
+            alignment: center;
+
+            Text {
+                horizontal-stretch: 1;
+                text: @tr("DETAILS_LOAD_FAILED" => "Could not load this title. Check your connection and try again.");
+                color: Theme.primary-foreground;
+                font-size: 1.05 * root.unit;
+                wrap: word-wrap;
+                vertical-alignment: center;
+            }
+
+            PillButton {
+                width: 7 * root.unit;
+                height: 2.75 * root.unit;
+                unit: root.unit;
+                label: @tr("RETRY" => "Retry");
+                clicked => { root.retry(); }
             }
         }
     }

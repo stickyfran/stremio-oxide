@@ -81,6 +81,7 @@ export component BoardPage inherits Rectangle {
     in property <[BoardSection]> sections: [];
     in property <bool> loading: false;
     in property <bool> show-server-warning: false;
+    in property <bool> has-errors: false;
 
     in property <bool> enable-hover-preview: false;
     in property <duration> hover-preview-delay: 1200ms;
@@ -100,6 +101,7 @@ export component BoardPage inherits Rectangle {
     callback dismiss-server-warning;
     callback reload-server;
     callback open-server-settings;
+    callback retry;
 
     in property <length> unit: Theme.root-font-size;
     property <length> card-width: 12 * root.unit;
@@ -164,6 +166,7 @@ export component BoardPage inherits Rectangle {
                     : section.title;
                 loading: section.loading;
                 message: section.error-message;
+                show-retry: root.has-errors;
                 show-see-all: true;
                 card-width: root.card-width;
                 card-height: section-card-height;
@@ -179,6 +182,7 @@ export component BoardPage inherits Rectangle {
                     root.hover-preview-requested(id, media-type, x, y, width, height);
                 }
                 hover-preview-dismissed => { root.hover-preview-dismissed(); }
+                retry-requested => { root.retry(); }
                 see-all-requested => {
                     if (section.is-continue-watching) {
                         root.see-all-continue-watching();

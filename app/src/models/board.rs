@@ -4,7 +4,7 @@ use crate::models::{
     library_details_video_id, project_catalog_section, queue_visible_catalog,
     spawn_catalog_visibility_loader, sync_fingerprint_changed,
 };
-use crate::{AppModel, MainWindow, NavigationController};
+use crate::{AppModel, AppModelField, MainWindow, NavigationController};
 use crate::{BoardSection, MediaCardItem};
 use core_env::DesktopEnv;
 use slint::{ComponentHandle, Model};
@@ -302,6 +302,26 @@ pub fn setup(
             }
         }
     });
+
+    ui.on_board_retry({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        move || {
+            tracing::info!("retrying board catalogs after a load error");
+            // CatalogsWithExtra keeps failed requests as `Loadable::Err` and
+            // reuses them on later loads. Unload the board first so the retry
+            // issues real requests instead of replaying the cached error.
+            runtime.dispatch(RuntimeAction {
+                field: Some(AppModelField::Board),
+                action: Action::Unload,
+            });
+            crate::callbacks::trigger_initial_load(&runtime);
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_board_has_errors(false);
+                ui.set_board_loading(true);
+            }
+        }
+    });
 }
 
 #[tracing::instrument(skip_all)]
@@ -555,6 +575,16 @@ pub fn sync(
         && (has_continue_watching || board.catalogs.iter().any(|c| c.first().is_some_and(|p| matches!(&p.content, Some(stremio_core::models::common::Loadable::Ready(_))))));
     let is_loading = !has_content && (!any_catalogs || board.catalogs.iter().any(|c| c.first().is_none_or(|p| p.content.is_none() || matches!(&p.content, Some(stremio_core::models::common::Loadable::Loading)))));
     ui.set_board_loading(is_loading);
+    let has_errors = board.catalogs.iter().any(|catalog| {
+        catalog.first().is_some_and(|page| match &page.content {
+            Some(stremio_core::models::common::Loadable::Err(
+                stremio_core::models::common::ResourceError::EmptyContent,
+            )) => false,
+            Some(stremio_core::models::common::Loadable::Err(_)) => true,
+            _ => false,
+        })
+    });
+    ui.set_board_has_errors(has_errors);
 
     // Proactively keep initial catalog loading rolling if any top catalogs are still unloaded.
     if let Some(loader) = BOARD_CATALOG_LOADER.get() {

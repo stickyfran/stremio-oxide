@@ -79,8 +79,59 @@ pub(crate) fn schedule_metrics_summary() {
     });
 }
 
+/// First remote failure of the session. Startup problems are intermittent, so
+/// keeping the very first failure (host + resource + error) makes the next
+/// post-mortem possible without flooding the log with retries.
+#[derive(Clone, Debug)]
+struct RequestFailure {
+    host: String,
+    resource_kind: &'static str,
+    error: String,
+}
+
+static FIRST_REQUEST_FAILURE: OnceLock<Mutex<Option<RequestFailure>>> = OnceLock::new();
+
+fn describe_request_failure(request: &CacheRequest, error: &str) -> RequestFailure {
+    let host = url::Url::parse(&request.url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    RequestFailure {
+        host,
+        resource_kind: request.resource_kind.as_str(),
+        error: error.to_owned(),
+    }
+}
+
+fn record_request_failure(request: &CacheRequest, error: &str) {
+    let mut slot = FIRST_REQUEST_FAILURE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_some() {
+        return;
+    }
+    let failure = describe_request_failure(request, error);
+    tracing::warn!(
+        host = %failure.host,
+        resource_kind = failure.resource_kind,
+        error = %failure.error,
+        "first remote request failure of this session"
+    );
+    *slot = Some(failure);
+}
+
+fn first_request_failure() -> Option<RequestFailure> {
+    FIRST_REQUEST_FAILURE.get().and_then(|slot| {
+        slot.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    })
+}
+
 pub(crate) fn log_metrics_summary(label: &str) {
     let metrics = metrics();
+    let failure = first_request_failure();
     tracing::info!(
         label,
         hit_fresh = metrics.hit_fresh.load(Ordering::Relaxed),
@@ -95,6 +146,9 @@ pub(crate) fn log_metrics_summary(label: &str) {
         stream_hit = metrics.stream_hit.load(Ordering::Relaxed),
         response_bytes = metrics.response_bytes.load(Ordering::Relaxed),
         slow_reads = metrics.slow_reads.load(Ordering::Relaxed),
+        first_failure_host = failure.as_ref().map(|f| f.host.as_str()).unwrap_or(""),
+        first_failure_kind = failure.as_ref().map(|f| f.resource_kind).unwrap_or(""),
+        first_failure_error = failure.as_ref().map(|f| f.error.as_str()).unwrap_or(""),
         "HTTP cache metrics"
     );
 }
@@ -366,7 +420,9 @@ where
                 );
                 return Ok(value);
             }
-            return Err(EnvError::Fetch(error.to_string()));
+            let env_error = EnvError::Fetch(error.to_string());
+            record_request_failure(&request, &env_error.to_string());
+            return Err(env_error);
         }
     };
 
@@ -780,7 +836,9 @@ async fn send_request_with_retry(
         match send_request(client, request, validators).await {
             Ok(response) if max_retries > 0 && is_transient_http_status(response.status) => {
                 if retries == max_retries {
-                    return Err(EnvError::Fetch(http_status_message(response.status)));
+                    let error = EnvError::Fetch(http_status_message(response.status));
+                    record_request_failure(request, &error.to_string());
+                    return Err(error);
                 }
                 retries += 1;
                 log_catalog_retry(request, retries, Some(response.status), None);
@@ -790,7 +848,10 @@ async fn send_request_with_retry(
                 retries += 1;
                 log_catalog_retry(request, retries, None, Some(&error));
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                record_request_failure(request, &error.to_string());
+                return Err(error);
+            }
         }
 
         tokio::time::sleep(catalog_retry_delay(retries)).await;
@@ -1251,8 +1312,9 @@ impl Drop for RevalidationGuard {
 mod tests {
     use super::{
         CATALOG_MAX_RETRIES, CacheRequest, HttpCacheEntry, ResourceKind, cache_key,
-        catalog_retry_delay, http_status_message, is_transient_http_status, read_stream_entry,
-        remove_stream_entry, send_request_with_retry, write_stream_entry,
+        catalog_retry_delay, describe_request_failure, http_status_message,
+        is_transient_http_status, read_stream_entry, remove_stream_entry, send_request_with_retry,
+        write_stream_entry,
     };
     use base64::Engine as _;
     use http::Request;
@@ -1296,6 +1358,19 @@ mod tests {
             classify("http://127.0.0.1:11470/catalog/movie/top.json"),
             None
         );
+    }
+
+    #[test]
+    fn describes_the_first_failure_without_url_secrets() {
+        let (parts, ()) = Request::get("https://v3-cinemeta.strem.io/meta/movie/tt1.json")
+            .body(())
+            .expect("valid request")
+            .into_parts();
+        let request = CacheRequest::classify(&parts).expect("classified request");
+        let failure = describe_request_failure(&request, "dns error");
+        assert_eq!(failure.host, "v3-cinemeta.strem.io");
+        assert_eq!(failure.resource_kind, "meta");
+        assert_eq!(failure.error, "dns error");
     }
 
     #[test]

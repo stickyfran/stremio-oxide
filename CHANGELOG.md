@@ -2,6 +2,19 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.86 - 2026-11-05
+
+### Startup and content resilience
+
+- Failed catalog rows and details now offer a visible **Retry** action instead of staying empty until the app is restarted.
+- Retrying unloads the affected model first, so stremio-core issues fresh requests instead of replaying the cached `Loadable::Err`.
+- Added a first-remote-failure diagnostic (host, resource kind and error) to the startup metrics summary.
+- Added a 20-second board summary (ready/failed/loading rows) so intermittent startup failures are visible in the log.
+
+### Crash fix
+
+- Kept the core runtime receiver alive for the process lifetime, so shutting down can no longer panic with `emit event failed` on a disconnected channel.
+
 ## 0.99.85 - 2026-11-04
 
 ### Windows release build

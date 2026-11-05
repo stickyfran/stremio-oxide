@@ -1100,6 +1100,53 @@ async fn finish_startup(
     };
 
     callbacks::trigger_initial_load(&runtime);
+    {
+        // Diagnostic for the intermittent first-launch failure: if a remote
+        // catalog fails once, stremio-core keeps the `Loadable::Err` for the
+        // whole session. Record how many rows ended up failed so the next
+        // occurrence is visible without guessing.
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(20)).await;
+            let Ok(model) = runtime.model() else {
+                return;
+            };
+            let (mut ready, mut failed, mut empty, mut loading, mut idle) =
+                (0_u32, 0_u32, 0_u32, 0_u32, 0_u32);
+            let mut failed_details: Vec<String> = Vec::new();
+            for catalog in &model.board.catalogs {
+                match catalog.first().and_then(|page| page.content.as_ref()) {
+                    Some(stremio_core::models::common::Loadable::Ready(_)) => ready += 1,
+                    Some(stremio_core::models::common::Loadable::Err(
+                        stremio_core::models::common::ResourceError::EmptyContent,
+                    )) => empty += 1,
+                    Some(stremio_core::models::common::Loadable::Err(error)) => {
+                        failed += 1;
+                        if failed_details.len() < 3 {
+                            failed_details.push(error.to_string());
+                        }
+                    }
+                    Some(stremio_core::models::common::Loadable::Loading) => loading += 1,
+                    None => idle += 1,
+                }
+            }
+            tracing::info!(
+                ready,
+                failed,
+                empty,
+                loading,
+                idle,
+                failed_details = ?failed_details,
+                "board startup summary"
+            );
+            if failed > 0 {
+                tracing::warn!(
+                    failed,
+                    "catalog rows failed to load; the board offers a retry action"
+                );
+            }
+        });
+    }
     if let Ok(initial_tab) = Tab::try_from(navigation.active_tab_index()) {
         sync_tab_from_model(initial_tab, &runtime, &ui, &ui_weak, &navigation);
         if initial_tab == Tab::Calendar && models::calendar::ensure_loaded(&runtime) {

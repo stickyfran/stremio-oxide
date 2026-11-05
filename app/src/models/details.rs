@@ -1,5 +1,5 @@
 use crate::models::{Fingerprint, SyncFingerprint};
-use crate::{AppModel, DetailsPresentation, EpisodeItem, MainWindow, NavigationController};
+use crate::{AppModel, AppModelField, DetailsPresentation, EpisodeItem, MainWindow, NavigationController};
 use core_env::DesktopEnv;
 use slint::ComponentHandle;
 use std::{
@@ -540,6 +540,38 @@ pub fn setup(
             tracing::warn!(%error, %platform, "failed to open details share URL");
         }
     });
+
+    ui.on_details_retry({
+        let runtime = runtime.clone();
+        let ui_weak = ui.as_weak();
+        move || {
+            let Ok(model) = runtime.model() else {
+                return;
+            };
+            let Some(selected) = model.meta_details.selected.clone() else {
+                return;
+            };
+            tracing::info!(
+                meta_id = %selected.meta_path.id,
+                "retrying details after a load error"
+            );
+            // MetaDetails caches failed requests as `Loadable::Err` and reuses
+            // them with `force: false`. Unload before reloading so the retry
+            // issues a new request instead of replaying the cached error.
+            runtime.dispatch(RuntimeAction {
+                field: Some(AppModelField::MetaDetails),
+                action: Action::Unload,
+            });
+            runtime.dispatch(RuntimeAction {
+                field: Some(AppModelField::MetaDetails),
+                action: Action::Load(ActionLoad::MetaDetails(selected)),
+            });
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_detail_load_error("".into());
+                ui.set_details_loading(true);
+            }
+        }
+    });
 }
 
 fn reload_stream_for_video(rt: &Arc<Runtime<DesktopEnv, AppModel>>, video_id: String) {
@@ -854,17 +886,34 @@ pub fn sync(
     };
 
     let _span = tracing::info_span!("extract_meta_resource").entered();
-    let Some(meta_item) =
+    let ready_meta =
         meta_details
             .meta_items
             .iter()
             .find_map(|resource| match &resource.content {
                 Some(Loadable::Ready(item)) if item.preview.id == selected_id => Some(item),
                 _ => None,
-            })
-    else {
+            });
+    let Some(meta_item) = ready_meta else {
+        let load_error = meta_details
+            .meta_items
+            .iter()
+            .find_map(|resource| match &resource.content {
+                Some(Loadable::Err(error)) => Some(error.to_string()),
+                _ => None,
+            });
+        if let Some(error) = load_error {
+            tracing::warn!(%selected_id, %error, "meta details failed to load");
+            ui.set_details_loading(false);
+            ui.set_detail_load_error(error.into());
+        } else {
+            // A different title is still loading; do not keep the previous
+            // title's error banner on screen.
+            ui.set_detail_load_error("".into());
+        }
         return;
     };
+    ui.set_detail_load_error("".into());
     let detail_title = meta_item.preview.name.as_str();
     let detail_description = meta_item.preview.description.as_deref().unwrap_or_default();
     let detail_released_date = meta_item
