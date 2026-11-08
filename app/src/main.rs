@@ -83,6 +83,7 @@ pub mod startup_metrics;
 mod taskbar_media;
 mod theme_studio;
 mod thumbnail_preview;
+mod trailer_cache;
 mod tray;
 mod window_events;
 mod window_hooks;

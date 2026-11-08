@@ -395,10 +395,7 @@ fn configure_client(client: &MpvClient, config: &PreviewConfig) -> Result<(), Mp
         ("sub-auto", "no"),
         ("ytdl", "yes"),
         ("ytdl-format", PREVIEW_YTDL_FORMAT),
-        (
-            "ytdl-raw-options",
-            "extractor-args=youtube:player_client=android,web",
-        ),
+        ("ytdl-raw-options", crate::actor::YTDL_RAW_OPTIONS),
         ("hwdec", preview_hwdec(config.hardware_decoding)),
         ("screenshot-sw", "yes"),
         ("vd-lavc-threads", "2"),
@@ -407,11 +404,15 @@ fn configure_client(client: &MpvClient, config: &PreviewConfig) -> Result<(), Mp
         ("cache-secs", "5"),
         ("demuxer-max-bytes", "4194304"),
         ("demuxer-max-back-bytes", "2097152"),
+        ("sws-fast", "yes"),
         ("sws-scaler", "fast-bilinear"),
         ("loop-file", if config.loop_playback { "inf" } else { "no" }),
     ];
     for (name, value) in options {
-        client.set_option(name, value)?;
+        if let Err(error) = client.set_option(name, value) {
+            tracing::error!(option = name, value, %error, "preview decoder rejected an MPV option");
+            return Err(error);
+        }
     }
     // Not fatal: without it the hook falls back to searching `PATH`.
     if let Some(ytdl_path) = config.ytdl_path.as_deref()
@@ -433,6 +434,7 @@ struct PlayingSource {
     rotation: u16,
     next_frame_due: Instant,
     capture_failures: u8,
+    last_captured_pts: Option<f64>,
 }
 
 fn worker_main(
@@ -484,9 +486,23 @@ fn worker_main(
             }
             continue;
         }
+
+        let current_pts = client
+            .get_double("time-pos")
+            .ok()
+            .filter(|v| v.is_finite());
+        if let (Some(last), Some(current)) = (playing.last_captured_pts, current_pts) {
+            if (last - current).abs() < 0.001 {
+                drain_unhandled_events(&client);
+                wait_for_deadline(&shared, playing.next_frame_due);
+                continue;
+            }
+        }
+
         match capture_frame(&client, playing) {
             Ok(frame) => {
                 playing.capture_failures = 0;
+                playing.last_captured_pts = Some(frame.position);
                 if is_source_current(&shared, revision) {
                     sink(PreviewEvent::Frame(frame));
                 }
@@ -679,6 +695,7 @@ fn load_source(
         rotation,
         next_frame_due: Instant::now(),
         capture_failures: 0,
+        last_captured_pts: None,
     }))
 }
 
@@ -695,7 +712,7 @@ fn apply_scale_filter(
     client
         .set_string(
             "vf",
-            &format!("scale=w={width}:h={height}:force_original_aspect_ratio=decrease"),
+            &format!("scale=w={width}:h={height}:force_original_aspect_ratio=decrease:flags=fast_bilinear"),
         )
         .map_err(|error| PreviewUnavailableReason::LoadFailed(error.to_string()))
 }

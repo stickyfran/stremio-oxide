@@ -402,6 +402,7 @@ fn configure_client(client: &MpvClient, config: &ThumbnailConfig) -> Result<(), 
         ("demuxer-readahead-secs", "0"),
         ("demuxer-max-bytes", "8388608"),
         ("demuxer-max-back-bytes", "8388608"),
+        ("sws-fast", "yes"),
         ("sws-scaler", "fast-bilinear"),
     ];
     for (name, value) in options {
@@ -623,7 +624,9 @@ fn load_source(
     let hdr = primaries.eq_ignore_ascii_case("bt.2020")
         || transfer.eq_ignore_ascii_case("pq")
         || transfer.eq_ignore_ascii_case("hlg");
-    apply_scale_filter(client, config, rotation, hdr, state)?;
+    let src_w = u32::try_from(width).unwrap_or(0);
+    let src_h = u32::try_from(height).unwrap_or(0);
+    apply_scale_filter(client, config, src_w, src_h, rotation, hdr, state)?;
 
     let position = start.min((duration - 0.001).max(0.0));
     seek(client, position, "absolute+exact")
@@ -648,22 +651,39 @@ fn load_source(
     }
 }
 
+fn fit_even_dimensions(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    if src_w == 0 || src_h == 0 || max_w == 0 || max_h == 0 {
+        return (max_w.max(2) & !1, max_h.max(2) & !1);
+    }
+    let scale_w = max_w as f64 / src_w as f64;
+    let scale_h = max_h as f64 / src_h as f64;
+    let scale = scale_w.min(scale_h).min(1.0);
+    let target_w = ((src_w as f64 * scale).round() as u32).max(2) & !1;
+    let target_h = ((src_h as f64 * scale).round() as u32).max(2) & !1;
+    (target_w, target_h)
+}
+
 fn apply_scale_filter(
     client: &MpvClient,
     config: &ThumbnailConfig,
+    src_w: u32,
+    src_h: u32,
     rotation: u16,
     hdr: bool,
     state: &mut WorkerState,
 ) -> Result<(), ThumbnailUnavailableReason> {
-    let (width, height) = if matches!(rotation, 90 | 270) {
+    let (max_w, max_h) = if matches!(rotation, 90 | 270) {
         (config.max_height, config.max_width)
     } else {
         (config.max_width, config.max_height)
     };
-    let scale = format!("scale=w={width}:h={height}:force_original_aspect_ratio=decrease");
+    let (target_w, target_h) = fit_even_dimensions(src_w, src_h, max_w, max_h);
+    let scale = format!("scale=w={target_w}:h={target_h}:flags=fast_bilinear");
     if hdr {
+        // Fused downscale + tone map: reduce la resolución antes de pasar a flotante
+        // gbrpf32le, evitando un búfer enorme en RAM y el error zimg 3074.
         let hdr_filter = format!(
-            "zscale=transfer=linear,format=gbrpf32le,tonemap=hable,zscale=transfer=bt709,{scale}"
+            "zscale=w={target_w}:h={target_h}:transfer=linear:npl=100,format=gbrpf32le,zscale=primaries=bt709,tonemap=hable:desat=0,zscale=transfer=bt709,format=rgb24"
         );
         if client.set_string("vf", &hdr_filter).is_ok() {
             return Ok(());
@@ -1817,5 +1837,21 @@ mod tests {
         );
         cache.clear();
         assert!(cache.get(CacheKey::new(1, 1.0)).is_none());
+    }
+
+    #[test]
+    fn fit_even_dimensions_preserves_aspect_and_even_parity() {
+        use super::fit_even_dimensions;
+        // 16:9 4K downscale to max 320x180
+        assert_eq!(fit_even_dimensions(3840, 2160, 320, 180), (320, 180));
+        // Odd dimensions get rounded to even
+        let (w, h) = fit_even_dimensions(1920, 1080, 321, 181);
+        assert_eq!(w % 2, 0);
+        assert_eq!(h % 2, 0);
+        // Vertical video (e.g. 1080x1920) constrained by height
+        let (vw, vh) = fit_even_dimensions(1080, 1920, 320, 180);
+        assert_eq!(vh, 180);
+        assert_eq!(vw % 2, 0);
+        assert!(vw <= 320);
     }
 }

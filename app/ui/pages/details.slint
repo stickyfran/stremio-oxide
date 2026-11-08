@@ -62,7 +62,9 @@ export component DetailsPage inherits Rectangle {
     in property <[string]> directors: [];
     in property <string> enrichment-summary: "";
     in property <string> enrichment-attribution-url: "";
+    in property <string> imdb-url: "";
     callback open-attribution(string);
+    callback open-external-url(string);
     in property <[StreamLink]> streams: [];
     in property <[string]> stream-providers: ["All"];
     in property <int> stream-loading-count: 0;
@@ -75,9 +77,9 @@ export component DetailsPage inherits Rectangle {
     in property <bool> is-watched: false;
     in property <bool> has-trailer: false;
     in property <string> trailer-selection-id: "";
+    in property <image> trailer-thumbnail;
     in property <image> trailer-video-frame;
-    in property <bool> trailer-has-video-frame: false;
-    in property <bool> trailer-video-loading: false;
+    in property <bool> trailer-has-video-frame: false;    in property <bool> trailer-video-loading: false;
     in property <bool> trailer-video-playing: false;
     in property <bool> trailer-video-muted: true;
     in property <float> trailer-video-progress: 0.0;
@@ -251,7 +253,7 @@ export component DetailsPage inherits Rectangle {
             cast: root.cast;
             directors: root.directors;
             show-trailer: root.has-trailer;
-            trailer-poster: root.poster;
+            trailer-poster: root.trailer-thumbnail.width > 0 ? root.trailer-thumbnail : root.poster;
             trailer-video-frame: root.trailer-video-frame;
             trailer-has-video-frame: root.trailer-has-video-frame;
             trailer-video-loading: root.trailer-video-loading;
@@ -270,6 +272,11 @@ export component DetailsPage inherits Rectangle {
             show-ratings: true;
             show-share: true;
             trailer-requested => { root.play-trailer(root.trailer-selection-id != "" ? root.trailer-selection-id : "trailer"); }
+            imdb-requested => {
+                if (root.imdb-url != "") {
+                    root.open-external-url(root.imdb-url);
+                }
+            }
             library-requested(_in-library) => { root.toggle-library(); }
             watched-requested(_watched) => { root.toggle-watched(); }
             share-requested => { root.share-modal-open = true; }

@@ -1195,9 +1195,11 @@ impl RenderContext {
             ];
             // SAFETY: The same OpenGL context used to create the render context
             // is current. MPV explicitly permits skip rendering without an FBO.
-            self.client.api.result(unsafe {
-                (self.client.api.render)(self.context.as_ptr(), params.as_mut_ptr())
-            })
+            unsafe {
+                self.client.api.result(
+                    (self.client.api.render)(self.context.as_ptr(), params.as_mut_ptr()),
+                )
+            }
         } else {
             Ok(())
         };

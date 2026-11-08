@@ -745,6 +745,38 @@ fn projected_links(meta: &MetaItem, categories: &[&str]) -> Vec<slint::SharedStr
         .collect()
 }
 
+fn trailer_yt_id(preview: &stremio_core::types::resource::MetaItemPreview) -> Option<String> {
+    preview.trailer_streams.iter().find_map(|stream| {
+        if let stremio_core::types::resource::StreamSource::YouTube { yt_id } = &stream.source {
+            Some(yt_id.clone())
+        } else {
+            None
+        }
+    })
+}
+
+/// Prefers a cached, pre-resolved YouTube EDL and falls back to the plain watch
+/// URL so `ytdl_hook` can resolve it if the background warm-up has not finished.
+fn trailer_stream_url(
+    preview: &stremio_core::types::resource::MetaItemPreview,
+) -> Option<String> {
+    let Some(stream) = preview.trailer_streams.first() else {
+        return None;
+    };
+    if let stremio_core::types::resource::StreamSource::YouTube { yt_id } = &stream.source {
+        crate::trailer_cache::prefetch(yt_id);
+        return Some(
+            crate::trailer_cache::cached(yt_id)
+                .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={yt_id}")),
+        );
+    }
+    crate::playback::trailer_stream_url(
+        stream,
+        None,
+        &stremio_core::types::profile::Settings::default(),
+    )
+}
+
 /// Fingerprint only the details state projected by `sync()`. Stream addon
 /// results are deliberately excluded: they update the stream selector, but do
 /// not require cloning and rebuilding all metadata, chips, seasons, and
@@ -999,6 +1031,23 @@ pub fn sync(
     ));
     ui.set_detail_has_trailer(!meta_item.preview.trailer_streams.is_empty());
 
+    let trailer_yt_id = trailer_yt_id(&meta_item.preview);
+    if let Some(yt_id) = trailer_yt_id.as_deref() {
+        // Warm the resolver while the details metadata is being projected so
+        // the next open can skip yt-dlp entirely.
+        crate::trailer_cache::prefetch(yt_id);
+    }
+    let trailer_thumbnail_url = trailer_yt_id
+        .as_deref()
+        .map(|yt_id| format!("https://i.ytimg.com/vi/{yt_id}/mqdefault.jpg"))
+        .unwrap_or_default();
+    ui.set_detail_trailer_thumbnail_url(trailer_thumbnail_url.as_str().into());
+    let trailer_thumbnail = url::Url::parse(&trailer_thumbnail_url).ok();
+    ui.set_detail_trailer_thumbnail(crate::image_cache::get_thumbnail_image(
+        &trailer_thumbnail,
+        ui_weak,
+    ));
+
     if presentation == DetailsPresentation::Preview {
         let _span = tracing::info_span!("sync_preview_panel").entered();
         // User is browsing Discover page and has not clicked Play/Show yet:
@@ -1038,23 +1087,7 @@ pub fn sync(
 
         let directors = projected_links(meta_item, &["director", "directors"]);
         ui.set_discover_preview_directors(slint::ModelRc::new(slint::VecModel::from(directors)));
-        let stream_url = meta_item
-            .preview
-            .trailer_streams
-            .first()
-            .and_then(|stream| {
-                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } =
-                    &stream.source
-                {
-                    Some(format!("https://www.youtube.com/watch?v={yt_id}"))
-                } else {
-                    crate::playback::trailer_stream_url(
-                        stream,
-                        None,
-                        &stremio_core::types::profile::Settings::default(),
-                    )
-                }
-            });
+        let stream_url = trailer_stream_url(&meta_item.preview);
 
         ui.set_discover_preview_has_trailer(
             stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty(),
@@ -1133,23 +1166,7 @@ pub fn sync(
         let directors = projected_links(meta_item, &["director", "directors"]);
         let directors_model = slint::VecModel::from(directors);
         ui.set_library_preview_directors(slint::ModelRc::new(directors_model));
-        let stream_url = meta_item
-            .preview
-            .trailer_streams
-            .first()
-            .and_then(|stream| {
-                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } =
-                    &stream.source
-                {
-                    Some(format!("https://www.youtube.com/watch?v={yt_id}"))
-                } else {
-                    crate::playback::trailer_stream_url(
-                        stream,
-                        None,
-                        &stremio_core::types::profile::Settings::default(),
-                    )
-                }
-            });
+        let stream_url = trailer_stream_url(&meta_item.preview);
 
         ui.set_library_preview_has_trailer(
             stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty(),
@@ -1200,6 +1217,14 @@ pub fn sync(
         ui.set_detail_year(detail_released_date.as_ref().into());
         ui.set_detail_runtime(detail_runtime.into());
         ui.set_detail_rating(detail_rating.into());
+        let imdb_url = meta_item
+            .preview
+            .links
+            .iter()
+            .find(|link| category_matches(&link.category, &["imdb"]))
+            .map(|link| link.url.as_str())
+            .unwrap_or_default();
+        ui.set_detail_imdb_url(imdb_url.into());
 
         let poster = crate::image_cache::get_poster_image(&meta_item.preview.poster, ui_weak);
         ui.set_detail_poster(poster);
@@ -1293,23 +1318,7 @@ pub fn sync(
             // discover/library drawer. Start it here so the inline mini-player
             // shows real video frames instead of a static button.
             if let Some(preview_player) = crate::preview_player::global() {
-                let stream_url = meta_item
-                    .preview
-                    .trailer_streams
-                    .first()
-                    .and_then(|stream| {
-                        if let stremio_core::types::resource::StreamSource::YouTube { yt_id } =
-                            &stream.source
-                        {
-                            Some(format!("https://www.youtube.com/watch?v={yt_id}"))
-                        } else {
-                            crate::playback::trailer_stream_url(
-                                stream,
-                                None,
-                                &stremio_core::types::profile::Settings::default(),
-                            )
-                        }
-                    });
+                let stream_url = trailer_stream_url(&meta_item.preview);
                 let trailer = crate::playback::TrailerPreview {
                     meta_id: meta_item.preview.id.clone(),
                     title: detail_title.to_string(),

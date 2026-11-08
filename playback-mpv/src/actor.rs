@@ -443,6 +443,15 @@ pub struct PlayerConfig {
 /// open-ended range requests FFmpeg issues when nothing buffers ahead of it,
 /// which is why the demuxer cache has to be forced on for them even though
 /// local streams are better off without it.
+/// Raw options handed to `yt-dlp` through `ytdl_hook`.
+///
+/// MPV parses `ytdl-raw-options` as a key/value list where commas separate
+/// entries, so the comma inside `player_client` has to stay inside double
+/// quotes. Without them MPV rejects the whole option (and the preview decoder
+/// refuses to start, because it treats a failed option as fatal).
+pub(crate) const YTDL_RAW_OPTIONS: &str =
+    "extractor-args=\"youtube:player_client=android,web\"";
+
 fn needs_ytdl(url: &str) -> bool {
     const HOSTS: [&str; 4] = [
         "youtube.com/",
@@ -567,15 +576,17 @@ impl PlaybackRuntime {
             "ytdl-format",
             "best[height<=?720]/bestvideo[height<=?720]+bestaudio/best",
         )?;
-        let _ = client.set_option(
-            "ytdl-raw-options",
-            "extractor-args=youtube:player_client=android,web",
-        );
+        if let Err(error) = client.set_option("ytdl-raw-options", YTDL_RAW_OPTIONS) {
+            tracing::warn!(%error, "could not apply ytdl raw options");
+        }
         client.set_option("terminal", "no")?;
         client.set_option("input-default-bindings", "no")?;
         client.set_option("input-vo-keyboard", "no")?;
         client.set_option("osc", "no")?;
         client.set_option("vo", "libmpv")?;
+        // render.h:696: Evita que mpv_render_context_render bloquee el hilo GUI
+        // hasta 50ms esperando el siguiente target time cuando Slint controla el redibujado.
+        client.set_option("video-timing-offset", "0")?;
         client.set_option("idle", "yes")?;
         client.set_option("keep-open", "no")?;
         client.set_option("cache", "no")?;
@@ -589,10 +600,6 @@ impl PlaybackRuntime {
         client.set_option("audio-fallback-to-null", "yes")?;
         client.set_option("audio-client-name", "Stremio")?;
         client.set_option("title", "Stremio")?;
-        // Slint supplies a desktop WGL/OpenGL context on Windows. Direct
-        // D3D11 hardware surfaces require ANGLE in libmpv, so use copy-safe
-        // decoding and keep decoder-to-texture direct rendering disabled.
-        client.set_option("vd-lavc-dr", "no")?;
         client.set_option("hwdec", hardware_decoding_option(hardware_decoding))?;
         client.initialize()?;
         let (_, _, hdr_result) = apply_hdr_mode(&client, HdrMode::Auto);
@@ -651,16 +658,10 @@ impl PlaybackRuntime {
 }
 
 fn hardware_decoding_option(enabled: bool) -> &'static str {
-    if !enabled {
-        return "no";
-    }
-    #[cfg(target_os = "windows")]
-    {
-        "d3d11va-copy,auto-copy"
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        "auto-copy"
+    if enabled {
+        "auto-safe"
+    } else {
+        "no"
     }
 }
 
@@ -1623,16 +1624,8 @@ fn set_optional_double(
 
 fn apply_hdr_mode(client: &MpvClient, requested: HdrMode) -> (HdrMode, bool, Result<(), MpvError>) {
     let result = configure_hdr_mode(client, requested);
-    if result.is_ok() {
-        return (requested, true, result);
-    }
-    if matches!(requested, HdrMode::Auto | HdrMode::Passthrough) {
-        return (
-            HdrMode::ToneMap,
-            false,
-            configure_hdr_mode(client, HdrMode::ToneMap),
-        );
-    }
+    // En vo=libmpv sobre FBO OpenGL prestado a Slint, la salida siempre se compone
+    // en SDR (BT.709); no existe passthrough HDR directo al monitor sin superficie nativa.
     (requested, false, result)
 }
 
@@ -1646,8 +1639,7 @@ fn configure_hdr_mode(client: &MpvClient, mode: HdrMode) -> Result<(), MpvError>
 
 fn hdr_properties(mode: HdrMode) -> (bool, &'static str, bool) {
     match mode {
-        HdrMode::Auto | HdrMode::Passthrough => (true, "auto", true),
-        HdrMode::ToneMap => (false, "auto", true),
+        HdrMode::Auto | HdrMode::ToneMap | HdrMode::Passthrough => (false, "auto", true),
         HdrMode::Disabled => (false, "clip", false),
     }
 }
@@ -1983,8 +1975,9 @@ mod tests {
     use super::{PlaybackRuntime, PlayerConfig, hardware_decoding_option};
 
     #[test]
-    fn hardware_decoding_should_use_copy_safe_windows_backends() {
-        assert_eq!(hardware_decoding_option(true), "d3d11va-copy,auto-copy");
+    fn hardware_decoding_should_use_auto_safe() {
+        assert_eq!(hardware_decoding_option(true), "auto-safe");
+        assert_eq!(hardware_decoding_option(false), "no");
     }
 
     #[test]

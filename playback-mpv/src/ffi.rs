@@ -262,6 +262,7 @@ type RenderSetUpdateCallbackFn =
     unsafe extern "C" fn(*mut MpvRenderContext, Option<RenderUpdateCallback>, *mut c_void);
 type RenderUpdateFn = unsafe extern "C" fn(*mut MpvRenderContext) -> u64;
 type RenderFn = unsafe extern "C" fn(*mut MpvRenderContext, *mut MpvRenderParam) -> c_int;
+type RenderReportSwapFn = unsafe extern "C" fn(*mut MpvRenderContext);
 type RenderFreeFn = unsafe extern "C" fn(*mut MpvRenderContext);
 
 enum MpvRuntimeModule {
@@ -340,6 +341,7 @@ unsafe extern "C" {
         context: *mut MpvRenderContext,
         params: *mut MpvRenderParam,
     ) -> c_int;
+    fn mpv_render_context_report_swap(context: *mut MpvRenderContext);
     fn mpv_render_context_free(context: *mut MpvRenderContext);
 }
 
@@ -367,6 +369,8 @@ pub struct MpvApi {
     pub render_set_update_callback: RenderSetUpdateCallbackFn,
     pub render_update: RenderUpdateFn,
     pub render: RenderFn,
+    #[allow(dead_code)]
+    pub render_report_swap: RenderReportSwapFn,
     pub render_free: RenderFreeFn,
 }
 
@@ -439,6 +443,7 @@ impl MpvApi {
             render_set_update_callback: mpv_render_context_set_update_callback,
             render_update: mpv_render_context_update,
             render: mpv_render_context_render,
+            render_report_swap: mpv_render_context_report_swap,
             render_free: mpv_render_context_free,
         }
     }
@@ -570,6 +575,12 @@ impl MpvApi {
                 path,
                 b"mpv_render_context_render\0",
                 "mpv_render_context_render",
+            )?,
+            render_report_swap: load_runtime_symbol(
+                &library,
+                path,
+                b"mpv_render_context_report_swap\0",
+                "mpv_render_context_report_swap",
             )?,
             render_free: load_runtime_symbol(
                 &library,

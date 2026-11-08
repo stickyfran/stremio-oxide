@@ -5228,22 +5228,42 @@ fn youtube_watch_url(
 
 /// Where MPV's `ytdl_hook` should look for `yt-dlp`.
 ///
-/// The streaming server owns the binary — it downloads and refreshes it — so the
-/// path is taken from there rather than guessed, and [`None`] simply means the
-/// hook can find `yt-dlp` on `PATH` without help.
-fn resolve_ytdl_path() -> Option<PathBuf> {
-    let base = crate::paths::get().streaming_server();
+/// The streaming server may ship its own binary, but GUI launches often start
+/// with a `PATH` that does not include `~/.local/bin`, where package managers
+/// and `yt-dlp -U` usually install it. Try the explicit override, the streaming
+/// server copy, `PATH`, and the common install dirs in that order.
+pub(crate) fn resolve_ytdl_path() -> Option<PathBuf> {
     let binary = if cfg!(windows) {
         "yt-dlp.exe"
     } else {
         "yt-dlp"
     };
-    let candidate = base.join(binary);
-    if candidate.exists() {
-        Some(candidate)
-    } else {
-        None
+    if let Some(path) = std::env::var_os("STREMIO_YTDL_PATH").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
     }
+    let candidate = crate::paths::get().streaming_server().join(binary);
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join(binary);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    let mut fallbacks = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        fallbacks.push(PathBuf::from(home).join(".local/bin").join(binary));
+    }
+    for dir in ["/usr/local/bin", "/usr/bin", "/opt/homebrew/bin"] {
+        fallbacks.push(PathBuf::from(dir).join(binary));
+    }
+    fallbacks.into_iter().find(|candidate| candidate.is_file())
 }
 
 fn resolve_spatial_audio_sofa_path(config_dir: &std::path::Path) -> Option<PathBuf> {

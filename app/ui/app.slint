@@ -646,6 +646,7 @@ export component MainWindow inherits Window {
     in-out property <string> detail-year: "";
     in-out property <string> detail-runtime: "";
     in-out property <string> detail-rating: "";
+    in-out property <string> detail-imdb-url: "";
     in-out property <string> detail-rt-rating: "";
     in-out property <string> detail-metacritic-rating: "";
     in-out property <string> detail-letterboxd-rating: "";
@@ -674,6 +675,8 @@ export component MainWindow inherits Window {
     in-out property <bool> detail-notifications-enabled: true;
     in-out property <image> detail-background;
     in-out property <string> detail-background-url: "";
+    in-out property <image> detail-trailer-thumbnail;
+    in-out property <string> detail-trailer-thumbnail-url: "";
     in-out property <[EpisodeItem]> detail-episodes: [];
     in-out property <bool> detail-in-stream-view: false;
     in-out property <string> detail-episode-search-query: "";
@@ -2400,6 +2403,7 @@ export component MainWindow inherits Window {
                     || root.debug-preview-state == "movie-no-streams"
                     || root.debug-preview-state == "movie-filter") ? "166 min" : detail-runtime;
             rating: root.debug-preview-enabled && root.debug-preview-page == 7 ? "8.5" : detail-rating;
+            imdb-url: detail-imdb-url;
             rt-rating: root.debug-preview-enabled && root.debug-preview-page == 7 ? "92%" : detail-rt-rating;
             metacritic-rating: root.debug-preview-enabled && root.debug-preview-page == 7 ? "90" : detail-metacritic-rating;
             letterboxd-rating: root.debug-preview-enabled && root.debug-preview-page == 7 ? "4.5" : detail-letterboxd-rating;
@@ -2423,6 +2427,7 @@ export component MainWindow inherits Window {
             enrichment-summary: detail-enrichment-summary;
             enrichment-attribution-url: detail-enrichment-attribution-url;
             open-attribution(url) => { root.open-external-url(url); }
+            open-external-url(url) => { root.open-external-url(url); }
             streams: root.debug-preview-enabled && root.debug-preview-page == 7
                 && (root.debug-preview-state == "movie-no-streams"
                     || root.debug-preview-state == "series-no-streams"
@@ -2452,6 +2457,7 @@ export component MainWindow inherits Window {
             is-watched: detail-is-watched;
             has-trailer: detail-has-trailer;
             trailer-selection-id: detail-trailer-selection-id;
+            trailer-thumbnail: detail-trailer-thumbnail;
             trailer-video-frame: root.preview-drawer-video-frame;
             trailer-has-video-frame: root.preview-drawer-has-video-frame;
             trailer-video-loading: root.preview-drawer-video-loading;
