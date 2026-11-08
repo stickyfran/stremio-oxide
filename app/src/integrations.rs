@@ -594,7 +594,9 @@ pub fn extract_debrid_credentials_from_addon_url(
         let t = token.trim();
         if t.len() >= 16
             && t.len() <= 128
-            && !results.iter().any(|(k, v): &(ProviderKind, String)| *k == kind && v == t)
+            && !results
+                .iter()
+                .any(|(k, v): &(ProviderKind, String)| *k == kind && v == t)
         {
             results.push((kind, t.to_string()));
         }
@@ -609,12 +611,8 @@ pub fn extract_debrid_credentials_from_addon_url(
             "alldebrid" | "all-debrid" | "all_debrid" | "ad" | "ad_key" | "ad_token" => {
                 Some(ProviderKind::AllDebrid)
             }
-            "premiumize" | "premiumize_me" | "pm" | "pm_key" => {
-                Some(ProviderKind::Premiumize)
-            }
-            "debridlink" | "debrid-link" | "debrid_link" | "dl" => {
-                Some(ProviderKind::DebridLink)
-            }
+            "premiumize" | "premiumize_me" | "pm" | "pm_key" => Some(ProviderKind::Premiumize),
+            "debridlink" | "debrid-link" | "debrid_link" | "dl" => Some(ProviderKind::DebridLink),
             "torbox" | "tb" | "tb_key" => Some(ProviderKind::TorBox),
             _ => None,
         };
@@ -652,7 +650,9 @@ pub fn extract_debrid_credentials_from_addon_url(
                 .decode(segment_clean)
                 .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(segment_clean))
                 .or_else(|_| base64::engine::general_purpose::STANDARD.decode(segment_clean))
-                .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(segment_clean));
+                .or_else(|_| {
+                    base64::engine::general_purpose::STANDARD_NO_PAD.decode(segment_clean)
+                });
             if let Ok(bytes) = decoded_bytes {
                 if let Ok(text) = String::from_utf8(bytes) {
                     if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -737,7 +737,11 @@ pub async fn enabled_debrid_providers(
         )
         .await
         .map_err(|_| IntegrationError::Database)?;
-    if let Some(row) = core_rows.next().await.map_err(|_| IntegrationError::Database)? {
+    if let Some(row) = core_rows
+        .next()
+        .await
+        .map_err(|_| IntegrationError::Database)?
+    {
         let val: String = row.get(0).map_err(|_| IntegrationError::Database)?;
         if let Ok(storage) = serde_json::from_str::<serde_json::Value>(&val) {
             if let Some(addons) = storage.get("addons").and_then(|a| a.as_array()) {
@@ -751,7 +755,10 @@ pub async fn enabled_debrid_providers(
     }
     if addon_urls.is_empty() {
         if let Ok(mut all_rows) = conn
-            .query("SELECT value FROM profile_core_storage WHERE key = 'profile'", ())
+            .query(
+                "SELECT value FROM profile_core_storage WHERE key = 'profile'",
+                (),
+            )
             .await
         {
             while let Ok(Some(row)) = all_rows.next().await {
@@ -759,7 +766,9 @@ pub async fn enabled_debrid_providers(
                     if let Ok(storage) = serde_json::from_str::<serde_json::Value>(&val) {
                         if let Some(addons) = storage.get("addons").and_then(|a| a.as_array()) {
                             for addon in addons {
-                                if let Some(url) = addon.get("transportUrl").and_then(|u| u.as_str()) {
+                                if let Some(url) =
+                                    addon.get("transportUrl").and_then(|u| u.as_str())
+                                {
                                     addon_urls.push(url.to_string());
                                 }
                             }
@@ -808,8 +817,18 @@ pub enum DebridResolution {
 
 pub async fn resolve_explicit_selection(mut selected: Selected) -> DebridResolution {
     if let StreamSource::Url { ref url } = selected.stream.source {
-        let name_lower = selected.stream.name.as_deref().unwrap_or("").to_ascii_lowercase();
-        let desc_lower = selected.stream.description.as_deref().unwrap_or("").to_ascii_lowercase();
+        let name_lower = selected
+            .stream
+            .name
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let desc_lower = selected
+            .stream
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
         let is_uncached_tag = name_lower.contains("download]")
             || name_lower.contains("uncached")
             || desc_lower.contains("download]")
@@ -890,24 +909,22 @@ pub async fn resolve_explicit_selection(mut selected: Selected) -> DebridResolut
             }
         } else {
             match provider.availability(&hash).await {
-                Ok(debrid::DebridAvailability::Cached) => {
-                    match provider.resolve(&magnet).await {
-                        Ok(resolved) => {
-                            if let Ok(url) = resolved.url.parse() {
-                                selected.stream.source = StreamSource::Url { url };
-                                selected.stream.behavior_hints.not_web_ready = false;
-                                return DebridResolution::Resolved(selected);
-                            }
-                        }
-                        Err(debrid::DebridError::NotCached) => {
-                            had_uncached = true;
-                            uncached_provider = kind.display_name().to_string();
-                        }
-                        Err(e) => {
-                            tracing::warn!(provider = kind.display_name(), error = ?e, "debrid resolution failed");
+                Ok(debrid::DebridAvailability::Cached) => match provider.resolve(&magnet).await {
+                    Ok(resolved) => {
+                        if let Ok(url) = resolved.url.parse() {
+                            selected.stream.source = StreamSource::Url { url };
+                            selected.stream.behavior_hints.not_web_ready = false;
+                            return DebridResolution::Resolved(selected);
                         }
                     }
-                }
+                    Err(debrid::DebridError::NotCached) => {
+                        had_uncached = true;
+                        uncached_provider = kind.display_name().to_string();
+                    }
+                    Err(e) => {
+                        tracing::warn!(provider = kind.display_name(), error = ?e, "debrid resolution failed");
+                    }
+                },
                 Ok(debrid::DebridAvailability::Uncached) => {
                     had_uncached = true;
                     uncached_provider = kind.display_name().to_string();
@@ -1044,7 +1061,10 @@ mod tests {
         let creds = extract_debrid_credentials_from_addon_url(url);
         assert_eq!(creds.len(), 1);
         assert_eq!(creds[0].0, ProviderKind::RealDebrid);
-        assert_eq!(creds[0].1, "CK3M37YHPXSEFTWMK4PPE5ULOJYISWP2CEWUDKQO6DPVIGPLI7KQ");
+        assert_eq!(
+            creds[0].1,
+            "CK3M37YHPXSEFTWMK4PPE5ULOJYISWP2CEWUDKQO6DPVIGPLI7KQ"
+        );
     }
 
     #[test]
@@ -1054,12 +1074,16 @@ mod tests {
         let creds = extract_debrid_credentials_from_addon_url(&url);
         assert_eq!(creds.len(), 1);
         assert_eq!(creds[0].0, ProviderKind::RealDebrid);
-        assert_eq!(creds[0].1, "CK3M37YHPXSEFTWMK4PPE5ULOJYISWP2CEWUDKQO6DPVIGPLI7KQ");
+        assert_eq!(
+            creds[0].1,
+            "CK3M37YHPXSEFTWMK4PPE5ULOJYISWP2CEWUDKQO6DPVIGPLI7KQ"
+        );
     }
 
     #[test]
     fn test_extract_debrid_from_comet_json() {
-        let json = r#"{"debrid_service":"realdebrid","debrid_api_key":"MY_TEST_TOKEN_1234567890ABCDEF"}"#;
+        let json =
+            r#"{"debrid_service":"realdebrid","debrid_api_key":"MY_TEST_TOKEN_1234567890ABCDEF"}"#;
         let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
         let url = format!("https://comet.elfhosted.com/{b64}/manifest.json");
         let creds = extract_debrid_credentials_from_addon_url(&url);

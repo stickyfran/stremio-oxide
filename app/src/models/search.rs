@@ -273,7 +273,9 @@ pub fn sync_results(
                 ))
                 .copied()
                 .unwrap_or(page.request.path.id.as_str());
-            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name, None) {
+            if let Some(section) =
+                project_catalog_section(catalog_index, catalog, catalog_name, None)
+            {
                 sections.push(section);
             }
         }
@@ -283,7 +285,10 @@ pub fn sync_results(
     // A full model replacement resets scroll position, which causes a visible
     // snap-back during lazy catalog loading.
     let existing = ui.get_search_sections();
-    if let Some(vec_model) = existing.as_any().downcast_ref::<VecModel< crate::BoardSection >>() {
+    if let Some(vec_model) = existing
+        .as_any()
+        .downcast_ref::<VecModel<crate::BoardSection>>()
+    {
         let existing_len = vec_model.row_count();
         let new_len = sections.len();
         let common_len = existing_len.min(new_len);

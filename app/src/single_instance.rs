@@ -1,13 +1,13 @@
 use std::{
     ffi::OsString,
     io::ErrorKind,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     time::Duration,
 };
 
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket, TcpStream},
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     time::timeout,
 };
@@ -44,7 +44,7 @@ pub async fn acquire(args: impl IntoIterator<Item = OsString>) -> anyhow::Result
     let arguments = parse_arguments(args);
     let initial_command = arguments.command.map(AppCommand::Open);
 
-    let listener = match std::net::TcpListener::bind(INSTANCE_ADDRESS) {
+    let listener = match bind_instance_listener() {
         Ok(listener) => listener,
         Err(error) if error.kind() == ErrorKind::AddrInUse => {
             let command = initial_command.clone().unwrap_or(AppCommand::Activate);
@@ -55,19 +55,27 @@ pub async fn acquire(args: impl IntoIterator<Item = OsString>) -> anyhow::Result
                         %forward_error,
                         "failed to forward command to existing instance; probing if socket clears"
                     );
+                    // A live instance that rejected the handshake is not a
+                    // stale socket: do not steal its port. Only retry briefly
+                    // when the endpoint looks like a closing process.
                     let mut bound = None;
-                    for _ in 0..6 {
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        if let Ok(l) = std::net::TcpListener::bind(INSTANCE_ADDRESS) {
+                    for _ in 0..5 {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        if let Ok(l) = bind_instance_listener() {
                             bound = Some(l);
                             break;
                         }
                     }
                     match bound {
-                        Some(l) => l,
+                        Some(listener) => {
+                            tracing::info!(
+                                "stale single-instance endpoint cleared; becoming the primary instance"
+                            );
+                            listener
+                        }
                         None => {
                             return Err(anyhow::anyhow!(
-                                "stale or unresponsive instance detected on {INSTANCE_ADDRESS}: {forward_error}"
+                                "another Stremio instance is still using {INSTANCE_ADDRESS}: {forward_error}"
                             ));
                         }
                     }
@@ -81,8 +89,6 @@ pub async fn acquire(args: impl IntoIterator<Item = OsString>) -> anyhow::Result
         }
     };
 
-    listener.set_nonblocking(true)?;
-    let listener = TcpListener::from_std(listener)?;
     let (commands_tx, commands_rx) = mpsc::unbounded_channel();
     let listener_task = tokio::spawn(accept_commands(listener, commands_tx));
 
@@ -92,6 +98,18 @@ pub async fn acquire(args: impl IntoIterator<Item = OsString>) -> anyhow::Result
         start_hidden: arguments.start_hidden,
         listener_task,
     }))
+}
+
+fn bind_instance_listener() -> std::io::Result<TcpListener> {
+    let socket = TcpSocket::new_v4()?;
+    // Allow rebinding while the previous listener sits in TIME_WAIT. This does
+    // not let two live instances share the port: bind still fails while the
+    // original socket is open. Windows SO_REUSEADDR has different (and unsafe)
+    // semantics, so it is intentionally skipped there.
+    #[cfg(not(target_os = "windows"))]
+    socket.set_reuseaddr(true)?;
+    socket.bind(SocketAddr::V4(INSTANCE_ADDRESS))?;
+    socket.listen(128)
 }
 
 fn parse_arguments(args: impl IntoIterator<Item = OsString>) -> StartupArguments {
@@ -156,7 +174,7 @@ async fn receive_command(
 }
 
 async fn forward(command: AppCommand) -> anyhow::Result<()> {
-    timeout(Duration::from_secs(3), async move {
+    timeout(Duration::from_millis(1500), async move {
         let mut stream = TcpStream::connect(INSTANCE_ADDRESS).await.map_err(|error| {
             anyhow::anyhow!(
                 "another process owns the Stremio instance endpoint, but it could not be reached: {error}"

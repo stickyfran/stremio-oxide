@@ -464,7 +464,11 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
                         && !name.ends_with(".zip")))
             {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::LinuxBinary,
                 });
@@ -485,7 +489,11 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
                         && !name.ends_with(".zip")))
             {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::LinuxBinary,
                 });
@@ -501,7 +509,11 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
                 (n.contains("windows-x64") || n.contains("win64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -509,12 +521,18 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
         } else {
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup") || n.contains("setup"))
+                (n.starts_with("stremiooxidesetup")
+                    || n.starts_with("stremiosetup")
+                    || n.contains("setup"))
                     && (n.contains("x64") || n.contains("win64") || n.contains("windows"))
                     && n.ends_with(".exe")
             }) {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsInstaller,
                 });
@@ -524,7 +542,11 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
                 (n.contains("windows-x64") || n.contains("win64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -540,7 +562,11 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
                 (n.contains("windows-arm64") || n.contains("win-arm64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -548,12 +574,18 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
         } else {
             if let Some(asset) = release.assets.iter().find(|a| {
                 let n = a.name.to_lowercase();
-                (n.starts_with("stremiooxidesetup") || n.starts_with("stremiosetup") || n.contains("setup"))
+                (n.starts_with("stremiooxidesetup")
+                    || n.starts_with("stremiosetup")
+                    || n.contains("setup"))
                     && (n.contains("arm64") || n.contains("aarch64"))
                     && n.ends_with(".exe")
             }) {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsInstaller,
                 });
@@ -563,7 +595,11 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
                 (n.contains("windows-arm64") || n.contains("win-arm64")) && n.ends_with(".zip")
             }) {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::WindowsZip,
                 });
@@ -577,7 +613,11 @@ fn find_platform_asset(release: &Release) -> Option<MatchedAsset> {
             let name = asset.name.to_lowercase();
             if name.contains("macos") && (name.ends_with(".tar.gz") || name.ends_with(".tgz")) {
                 return Some(MatchedAsset {
-                    download_url: resolve_asset_download_url(&release.version, &asset.name, &asset.download_url),
+                    download_url: resolve_asset_download_url(
+                        &release.version,
+                        &asset.name,
+                        &asset.download_url,
+                    ),
                     name: asset.name.clone(),
                     kind: PlatformAssetKind::MacTarGz,
                 });
@@ -658,7 +698,8 @@ fn verify_asset_integrity(path: &Path, kind: PlatformAssetKind) -> Result<()> {
     }
 
     use std::io::Read;
-    let mut file = std::fs::File::open(path).context("failed to open staged file for verification")?;
+    let mut file =
+        std::fs::File::open(path).context("failed to open staged file for verification")?;
     let mut header = [0u8; 16];
     let read_bytes = file.read(&mut header).context("failed to read header")?;
     if read_bytes < 4 {
@@ -668,7 +709,10 @@ fn verify_asset_integrity(path: &Path, kind: PlatformAssetKind) -> Result<()> {
     // Check for JSON '{' or HTML '<'
     if header[0] == b'{' || header[0] == b'<' {
         let snippet = String::from_utf8_lossy(&header);
-        bail!("Downloaded asset is text/HTML/JSON instead of binary: {}", snippet);
+        bail!(
+            "Downloaded asset is text/HTML/JSON instead of binary: {}",
+            snippet
+        );
     }
 
     match kind {
@@ -712,7 +756,9 @@ async fn verify_sha256_if_available(
 
     let checksum_asset = release.assets.iter().find(|a| {
         let n = a.name.to_lowercase();
-        n == "sha256sums.txt" || n == "checksums.txt" || n == format!("{}.sha256", asset_name.to_lowercase())
+        n == "sha256sums.txt"
+            || n == "checksums.txt"
+            || n == format!("{}.sha256", asset_name.to_lowercase())
     });
 
     let Some(chk_asset) = checksum_asset else {
@@ -720,10 +766,14 @@ async fn verify_sha256_if_available(
         return Ok(());
     };
 
-    let chk_url = resolve_asset_download_url(&release.version, &chk_asset.name, &chk_asset.download_url);
+    let chk_url =
+        resolve_asset_download_url(&release.version, &chk_asset.name, &chk_asset.download_url);
     let Ok(resp) = client
         .get(&chk_url)
-        .header(reqwest::header::ACCEPT, "text/plain, application/octet-stream")
+        .header(
+            reqwest::header::ACCEPT,
+            "text/plain, application/octet-stream",
+        )
         .send()
         .await
     else {
@@ -881,9 +931,12 @@ async fn perform_update(version: &str, release: &Release, views: &UpdateViews) -
                 perms.set_mode(0o755);
                 std::fs::set_permissions(&staged_file, perms)?;
 
-                let current_exe = std::env::current_exe().context("failed to get current executable path")?;
+                let current_exe =
+                    std::env::current_exe().context("failed to get current executable path")?;
                 let target_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
-                let parent = target_exe.parent().context("target exe has no parent directory")?;
+                let parent = target_exe
+                    .parent()
+                    .context("target exe has no parent directory")?;
                 let temp_backup = parent.join(format!(".stremio-oxide.old-{}", std::process::id()));
 
                 tracing::info!(
@@ -918,9 +971,12 @@ async fn perform_update(version: &str, release: &Release, views: &UpdateViews) -
         PlatformAssetKind::WindowsZip => {
             #[cfg(windows)]
             {
-                let current_exe = std::env::current_exe().context("failed to get current executable path")?;
+                let current_exe =
+                    std::env::current_exe().context("failed to get current executable path")?;
                 let target_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
-                let parent = target_exe.parent().context("target exe has no parent directory")?;
+                let parent = target_exe
+                    .parent()
+                    .context("target exe has no parent directory")?;
 
                 let extract_dir = update_dir.join("extracted");
                 let _ = std::fs::remove_dir_all(&extract_dir);
@@ -940,12 +996,15 @@ async fn perform_update(version: &str, release: &Release, views: &UpdateViews) -
                         break;
                     }
                 }
-                let new_bin = found_bin.context("extracted zip did not contain stremio-oxide.exe or stremio-native.exe")?;
+                let new_bin = found_bin.context(
+                    "extracted zip did not contain stremio-oxide.exe or stremio-native.exe",
+                )?;
 
                 // Verify magic bytes of the extracted executable
                 verify_asset_integrity(&new_bin, PlatformAssetKind::WindowsInstaller)?;
 
-                let temp_backup = parent.join(format!(".stremio-oxide.old-{}.exe", std::process::id()));
+                let temp_backup =
+                    parent.join(format!(".stremio-oxide.old-{}.exe", std::process::id()));
                 self_update::Move::from_source(&new_bin)
                     .replace_using_temp(&temp_backup)
                     .to_dest(&target_exe)
@@ -970,9 +1029,12 @@ async fn perform_update(version: &str, release: &Release, views: &UpdateViews) -
         PlatformAssetKind::MacTarGz => {
             #[cfg(target_os = "macos")]
             {
-                let current_exe = std::env::current_exe().context("failed to get current executable path")?;
+                let current_exe =
+                    std::env::current_exe().context("failed to get current executable path")?;
                 let target_exe = std::fs::canonicalize(&current_exe).unwrap_or(current_exe);
-                let parent = target_exe.parent().context("target exe has no parent directory")?;
+                let parent = target_exe
+                    .parent()
+                    .context("target exe has no parent directory")?;
 
                 let extract_dir = update_dir.join("extracted");
                 let _ = std::fs::remove_dir_all(&extract_dir);
@@ -1024,7 +1086,8 @@ fn launch_installer(target: &Path) -> Result<()> {
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
         let file_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let is_installer = file_name.to_lowercase().contains("setup") || file_name.to_lowercase().contains("installer");
+        let is_installer = file_name.to_lowercase().contains("setup")
+            || file_name.to_lowercase().contains("installer");
 
         if is_installer {
             std::process::Command::new(target)
@@ -1230,13 +1293,13 @@ mod tests {
     #[test]
     fn resolve_asset_download_url_prefers_direct_releases_format() {
         let direct = resolve_asset_download_url(
-            "0.99.87",
+            "0.99.88",
             "stremio-oxide-linux",
             "https://api.github.com/repos/stickyfran/stremio-oxide/releases/assets/12345",
         );
         assert_eq!(
             direct,
-            "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.87/stremio-oxide-linux"
+            "https://github.com/stickyfran/stremio-oxide/releases/download/v0.99.88/stremio-oxide-linux"
         );
     }
 

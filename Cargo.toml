@@ -70,6 +70,11 @@ minidump-writer = "0.13.0"
 minidumper = "0.11.0"
 turso = { version = "0.7.2", default-features = false }
 
+# Minimal fork: do not reuse cached `Loadable::Err`, and treat an empty addon
+# catalog as valid content. See vendor/stremio-core/PATCHES.md.
+[patch."https://github.com/perpetus/stremio-core.git"]
+stremio-core = { path = "vendor/stremio-core" }
+
 [patch.crates-io]
 # i-slint-renderer-skia deshabilitado en favor de renderer-femtovg
 # i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia" }

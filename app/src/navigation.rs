@@ -323,7 +323,10 @@ fn reduce(state: &mut NavigationSnapshot, intent: NavigationIntent) -> bool {
             let lib_preview = (tab == Tab::Library)
                 .then(|| state.library_preview_id.clone())
                 .flatten();
-            if state.routes == routes && state.discover_preview_id == preview && state.library_preview_id == lib_preview {
+            if state.routes == routes
+                && state.discover_preview_id == preview
+                && state.library_preview_id == lib_preview
+            {
                 return false;
             }
             state.routes = routes;

@@ -2,6 +2,44 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.90 - 2026-11-07
+
+### Root-cause fix for the intermittent startup hang
+
+- Fixed the freeze that left Board rows spinning forever. Async cache reads were taking a blocking `std::sync::Mutex` (`revalidation_registry`); when the owner was cancelled or descheduled, Tokio workers parked in `futex` and the runtime could no longer make progress. All bookkeeping locks in the HTTP cache path now use `try_lock` and skip the accessory update under contention, so no runtime worker can ever block.
+- The revalidation registry is now a lease map keyed by a precomputed hash (`HashMap<u64, Instant>`, 120 s lease) with no `Drop` re-lock and no allocation while held, so a cancelled task cannot leave a key locked forever.
+- The singleflight, generation, host-backoff, stream-cache, access-touch and connectivity registries follow the same non-blocking rule.
+- Verified with 13 consecutive cold starts against a copy of a live database: 13/13 loaded all rows (`loading=0`, `failed=0`), versus 9/10 failures before the fix.
+
+### Root-cause fix for transient failures
+
+- Vendored `stremio-core` with a minimal patch: a cached `Loadable::Err` is no longer reused when the same catalog or metadata is requested again. One network failure can no longer poison a row for the whole session.
+- Empty addon catalogs are now `Ready(vec![])` instead of `Err(EmptyContent)`, so seasonal rows stop looking like permanent failures.
+
+### Offline recovery
+
+- Added a bounded connectivity probe while rows are failing. When the network returns, the board reloads immediately instead of waiting for the next restart.
+- The board now shows a clear "No connection. Retrying automatically…" banner with a manual **Retry** button.
+- Added a stuck-row watchdog: a catalogue that stays in `Loading` for more than 18 s is re-requested automatically (twice, with logging), so a lost or cancelled request can no longer leave a permanent spinner.
+- HTTP cache database operations now time out after 3 s and fall back to the network, and timeouts are exposed in the cache metrics.
+
+### Shutdown and single instance
+
+- Shutdown now logs per-stage timings and the last-resort watchdog drops from 6 s to 3 s; runtime join and database checkpoint timeouts are bounded to 2 s and 1 s.
+- The single-instance socket sets `SO_REUSEADDR`, forwards commands with a 1.5 s timeout, and no longer steals the port from a live instance.
+
+### Crash fix
+
+- The sequential core executor created its 60 s timeout outside the Tokio runtime context, which panicked with `there is no reactor running` on the first sequential effect (for example opening Details) and killed the app. The timeout is now created inside `block_on`.
+
+### Diagnostics
+
+- Settings → Backup & Diagnostics gained **Clear Addon Cache**, which removes only cached catalog/metadata responses; images, settings and library are untouched.
+- HTTP cache metrics now break stale fallbacks down by resource kind.
+- The heartbeat now repeats the thread dump every 30 s while the async runtime stays frozen and reports the total stall duration when it recovers.
+- Model lock diagnostics: any read or write that waits more than 2 s logs the threads that hold the lock — and whether the waiter already holds a read guard, which is the re-entrant read that deadlocks against a queued writer — plus the state of every thread. This is what will identify the remaining intermittent freeze.
+- The stall dump also reports the database pool (available permits and idle connections), and a database connection held for more than 10 s logs a warning when it is finally returned.
+
 ## 0.99.87 - 2026-11-05
 
 ### Automatic recovery

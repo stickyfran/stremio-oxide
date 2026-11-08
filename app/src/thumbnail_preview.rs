@@ -14,7 +14,8 @@ use playback_mpv::{
 const LEGACY_SCRIPT_HEADER: &str =
     "-- thumbfast.lua: Thumbnail preview generator for libmpv embeddings";
 
-type ThumbnailStarter = Box<dyn FnOnce(&ThumbnailPreview) -> Option<playback_mpv::ThumbnailRuntime> + Send>;
+type ThumbnailStarter =
+    Box<dyn FnOnce(&ThumbnailPreview) -> Option<playback_mpv::ThumbnailRuntime> + Send>;
 
 #[derive(Clone)]
 pub struct ThumbnailPreview {
@@ -38,7 +39,9 @@ impl ThumbnailPreview {
 
     pub fn set_starter(
         &self,
-        starter: impl FnOnce(&ThumbnailPreview) -> Option<playback_mpv::ThumbnailRuntime> + Send + 'static,
+        starter: impl FnOnce(&ThumbnailPreview) -> Option<playback_mpv::ThumbnailRuntime>
+        + Send
+        + 'static,
     ) {
         *self.starter.lock().unwrap_or_else(|p| p.into_inner()) = Some(Box::new(starter));
     }
@@ -62,7 +65,11 @@ impl ThumbnailPreview {
     }
 
     pub fn shutdown(&self) -> Result<(), playback_mpv::MpvError> {
-        let runtime = self.runtime.lock().unwrap_or_else(|p| p.into_inner()).take();
+        let runtime = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
         if let Some(runtime) = runtime {
             runtime.shutdown()?;
         }

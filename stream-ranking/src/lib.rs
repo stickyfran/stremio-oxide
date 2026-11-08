@@ -103,7 +103,11 @@ pub fn rank_streams(
             let right_size = right.effective_size;
             right_cached
                 .cmp(&left_cached)
-                .then_with(|| left_size.unwrap_or(u64::MAX).cmp(&right_size.unwrap_or(u64::MAX)))
+                .then_with(|| {
+                    left_size
+                        .unwrap_or(u64::MAX)
+                        .cmp(&right_size.unwrap_or(u64::MAX))
+                })
                 .then_with(|| left.input.original_index.cmp(&right.input.original_index))
         }),
         RankingMode::Seeders => streams.sort_by(|left, right| {
@@ -113,7 +117,11 @@ pub fn rank_streams(
             let right_seeds = right.effective_seeders;
             right_cached
                 .cmp(&left_cached)
-                .then_with(|| right_seeds.unwrap_or_default().cmp(&left_seeds.unwrap_or_default()))
+                .then_with(|| {
+                    right_seeds
+                        .unwrap_or_default()
+                        .cmp(&left_seeds.unwrap_or_default())
+                })
                 .then_with(|| left.input.original_index.cmp(&right.input.original_index))
         }),
         RankingMode::Smart => streams.sort_by(|left, right| {
@@ -314,7 +322,9 @@ pub fn parse_stream(input: &RankInput) -> ParsedStream {
         });
 
     let has_token = |token: &str| -> bool {
-        upper.split(|c: char| !c.is_alphanumeric()).any(|w| w == token)
+        upper
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w == token)
     };
 
     let source = if upper.contains("REMUX") {
@@ -346,9 +356,7 @@ pub fn parse_stream(input: &RankInput) -> ParsedStream {
             .any(|marker| upper.contains(marker))
             .then(|| normalized.to_owned())
     });
-    let dolby_vision = upper.contains("DOLBY VISION")
-        || upper.contains("DOVI")
-        || has_token("DV");
+    let dolby_vision = upper.contains("DOLBY VISION") || upper.contains("DOVI") || has_token("DV");
     let hdr = dolby_vision
         || upper.contains("HDR10+")
         || upper.contains("HDR10")
@@ -780,7 +788,11 @@ mod tests {
         let rd_uncached = input(2, "[RD download] 4K BluRay", 40_000_000_000, 5);
 
         let ranked = rank_streams(
-            [torrent_4k.clone(), rd_cached_1080p.clone(), rd_uncached.clone()],
+            [
+                torrent_4k.clone(),
+                rd_cached_1080p.clone(),
+                rd_uncached.clone(),
+            ],
             RankingMode::Smart,
             false,
         );

@@ -178,10 +178,8 @@ impl PipController {
             let config = crate::config::load_config();
             let mut restore_size = snapshot.size;
             if restore_size.width < 1000 || restore_size.height < 600 {
-                restore_size = PhysicalSize::new(
-                    config.window_width.max(1280),
-                    config.window_height.max(720),
-                );
+                restore_size =
+                    PhysicalSize::new(config.window_width.max(1280), config.window_height.max(720));
             }
             let _ = window.request_inner_size(restore_size);
             if let Some(position) = snapshot.position {
@@ -198,10 +196,7 @@ impl PipController {
         let normal_size = if current_size.width >= 1000 && current_size.height >= 600 {
             current_size
         } else {
-            PhysicalSize::new(
-                config.window_width.max(1280),
-                config.window_height.max(720),
-            )
+            PhysicalSize::new(config.window_width.max(1280), config.window_height.max(720))
         };
 
         self.snapshot = Some(PipSnapshot {
@@ -393,10 +388,21 @@ for (let i = 0; i < clients.length; i++) {
             "qdbus"
         };
         let _ = std::process::Command::new(qdbus_bin)
-            .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "stremio_query_pip"])
+            .args([
+                "org.kde.KWin",
+                "/Scripting",
+                "org.kde.kwin.Scripting.unloadScript",
+                "stremio_query_pip",
+            ])
             .output();
         if let Ok(out) = std::process::Command::new(qdbus_bin)
-            .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", tmp_path, "stremio_query_pip"])
+            .args([
+                "org.kde.KWin",
+                "/Scripting",
+                "org.kde.kwin.Scripting.loadScript",
+                tmp_path,
+                "stremio_query_pip",
+            ])
             .output()
         {
             let id_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -406,7 +412,12 @@ for (let i = 0; i < clients.length; i++) {
                     .args(["org.kde.KWin", &script_path, "org.kde.kwin.Script.run"])
                     .output();
                 let _ = std::process::Command::new(qdbus_bin)
-                    .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "stremio_query_pip"])
+                    .args([
+                        "org.kde.KWin",
+                        "/Scripting",
+                        "org.kde.kwin.Scripting.unloadScript",
+                        "stremio_query_pip",
+                    ])
                     .output();
 
                 if let Ok(journal) = std::process::Command::new("journalctl")
@@ -495,10 +506,21 @@ for (let i = 0; i < clients.length; i++) {
                         "qdbus"
                     };
                     let _ = std::process::Command::new(qdbus_bin)
-                        .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "stremio_activate_helper"])
+                        .args([
+                            "org.kde.KWin",
+                            "/Scripting",
+                            "org.kde.kwin.Scripting.unloadScript",
+                            "stremio_activate_helper",
+                        ])
                         .output();
                     if let Ok(out) = std::process::Command::new(qdbus_bin)
-                        .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", tmp_path, "stremio_activate_helper"])
+                        .args([
+                            "org.kde.KWin",
+                            "/Scripting",
+                            "org.kde.kwin.Scripting.loadScript",
+                            tmp_path,
+                            "stremio_activate_helper",
+                        ])
                         .output()
                     {
                         let id_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -508,7 +530,12 @@ for (let i = 0; i < clients.length; i++) {
                                 .args(["org.kde.KWin", &script_path, "org.kde.kwin.Script.run"])
                                 .output();
                             let _ = std::process::Command::new(qdbus_bin)
-                                .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "stremio_activate_helper"])
+                                .args([
+                                    "org.kde.KWin",
+                                    "/Scripting",
+                                    "org.kde.kwin.Scripting.unloadScript",
+                                    "stremio_activate_helper",
+                                ])
                                 .output();
                         }
                     }
@@ -555,7 +582,8 @@ fn enforce_kwin_pip_keep_above(saved_pos: Option<(f32, f32)>, saved_size: Option
                     return;
                 }
                 let apply_position = i == 0;
-                let js = format!(r#"
+                let js = format!(
+                    r#"
 const clients = workspace.windowList();
 for (let i = 0; i < clients.length; i++) {{
     const w = clients[i];
@@ -594,7 +622,8 @@ for (let i = 0; i < clients.length; i++) {{
         break;
     }}
 }}
-"#);
+"#
+                );
                 let tmp_path = "/tmp/stremio_kwin_pip.js";
                 if fs::write(tmp_path, js).is_ok() {
                     let qdbus_bin = if std::path::Path::new("/usr/bin/qdbus6").exists() {
@@ -603,10 +632,21 @@ for (let i = 0; i < clients.length; i++) {{
                         "qdbus"
                     };
                     let _ = std::process::Command::new(qdbus_bin)
-                        .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "stremio_pip_helper"])
+                        .args([
+                            "org.kde.KWin",
+                            "/Scripting",
+                            "org.kde.kwin.Scripting.unloadScript",
+                            "stremio_pip_helper",
+                        ])
                         .output();
                     if let Ok(out) = std::process::Command::new(qdbus_bin)
-                        .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript", tmp_path, "stremio_pip_helper"])
+                        .args([
+                            "org.kde.KWin",
+                            "/Scripting",
+                            "org.kde.kwin.Scripting.loadScript",
+                            tmp_path,
+                            "stremio_pip_helper",
+                        ])
                         .output()
                     {
                         let id_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -616,7 +656,12 @@ for (let i = 0; i < clients.length; i++) {{
                                 .args(["org.kde.KWin", &script_path, "org.kde.kwin.Script.run"])
                                 .output();
                             let _ = std::process::Command::new(qdbus_bin)
-                                .args(["org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", "stremio_pip_helper"])
+                                .args([
+                                    "org.kde.KWin",
+                                    "/Scripting",
+                                    "org.kde.kwin.Scripting.unloadScript",
+                                    "stremio_pip_helper",
+                                ])
                                 .output();
                         }
                     }

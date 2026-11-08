@@ -25,6 +25,7 @@ export component OperationsManager inherits VerticalLayout {
     callback preview-restore(string, string);
     callback apply-restore(string, string);
     callback create-diagnostics(string);
+    callback clear-http-cache;
     callback run-speed-test(string);
     callback save-network(string, string);
     callback apply-layout(string);
@@ -87,6 +88,19 @@ export component OperationsManager inherits VerticalLayout {
             label: @tr("Create Diagnostics");
             outlined: true;
             clicked => { root.create-diagnostics(root.diagnostic-path); }
+        }
+    }
+
+    SettingsOption {
+        unit: root.unit;
+        label: @tr("Addon Cache");
+        description: @tr("Remove cached catalog and metadata responses. Images and settings are kept.");
+        PillButton {
+            width: 16 * root.unit;
+            unit: root.unit;
+            label: @tr("Clear Addon Cache");
+            outlined: true;
+            clicked => { root.clear-http-cache(); }
         }
     }
 

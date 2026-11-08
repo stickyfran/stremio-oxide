@@ -35,7 +35,8 @@ pub fn global() -> Option<&'static PreviewPlayer> {
     GLOBAL_PREVIEW_PLAYER.get()
 }
 
-type PreviewStarter = Box<dyn FnOnce(&PreviewPlayer) -> Option<playback_mpv::PreviewRuntime> + Send>;
+type PreviewStarter =
+    Box<dyn FnOnce(&PreviewPlayer) -> Option<playback_mpv::PreviewRuntime> + Send>;
 
 #[derive(Clone)]
 struct StagedPreviewFrame {
@@ -79,7 +80,11 @@ impl PreviewPlayer {
     }
 
     pub fn ensure_started(&self) {
-        let has_starter = self.starter.lock().unwrap_or_else(|p| p.into_inner()).is_some();
+        let has_starter = self
+            .starter
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some();
         if !has_starter {
             return;
         }
@@ -95,7 +100,11 @@ impl PreviewPlayer {
     }
 
     pub fn shutdown(&self) -> Result<(), playback_mpv::MpvError> {
-        let runtime = self.runtime.lock().unwrap_or_else(|p| p.into_inner()).take();
+        let runtime = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
         if let Some(runtime) = runtime {
             runtime.shutdown()?;
         }

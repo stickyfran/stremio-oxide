@@ -35,8 +35,8 @@ mod imp {
         UI::{
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
-                WM_NCDESTROY, WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT,
-                WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
+                WM_NCDESTROY, WM_SIZING, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT,
+                WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
             },
         },
     };
@@ -139,7 +139,12 @@ mod imp {
         // dimension is "dominant" for this drag direction.
         let constrain_by_width = matches!(
             edge,
-            WMSZ_LEFT | WMSZ_RIGHT | WMSZ_TOPLEFT | WMSZ_TOPRIGHT | WMSZ_BOTTOMLEFT | WMSZ_BOTTOMRIGHT
+            WMSZ_LEFT
+                | WMSZ_RIGHT
+                | WMSZ_TOPLEFT
+                | WMSZ_TOPRIGHT
+                | WMSZ_BOTTOMLEFT
+                | WMSZ_BOTTOMRIGHT
         );
 
         if constrain_by_width {

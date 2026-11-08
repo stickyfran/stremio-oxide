@@ -551,8 +551,14 @@ impl PlaybackRuntime {
             tracing::warn!(%error, path = %ytdl_path.display(), "could not point ytdl_hook at yt-dlp");
         }
         client.set_option("ytdl", "yes")?;
-        client.set_option("ytdl-format", "best[height<=?720]/bestvideo[height<=?720]+bestaudio/best")?;
-        let _ = client.set_option("ytdl-raw-options", "extractor-args=youtube:player_client=android,web");
+        client.set_option(
+            "ytdl-format",
+            "best[height<=?720]/bestvideo[height<=?720]+bestaudio/best",
+        )?;
+        let _ = client.set_option(
+            "ytdl-raw-options",
+            "extractor-args=youtube:player_client=android,web",
+        );
         client.set_option("terminal", "no")?;
         client.set_option("input-default-bindings", "no")?;
         client.set_option("input-vo-keyboard", "no")?;
@@ -1346,10 +1352,8 @@ fn handle_command(
                         LOADFILE_COMMAND_REPLY_ID,
                         &["loadfile", &url, "replace", "-1", &options],
                     ),
-                    None => client.command_async(
-                        LOADFILE_COMMAND_REPLY_ID,
-                        &["loadfile", &url, "replace"],
-                    ),
+                    None => client
+                        .command_async(LOADFILE_COMMAND_REPLY_ID, &["loadfile", &url, "replace"]),
                 })
         }
         PlaybackCommand::Stop => {
@@ -1836,11 +1840,15 @@ fn update_property(event: &MpvEvent, state: &mut PlaybackState) -> PropertyUpdat
             return PropertyUpdate::Hdr;
         }
         "video-params/dw" => {
-            state.video_dw = property_int64(property).filter(|&v| v > 0).map(|v| v as u32);
+            state.video_dw = property_int64(property)
+                .filter(|&v| v > 0)
+                .map(|v| v as u32);
             return PropertyUpdate::StateOnly;
         }
         "video-params/dh" => {
-            state.video_dh = property_int64(property).filter(|&v| v > 0).map(|v| v as u32);
+            state.video_dh = property_int64(property)
+                .filter(|&v| v > 0)
+                .map(|v| v as u32);
             return PropertyUpdate::StateOnly;
         }
         "track-list" => {

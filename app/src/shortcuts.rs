@@ -723,7 +723,9 @@ pub fn install_platform_shortcuts(ui: &MainWindow, media_session: Arc<MediaSessi
                 if dispatcher.ime_editing && !ui.get_show_player() {
                     return EventResult::Propagate;
                 }
-                if !ui.get_show_player() && ui.global::<crate::FocusTracker>().get_text_input_focused() {
+                if !ui.get_show_player()
+                    && ui.global::<crate::FocusTracker>().get_text_input_focused()
+                {
                     return EventResult::Propagate;
                 }
                 let Some(chord) = dispatcher.chord(&event.logical_key) else {

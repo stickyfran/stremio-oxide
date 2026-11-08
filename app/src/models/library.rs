@@ -234,16 +234,32 @@ pub fn setup(
                 *q = query.to_string();
             }
 
-            // Trigger refresh immediately
-            if let Some(ui) = ui_weak.upgrade()
-                && let Ok(model) = runtime.model()
-            {
+            // Trigger refresh immediately. Clone the projection and release
+            // the guard first: `sync` takes its own read guard, and a nested
+            // read deadlocks when a writer is queued in between.
+            if let Some(ui) = ui_weak.upgrade() {
+                let projection = runtime.model().ok().map(|model| {
+                    if ui.get_library_continue_watching_mode() {
+                        (None, Some(model.continue_watching.clone()))
+                    } else {
+                        (Some(model.library.clone()), None)
+                    }
+                });
                 let ui_sync = ui_weak.clone();
                 let rt_sync = runtime.clone();
-                if ui.get_library_continue_watching_mode() {
-                    sync(&ui, &model.continue_watching, &ui_sync, &rt_sync, &navigation, true);
-                } else {
-                    sync(&ui, &model.library, &ui_sync, &rt_sync, &navigation, false);
+                match projection {
+                    Some((_, Some(continue_watching))) => sync(
+                        &ui,
+                        &continue_watching,
+                        &ui_sync,
+                        &rt_sync,
+                        &navigation,
+                        true,
+                    ),
+                    Some((Some(library), _)) => {
+                        sync(&ui, &library, &ui_sync, &rt_sync, &navigation, false)
+                    }
+                    _ => {}
                 }
             }
         }
@@ -276,7 +292,10 @@ pub fn setup(
                         ui.set_library_preview_title(item.name.as_str().into());
                         if let Some(poster) = item.poster.as_ref() {
                             ui.set_library_preview_poster_url(poster.as_str().into());
-                            ui.set_library_preview_poster(crate::image_cache::get_poster_image(&item.poster, &ui_weak));
+                            ui.set_library_preview_poster(crate::image_cache::get_poster_image(
+                                &item.poster,
+                                &ui_weak,
+                            ));
                         }
                     }
                 }
@@ -430,14 +449,12 @@ pub fn sync<F: LibraryFilter>(
     };
 
     let has_saved_stream = |meta_id: &str, video_id: &str| {
-        model_guard
-            .as_ref()
-            .is_some_and(|m| {
-                m.ctx.streams.items.contains_key(&StreamsItemKey {
-                    meta_id: meta_id.to_string(),
-                    video_id: video_id.to_string(),
-                })
+        model_guard.as_ref().is_some_and(|m| {
+            m.ctx.streams.items.contains_key(&StreamsItemKey {
+                meta_id: meta_id.to_string(),
+                video_id: video_id.to_string(),
             })
+        })
     };
 
     // 1. Filter raw items based on query
@@ -523,9 +540,11 @@ pub fn sync<F: LibraryFilter>(
                 show_progress: progress > 0.0,
                 progress_value: (progress / 100.0).clamp(0.0, 1.0) as f32,
                 new_videos: i32::try_from(get_notification_count(&item.id).min(99)).unwrap_or(99),
-                can_play: item.state.video_id.as_ref().is_some_and(|video_id| {
-                    has_saved_stream(&item.id, video_id)
-                }),
+                can_play: item
+                    .state
+                    .video_id
+                    .as_ref()
+                    .is_some_and(|video_id| has_saved_stream(&item.id, video_id)),
                 in_library: true,
             });
         }
@@ -541,15 +560,16 @@ pub fn sync<F: LibraryFilter>(
         let _span = tracing::info_span!("chunk_library_rows").entered();
         let chunked = crate::models::chunk_vector_owned(visible_items, columns);
         let existing = ui.get_library_rows();
-        if let Some(vec_model) = existing.as_any().downcast_ref::<slint::VecModel<LibraryRow>>() {
+        if let Some(vec_model) = existing
+            .as_any()
+            .downcast_ref::<slint::VecModel<LibraryRow>>()
+        {
             let existing_len = vec_model.row_count();
             let common_len = existing_len.min(chunked.len());
             for (index, row_items) in chunked.iter().take(common_len).enumerate() {
-                let updated_in_place = vec_model
-                    .row_data(index)
-                    .is_some_and(|existing_row| {
-                        crate::models::update_media_card_cols_in_place(&existing_row.cols, row_items)
-                    });
+                let updated_in_place = vec_model.row_data(index).is_some_and(|existing_row| {
+                    crate::models::update_media_card_cols_in_place(&existing_row.cols, row_items)
+                });
                 if !updated_in_place {
                     vec_model.set_row_data(
                         index,

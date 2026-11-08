@@ -137,9 +137,10 @@ impl LocalLibraryManager {
         let progress = self.progress.clone();
         let root_for_scan = root.clone();
         let existing = list_items_for_root(&root.id).await.unwrap_or_default();
-        let items = tokio::task::spawn_blocking(move || scan_root(&root_for_scan, &progress, existing))
-            .await
-            .map_err(|_| LocalLibraryError::Scan)??;
+        let items =
+            tokio::task::spawn_blocking(move || scan_root(&root_for_scan, &progress, existing))
+                .await
+                .map_err(|_| LocalLibraryError::Scan)??;
         persist_scan(&root, &items).await?;
         let _ = self.progress.send(ScanProgress {
             root_id: root.id,
@@ -169,9 +170,21 @@ impl LocalLibraryManager {
                                     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                                         matches!(
                                             ext.to_ascii_lowercase().as_str(),
-                                            "mkv" | "mp4" | "avi" | "mov" | "wmv" | "webm" | "m4v"
-                                                | "ts" | "m2ts" | "srt" | "ass" | "ssa"
-                                                | "vtt" | "sub" | "nfo"
+                                            "mkv"
+                                                | "mp4"
+                                                | "avi"
+                                                | "mov"
+                                                | "wmv"
+                                                | "webm"
+                                                | "m4v"
+                                                | "ts"
+                                                | "m2ts"
+                                                | "srt"
+                                                | "ass"
+                                                | "ssa"
+                                                | "vtt"
+                                                | "sub"
+                                                | "nfo"
                                         )
                                     } else {
                                         true
@@ -348,7 +361,9 @@ pub async fn list_items() -> Result<Vec<LocalMediaItem>, LocalLibraryError> {
     Ok(items)
 }
 
-pub async fn list_items_for_root(root_id: &str) -> Result<HashMap<PathBuf, LocalMediaItem>, LocalLibraryError> {
+pub async fn list_items_for_root(
+    root_id: &str,
+) -> Result<HashMap<PathBuf, LocalMediaItem>, LocalLibraryError> {
     let conn = crate::db::get_conn()
         .await
         .map_err(|_| LocalLibraryError::Database)?;

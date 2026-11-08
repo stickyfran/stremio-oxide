@@ -363,6 +363,7 @@ export component SettingsPage inherits Rectangle {
     callback operations-preview-restore(string, string);
     callback operations-apply-restore(string, string);
     callback operations-create-diagnostics(string);
+    callback operations-clear-cache;
     callback operations-run-speed-test(string);
     callback operations-save-network(string, string);
     callback operations-apply-layout(string);
@@ -1538,6 +1539,7 @@ export component SettingsPage inherits Rectangle {
                         preview-restore(path, passphrase) => { root.operations-preview-restore(path, passphrase); }
                         apply-restore(path, passphrase) => { root.operations-apply-restore(path, passphrase); }
                         create-diagnostics(path) => { root.operations-create-diagnostics(path); }
+                        clear-http-cache => { root.operations-clear-cache(); }
                         run-speed-test(endpoint) => { root.operations-run-speed-test(endpoint); }
                         save-network(region, bandwidth) => { root.operations-save-network(region, bandwidth); }
                         apply-layout(preset) => { root.operations-apply-layout(preset); }

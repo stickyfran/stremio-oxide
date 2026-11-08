@@ -1,0 +1,109 @@
+[package]
+name = "stremio-core"
+version = "0.1.0"
+authors = ["Smart Code OOD"]
+edition = "2021"
+
+# When upgrading MSRV make sure to update the msrv.yaml workflow
+rust-version = "1.77"
+
+[profile.release]
+lto = true
+opt-level = 's'
+
+[workspace]
+resolver = "2"
+members = ["stremio-derive", "stremio-watched-bitfield"]
+
+[features]
+# TODO: env-future-send should be enabled by default
+# but our `TestEnv` for `unit_tests` uses a MutexGuard which is not Send.
+# default = ["env-future-send"]
+default = []
+
+# Adds `Send` marker trait to the `Env` trait methods and `EnvFuture`.
+# It's required for environments that do not support `Send`.
+# If enabled for `wasm` it will cause a compile error!
+# see https://github.com/rustwasm/wasm-bindgen/issues/2833
+env-future-send = []
+
+# Exports the Model derive macro from `stremio-derive`
+derive = []
+
+# Enable core analytics
+analytics = []
+
+# Enable deflate feature in official addons
+deflate = ["stremio-official-addons/deflate"]
+
+[dependencies]
+stremio-derive = { path = "stremio-derive" }
+stremio-watched-bitfield = { path = "stremio-watched-bitfield" }
+stremio-official-addons = "=2.1.2"
+
+# (De)Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.*"
+serde_path_to_error = "0.1"
+serde_url_params = "0.2"
+serde_bencode = "0.2.*"
+# keep track of https://github.com/fspmarshall/serde-hex/pull/8
+# Keep track of https://github.com/fspmarshall/serde-hex/pull/19
+stremio-serde-hex = "0.1"
+
+serde_with = { version = "3.5", features = ["macros", "chrono_0_4"] }
+
+flate2 = "1"
+futures = "0.3"
+
+http = "1.2"
+url = { version = "2.4", features = ["serde"] }
+percent-encoding = "2.1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+semver = { version = "1", features = ["serde"] }
+base64 = "0.22"
+sha1 = "0.10"
+sha2 = "0.10"
+
+either = "1.6"
+enclose = "1.1"
+derivative = "2.2"
+derive_more = { version = "2", features = ["from", "into", "into_iterator", "try_into", "deref"] }
+boolinator = "2.4"
+strum = { version = "0.27", features = ["derive"] }
+
+lazysort = "0.2"
+
+once_cell = "1"
+itertools = "0.14"
+
+magnet-url = "3.0"
+data-encoding = "2.9"
+hex = "0.4"
+
+# error handling
+anyhow = "1.0"
+thiserror = "2"
+
+regex = "1.8"
+
+# local search and autocomplete functionallity
+localsearch = { version = "0.1.0", git = "https://github.com/Stremio/local-search", branch = "main" }
+
+# Number operations
+num = { version = "0.4.0", default-features = false }
+
+# Tracing
+tracing = "0.1"
+
+lz-str = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1.12", features = ["rt", "macros"] }
+tokio-current-thread = "=0.2.0-alpha.1"
+serde_test = "1.0"
+assert_matches = "1.5"
+pretty_assertions = "1"

@@ -82,6 +82,7 @@ export component BoardPage inherits Rectangle {
     in property <bool> loading: false;
     in property <bool> show-server-warning: false;
     in property <bool> has-errors: false;
+    in property <bool> offline: false;
 
     in property <bool> enable-hover-preview: false;
     in property <duration> hover-preview-delay: 1200ms;
@@ -222,6 +223,39 @@ export component BoardPage inherits Rectangle {
                     }
                 }
                 poster-requested(url) => { root.poster-requested(url); }
+            }
+        }
+    }
+
+    if (root.offline) : Rectangle {
+        x: root.unit;
+        y: root.unit;
+        width: max(0px, parent.width - 2 * root.unit);
+        height: 4 * root.unit;
+        border-radius: Theme.border-radius;
+        background: Theme.warning;
+        z: 20;
+
+        HorizontalLayout {
+            padding-left: root.unit;
+            padding-right: root.unit;
+            spacing: root.unit;
+            alignment: center;
+
+            Text {
+                horizontal-stretch: 1;
+                text: @tr("BOARD_OFFLINE" => "No connection. Retrying automatically…");
+                color: Theme.primary-foreground;
+                font-size: 1.1 * root.unit;
+                vertical-alignment: center;
+            }
+
+            PillButton {
+                width: 7 * root.unit;
+                height: 2.5 * root.unit;
+                unit: root.unit;
+                label: @tr("RETRY" => "Retry");
+                clicked => { root.retry(); }
             }
         }
     }

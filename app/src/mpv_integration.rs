@@ -1448,7 +1448,8 @@ impl NativePlaybackBridge {
                             .map(ToString::to_string)
                             .unwrap_or_default();
                         let parsed_logo = url::Url::parse(&logo_url).ok();
-                        let series_logo = crate::image_cache::get_logo_image(&parsed_logo, &ui_weak);
+                        let series_logo =
+                            crate::image_cache::get_logo_image(&parsed_logo, &ui_weak);
                         ui.set_player_series_name(name.into());
                         ui.set_player_series_runtime(runtime.into());
                         ui.set_player_series_release_year(year.into());
@@ -1657,7 +1658,9 @@ impl NativePlaybackBridge {
                     ui.set_player_loading(true);
                     ui.set_player_loading_stalled(false);
                     ui.set_player_loading_stage_title("Cargando stream…".into());
-                    ui.set_player_loading_stage_detail("Iniciando decodificadores y búfer de MPV…".into());
+                    ui.set_player_loading_stage_detail(
+                        "Iniciando decodificadores y búfer de MPV…".into(),
+                    );
                     ui.set_player_buffering(false);
                     ui.set_player_buffering_percent(0.0);
                     ui.set_player_ab_loop_a(-1.0);
@@ -2192,7 +2195,10 @@ impl NativePlaybackBridge {
                     return;
                 }
                 let is_active = snapshot.active_subtitle_track.is_some()
-                    || weak.upgrade().map(|ui| ui.get_player_active_subtitle_idx() >= 0).unwrap_or(false);
+                    || weak
+                        .upgrade()
+                        .map(|ui| ui.get_player_active_subtitle_idx() >= 0)
+                        .unwrap_or(false);
 
                 let (track_id, next_idx) = if is_active {
                     // Turn OFF
@@ -2205,9 +2211,15 @@ impl NativePlaybackBridge {
                 } else {
                     // Turn ON (remembered track if available, else first track)
                     let remembered = last_sub_track.lock().ok().and_then(|g| g.clone());
-                    let target_pos = remembered.as_ref().and_then(|rem_id| {
-                        snapshot.subtitle_tracks.iter().position(|t| &t.id == rem_id)
-                    }).unwrap_or(0);
+                    let target_pos = remembered
+                        .as_ref()
+                        .and_then(|rem_id| {
+                            snapshot
+                                .subtitle_tracks
+                                .iter()
+                                .position(|t| &t.id == rem_id)
+                        })
+                        .unwrap_or(0);
 
                     let track = snapshot.subtitle_tracks.get(target_pos);
                     (track.map(|t| t.id.clone()), target_pos as i32)
@@ -2221,7 +2233,15 @@ impl NativePlaybackBridge {
                             .subtitle_tracks
                             .iter()
                             .find(|t| t.id == id)
-                            .map(|t| format!("Subtitles: {}", t.language.as_deref().or(t.title.as_deref()).unwrap_or("Track")))
+                            .map(|t| {
+                                format!(
+                                    "Subtitles: {}",
+                                    t.language
+                                        .as_deref()
+                                        .or(t.title.as_deref())
+                                        .unwrap_or("Track")
+                                )
+                            })
                             .unwrap_or_else(|| "Subtitles enabled".to_string())
                     } else {
                         "Subtitles disabled".to_string()
@@ -2257,7 +2277,13 @@ impl NativePlaybackBridge {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_player_active_audio_idx(next_idx);
                     let label = if let Some(t) = track {
-                        format!("Audio: {}", t.language.as_deref().or(t.title.as_deref()).unwrap_or("Track"))
+                        format!(
+                            "Audio: {}",
+                            t.language
+                                .as_deref()
+                                .or(t.title.as_deref())
+                                .unwrap_or("Track")
+                        )
                     } else {
                         "Audio track changed".to_string()
                     };
@@ -2279,11 +2305,13 @@ impl NativePlaybackBridge {
                 let weak_release = weak.clone();
                 slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
                     if let Some(ui) = weak_release.upgrade() {
-                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
-                            position: slint::LogicalPosition::new(15.0, 15.0),
-                            button: slint::platform::PointerEventButton::Left,
-                        });
-                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerExited);
+                        ui.window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                                position: slint::LogicalPosition::new(15.0, 15.0),
+                                button: slint::platform::PointerEventButton::Left,
+                            });
+                        ui.window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerExited);
                     }
                 });
             }
@@ -2314,11 +2342,13 @@ impl NativePlaybackBridge {
                 let weak_release = weak.clone();
                 slint::Timer::single_shot(std::time::Duration::from_millis(16), move || {
                     if let Some(ui) = weak_release.upgrade() {
-                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
-                            position: slint::LogicalPosition::new(15.0, 15.0),
-                            button: slint::platform::PointerEventButton::Left,
-                        });
-                        ui.window().dispatch_event(slint::platform::WindowEvent::PointerExited);
+                        ui.window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                                position: slint::LogicalPosition::new(15.0, 15.0),
+                                button: slint::platform::PointerEventButton::Left,
+                            });
+                        ui.window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerExited);
                     }
                 });
             }
@@ -2332,11 +2362,12 @@ impl NativePlaybackBridge {
                     return;
                 };
                 let snapshot = read_state(&state);
-                let (aspect_w, aspect_h) = if let (Some(dw), Some(dh)) = (snapshot.video_dw, snapshot.video_dh) {
-                    (dw as f32, dh as f32)
-                } else {
-                    (16.0, 9.0)
-                };
+                let (aspect_w, aspect_h) =
+                    if let (Some(dw), Some(dh)) = (snapshot.video_dw, snapshot.video_dh) {
+                        (dw as f32, dh as f32)
+                    } else {
+                        (16.0, 9.0)
+                    };
                 let _ = ui.window().with_winit_window(|window| {
                     let current_size = window.inner_size();
                     let current_w = current_size.width as f32;
@@ -2355,10 +2386,7 @@ impl NativePlaybackBridge {
                         }
                     }
                     let _ = window.request_inner_size(
-                        slint::winit_030::winit::dpi::PhysicalSize::new(
-                            new_w as u32,
-                            new_h as u32,
-                        ),
+                        slint::winit_030::winit::dpi::PhysicalSize::new(new_w as u32, new_h as u32),
                     );
                 });
             }
@@ -2716,9 +2744,32 @@ impl NativePlaybackBridge {
                         .selected
                         .as_ref()
                         .and_then(|s| s.meta_request.clone());
-                    Some((meta_id, meta_type, video_id, saved_stream, season, index, current_binge, current_name, stream_request, meta_request))
+                    Some((
+                        meta_id,
+                        meta_type,
+                        video_id,
+                        saved_stream,
+                        season,
+                        index,
+                        current_binge,
+                        current_name,
+                        stream_request,
+                        meta_request,
+                    ))
                 });
-                let Some((meta_id, meta_type, video_id, saved_stream, season, index, current_binge, current_name, stream_request, meta_request)) = selection else {
+                let Some((
+                    meta_id,
+                    meta_type,
+                    video_id,
+                    saved_stream,
+                    season,
+                    index,
+                    current_binge,
+                    current_name,
+                    stream_request,
+                    meta_request,
+                )) = selection
+                else {
                     return;
                 };
                 if let (Some(ui), Some(saved_stream)) = (weak.upgrade(), saved_stream) {
@@ -2784,14 +2835,19 @@ impl NativePlaybackBridge {
                             if !streams.is_empty() {
                                 // 1. Match by binge_group
                                 if let Some(ref bg) = current_binge {
-                                    if let Some(found) = streams.iter().find(|s| s.behavior_hints.binge_group.as_ref() == Some(bg)) {
+                                    if let Some(found) = streams
+                                        .iter()
+                                        .find(|s| s.behavior_hints.binge_group.as_ref() == Some(bg))
+                                    {
                                         matched_stream = Some(found.clone());
                                         break;
                                     }
                                 }
                                 // 2. Match by stream name / provider
                                 if let Some(ref name) = current_name {
-                                    if let Some(found) = streams.iter().find(|s| s.name.as_ref() == Some(name)) {
+                                    if let Some(found) =
+                                        streams.iter().find(|s| s.name.as_ref() == Some(name))
+                                    {
                                         matched_stream = Some(found.clone());
                                         break;
                                     }
@@ -2812,10 +2868,13 @@ impl NativePlaybackBridge {
                             meta_request,
                             subtitles_path: None,
                         };
-                        let resolution = crate::integrations::resolve_explicit_selection(selected).await;
+                        let resolution =
+                            crate::integrations::resolve_explicit_selection(selected).await;
                         let final_selected = match resolution {
                             crate::integrations::DebridResolution::Resolved(s) => s,
-                            crate::integrations::DebridResolution::Uncached { selected, .. } => selected,
+                            crate::integrations::DebridResolution::Uncached {
+                                selected, ..
+                            } => selected,
                             crate::integrations::DebridResolution::Fallback(s) => s,
                         };
                         let _ = slint::invoke_from_event_loop(move || {
@@ -2831,7 +2890,9 @@ impl NativePlaybackBridge {
                                 ui.set_player_loading(false);
                                 ui.set_player_buffering(false);
                                 ui.set_player_loading_stage_title("Selecciona un stream".into());
-                                ui.set_player_loading_stage_detail("No se encontró stream compatible automáticamente.".into());
+                                ui.set_player_loading_stage_detail(
+                                    "No se encontró stream compatible automáticamente.".into(),
+                                );
                                 ui.set_player_show_playlist_drawer(true);
                             }
                         });
@@ -3507,7 +3568,10 @@ fn handle_event(
                         let maybe_yt_url = session_guard.url.clone();
                         drop(session_guard);
 
-                        if let Some(yt_url) = maybe_yt_url.as_deref().filter(|u| u.contains("youtube.com") || u.contains("youtu.be")) {
+                        if let Some(yt_url) = maybe_yt_url
+                            .as_deref()
+                            .filter(|u| u.contains("youtube.com") || u.contains("youtu.be"))
+                        {
                             tracing::warn!(url = %yt_url, "YouTube stream failed in MPV; opening fallback in web browser");
                             let _ = open::that(yt_url);
                             show_player_error(
@@ -5116,7 +5180,11 @@ fn youtube_watch_url(
 /// hook can find `yt-dlp` on `PATH` without help.
 fn resolve_ytdl_path() -> Option<PathBuf> {
     let base = crate::paths::get().streaming_server();
-    let binary = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
+    let binary = if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    };
     let candidate = base.join(binary);
     if candidate.exists() {
         Some(candidate)

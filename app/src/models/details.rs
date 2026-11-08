@@ -1,5 +1,7 @@
 use crate::models::{Fingerprint, SyncFingerprint};
-use crate::{AppModel, AppModelField, DetailsPresentation, EpisodeItem, MainWindow, NavigationController};
+use crate::{
+    AppModel, AppModelField, DetailsPresentation, EpisodeItem, MainWindow, NavigationController,
+};
 use core_env::DesktopEnv;
 use slint::ComponentHandle;
 use std::{
@@ -260,9 +262,11 @@ pub fn setup(
             // Season selection only changes the videos list in the web client.
             // Reproject immediately so cached metadata still refreshes episode
             // thumbnails; streams are requested only after an episode click.
-            if let Some(ui) = ui_weak.upgrade()
-                && let Ok(model) = runtime.model()
-            {
+            // Snapshot under the guard, then release it before `sync`, which
+            // takes its own read guard (nested reads can deadlock when a
+            // writer is queued in between).
+            if let Some(ui) = ui_weak.upgrade() {
+                let snapshot = runtime.model().ok().map(|model| {
                 let is_in_library = model
                     .meta_details
                     .selected
@@ -275,14 +279,17 @@ pub fn setup(
                             .get(&selected.meta_path.id)
                             .is_some_and(|item| !item.removed)
                     });
+                    (is_in_library, model.meta_details.clone())
+                });
+                if let Some((is_in_library, details)) = snapshot {
                 sync(
                     &ui,
-                    &model.meta_details,
+                    &details,
                     is_in_library,
                     &ui_weak,
                     &runtime,
                     &navigation,
-                );
+                );                }
             }
         }
     });
@@ -396,11 +403,11 @@ pub fn setup(
                 *query = q.to_string();
             }
             // Trigger sync to update the filtered list
-            if let Some(ui) = ui_weak.upgrade()
-                && let Ok(model) = runtime.model()
-            {
-                let ui_sync = ui_weak.clone();
-                let rt_sync = runtime.clone();
+            // Snapshot under the guard, then release it before `sync`, which
+            // takes its own read guard (nested reads can deadlock when a
+            // writer is queued in between).
+            if let Some(ui) = ui_weak.upgrade() {
+                let snapshot = runtime.model().ok().map(|model| {
                 let is_in_library = model
                     .meta_details
                     .selected
@@ -413,14 +420,19 @@ pub fn setup(
                             .get(&selected.meta_path.id)
                             .is_some_and(|item| !item.removed)
                     });
+                    (is_in_library, model.meta_details.clone())
+                });
+                if let Some((is_in_library, details)) = snapshot {
+                let ui_sync = ui_weak.clone();
+                let rt_sync = runtime.clone();
                 sync(
                     &ui,
-                    &model.meta_details,
+                    &details,
                     is_in_library,
                     &ui_sync,
                     &rt_sync,
                     &navigation,
-                );
+                );                }
             }
         }
     });
@@ -545,10 +557,15 @@ pub fn setup(
         let runtime = runtime.clone();
         let ui_weak = ui.as_weak();
         move || {
-            let Ok(model) = runtime.model() else {
-                return;
+            // Release the read guard before dispatching: dispatch takes the
+            // write lock and would deadlock against this very guard.
+            let selected = {
+                let Ok(model) = runtime.model() else {
+                    return;
+                };
+                model.meta_details.selected.clone()
             };
-            let Some(selected) = model.meta_details.selected.clone() else {
+            let Some(selected) = selected else {
                 return;
             };
             tracing::info!(
@@ -886,22 +903,22 @@ pub fn sync(
     };
 
     let _span = tracing::info_span!("extract_meta_resource").entered();
-    let ready_meta =
-        meta_details
-            .meta_items
-            .iter()
-            .find_map(|resource| match &resource.content {
-                Some(Loadable::Ready(item)) if item.preview.id == selected_id => Some(item),
-                _ => None,
-            });
+    let ready_meta = meta_details
+        .meta_items
+        .iter()
+        .find_map(|resource| match &resource.content {
+            Some(Loadable::Ready(item)) if item.preview.id == selected_id => Some(item),
+            _ => None,
+        });
     let Some(meta_item) = ready_meta else {
-        let load_error = meta_details
-            .meta_items
-            .iter()
-            .find_map(|resource| match &resource.content {
-                Some(Loadable::Err(error)) => Some(error.to_string()),
-                _ => None,
-            });
+        let load_error =
+            meta_details
+                .meta_items
+                .iter()
+                .find_map(|resource| match &resource.content {
+                    Some(Loadable::Err(error)) => Some(error.to_string()),
+                    _ => None,
+                });
         if let Some(error) = load_error {
             tracing::warn!(%selected_id, %error, "meta details failed to load");
             ui.set_details_loading(false);
@@ -1026,14 +1043,22 @@ pub fn sync(
             .trailer_streams
             .first()
             .and_then(|stream| {
-                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } = &stream.source {
+                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } =
+                    &stream.source
+                {
                     Some(format!("https://www.youtube.com/watch?v={yt_id}"))
                 } else {
-                    crate::playback::trailer_stream_url(stream, None, &stremio_core::types::profile::Settings::default())
+                    crate::playback::trailer_stream_url(
+                        stream,
+                        None,
+                        &stremio_core::types::profile::Settings::default(),
+                    )
                 }
             });
 
-        ui.set_discover_preview_has_trailer(stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty());
+        ui.set_discover_preview_has_trailer(
+            stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty(),
+        );
 
         if let Some(preview_player) = crate::preview_player::global() {
             let trailer = crate::playback::TrailerPreview {
@@ -1113,14 +1138,22 @@ pub fn sync(
             .trailer_streams
             .first()
             .and_then(|stream| {
-                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } = &stream.source {
+                if let stremio_core::types::resource::StreamSource::YouTube { yt_id } =
+                    &stream.source
+                {
                     Some(format!("https://www.youtube.com/watch?v={yt_id}"))
                 } else {
-                    crate::playback::trailer_stream_url(stream, None, &stremio_core::types::profile::Settings::default())
+                    crate::playback::trailer_stream_url(
+                        stream,
+                        None,
+                        &stremio_core::types::profile::Settings::default(),
+                    )
                 }
             });
 
-        ui.set_library_preview_has_trailer(stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty());
+        ui.set_library_preview_has_trailer(
+            stream_url.is_some() || !meta_item.preview.trailer_streams.is_empty(),
+        );
 
         if let Some(preview_player) = crate::preview_player::global() {
             let trailer = crate::playback::TrailerPreview {

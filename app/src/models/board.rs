@@ -8,10 +8,12 @@ use crate::{AppModel, AppModelField, MainWindow, NavigationController};
 use crate::{BoardSection, MediaCardItem};
 use core_env::DesktopEnv;
 use slint::{ComponentHandle, Model};
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc, Mutex, OnceLock,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
+use std::time::{Duration, Instant};
 
 static SECTION_FINGERPRINTS: OnceLock<Mutex<Vec<SyncFingerprint>>> = OnceLock::new();
 use stremio_core::{
@@ -20,7 +22,7 @@ use stremio_core::{
     },
     runtime::{
         Runtime, RuntimeAction,
-        msg::{Action, ActionCtx, ActionLoad},
+        msg::{Action, ActionCatalogsWithExtra, ActionCtx, ActionLoad},
     },
     types::addon::Descriptor,
     types::streams::StreamsItemKey,
@@ -33,6 +35,11 @@ static BOARD_CATALOG_LOADER: OnceLock<tokio::sync::mpsc::Sender<usize>> = OnceLo
 const AUTO_RETRY_MAX_ATTEMPTS: u8 = 3;
 static AUTO_RETRY_ATTEMPTS: AtomicU8 = AtomicU8::new(0);
 static AUTO_RETRY_SCHEDULED: AtomicBool = AtomicBool::new(false);
+static RECOVERY_WATCHER: AtomicBool = AtomicBool::new(false);
+const RECOVERY_PROBE_INTERVAL: Duration = Duration::from_secs(5);
+const RECOVERY_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+const RECOVERY_WATCH_MAX: Duration = Duration::from_secs(15 * 60);
+const PROBE_FALLBACK_URL: &str = "https://api.strem.io/";
 
 /// Automatic recovery is on by default; set `STREMIO_STARTUP_RESILIENCE=0`
 /// to keep only the manual Retry action.
@@ -55,10 +62,7 @@ fn auto_retry_delay_secs(attempt: u8) -> u64 {
 /// trigger a retry.
 fn loadable_is_real_error<R>(
     content: Option<
-        &stremio_core::models::common::Loadable<
-            R,
-            stremio_core::models::common::ResourceError,
-        >,
+        &stremio_core::models::common::Loadable<R, stremio_core::models::common::ResourceError>,
     >,
 ) -> bool {
     match content {
@@ -71,10 +75,11 @@ fn loadable_is_real_error<R>(
 }
 
 fn board_has_real_errors(board: &CatalogsWithExtra) -> bool {
-    board
-        .catalogs
-        .iter()
-        .any(|catalog| catalog.first().is_some_and(|page| loadable_is_real_error(page.content.as_ref())))
+    board.catalogs.iter().any(|catalog| {
+        catalog
+            .first()
+            .is_some_and(|page| loadable_is_real_error(page.content.as_ref()))
+    })
 }
 
 /// Retry counters reset only when the board is fully healthy again. Resetting
@@ -90,9 +95,7 @@ fn board_is_healthy(board: &CatalogsWithExtra) -> bool {
         };
         match page.content.as_ref() {
             Some(Loadable::Ready(_)) => has_ready = true,
-            Some(Loadable::Err(
-                stremio_core::models::common::ResourceError::EmptyContent,
-            ))
+            Some(Loadable::Err(stremio_core::models::common::ResourceError::EmptyContent))
             | None => {}
             Some(Loadable::Err(_)) | Some(Loadable::Loading) => has_pending = true,
         }
@@ -134,6 +137,319 @@ fn schedule_board_auto_retry(runtime: Arc<Runtime<DesktopEnv, AppModel>>) {
     });
 }
 
+fn set_board_offline(ui_weak: &slint::Weak<MainWindow>, offline: bool) {
+    let weak = ui_weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_board_offline(offline);
+        }
+    });
+}
+
+fn probe_url(model: &AppModel) -> String {
+    model
+        .ctx
+        .profile
+        .addons
+        .iter()
+        .find_map(|addon| {
+            let url = &addon.transport_url;
+            if !matches!(url.scheme(), "http" | "https") {
+                return None;
+            }
+            let host = url.host_str()?;
+            if host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+            {
+                return None;
+            }
+            Some(url.to_string())
+        })
+        .unwrap_or_else(|| PROBE_FALLBACK_URL.to_owned())
+}
+
+/// While rows are failing, probe the network cheaply instead of reloading every
+/// catalog every few seconds. When the probe succeeds the board reloads at once,
+/// which covers "network restored while the app was open".
+fn ensure_recovery_watcher(
+    runtime: Arc<Runtime<DesktopEnv, AppModel>>,
+    ui_weak: slint::Weak<MainWindow>,
+) {
+    if !startup_resilience_enabled() || RECOVERY_WATCHER.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    tokio::spawn(async move {
+        let started = Instant::now();
+        let mut offline_announced = false;
+        loop {
+            if started.elapsed() > RECOVERY_WATCH_MAX {
+                break;
+            }
+            let probe = {
+                let Ok(model) = runtime.model() else {
+                    break;
+                };
+                if !board_has_real_errors(&model.board) {
+                    break;
+                }
+                probe_url(&model)
+            };
+            if core_env::probe_connectivity(&probe, RECOVERY_PROBE_TIMEOUT).await {
+                tracing::info!("network probe succeeded; reloading failed board catalogs");
+                if offline_announced {
+                    set_board_offline(&ui_weak, false);
+                    offline_announced = false;
+                }
+                AUTO_RETRY_ATTEMPTS.store(0, Ordering::Release);
+                runtime.dispatch(RuntimeAction {
+                    field: Some(AppModelField::Board),
+                    action: Action::Unload,
+                });
+                crate::callbacks::trigger_initial_load(&runtime);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+            if !offline_announced {
+                tracing::warn!(
+                    url = %probe,
+                    "network probe failed; board is offline and will keep retrying"
+                );
+                set_board_offline(&ui_weak, true);
+                offline_announced = true;
+            }
+            tokio::time::sleep(RECOVERY_PROBE_INTERVAL).await;
+        }
+        if offline_announced {
+            set_board_offline(&ui_weak, false);
+        }
+        RECOVERY_WATCHER.store(false, Ordering::Release);
+    });
+}
+
+const STUCK_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const STUCK_AFTER: Duration = Duration::from_secs(18);
+const STUCK_MAX_ATTEMPTS: u8 = 2;
+static STUCK_WATCHER: AtomicBool = AtomicBool::new(false);
+static STUCK_CATALOGS: OnceLock<Mutex<HashMap<String, StuckCatalog>>> = OnceLock::new();
+
+struct StuckCatalog {
+    first_seen: Instant,
+    last_retry: Option<Instant>,
+    attempts: u8,
+}
+
+/// Minimum gap between retries of the same row, longer than the HTTP timeout
+/// so a retry never races a request that is still legitimately in flight.
+const STUCK_RETRY_GAP: Duration = Duration::from_secs(20);
+
+static HEARTBEAT_MS: AtomicU64 = AtomicU64::new(0);
+static HEARTBEAT_STARTED: AtomicBool = AtomicBool::new(false);
+const HEARTBEAT_STALL: Duration = Duration::from_secs(5);
+const HEARTBEAT_REPORT_INTERVAL: Duration = Duration::from_secs(30);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Diagnoses a frozen async runtime. A tokio task refreshes a timestamp every
+/// second; an OS thread (independent of the runtime) notices when it stops and
+/// logs the state of every thread of the process, which identifies what the
+/// workers are blocked on.
+pub fn start_runtime_heartbeat() {
+    if HEARTBEAT_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    HEARTBEAT_MS.store(now_ms(), Ordering::Release);
+    tokio::spawn(async {
+        loop {
+            HEARTBEAT_MS.store(now_ms(), Ordering::Release);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+    let _ = std::thread::Builder::new()
+        .name("runtime-heartbeat".to_owned())
+        .spawn(|| {
+            let mut reported = false;
+            let mut last_report = Instant::now();
+            loop {
+                std::thread::sleep(Duration::from_secs(2));
+                let lag = now_ms().saturating_sub(HEARTBEAT_MS.load(Ordering::Acquire));
+                if lag >= HEARTBEAT_STALL.as_millis() as u64 {
+                    let repeat = reported && last_report.elapsed() >= HEARTBEAT_REPORT_INTERVAL;
+                    if !reported {
+                        tracing::error!(lag_ms = lag, "async runtime appears stalled");
+                        dump_thread_states();
+                    } else if repeat {
+                        tracing::error!(
+                            lag_ms = lag,
+                            stalled_secs = last_report.elapsed().as_secs(),
+                            "async runtime is still stalled"
+                        );
+                        dump_thread_states();
+                    }
+                    if !reported || repeat {
+                        reported = true;
+                        last_report = Instant::now();
+                    }
+                } else if reported {
+                    reported = false;
+                    tracing::warn!(
+                        stalled_secs = last_report.elapsed().as_secs(),
+                        "async runtime recovered after a stall"
+                    );
+                }
+            }
+        });
+}
+
+#[cfg(target_os = "linux")]
+fn dump_thread_states() {
+    let (available, idle) = core_env::db_pool_snapshot();
+    tracing::error!(
+        db_permits_available = available,
+        db_idle_connections = idle,
+        "database pool during runtime stall"
+    );
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        return;
+    };
+    // A thread waiting on a `futex` is blocked on some lock. The syscall file
+    // exposes the address it waits on, so equal addresses across threads prove
+    // they are serialized by the same lock even without a debugger.
+    let mut futex_waiters: HashMap<String, Vec<String>> = HashMap::new();
+    for task in tasks.flatten() {
+        let path = task.path();
+        let read = |name: &str| {
+            std::fs::read_to_string(path.join(name))
+                .map(|v| v.trim().to_owned())
+                .unwrap_or_default()
+        };
+        let state = read("status")
+            .lines()
+            .find(|line| line.starts_with("State:"))
+            .unwrap_or("")
+            .to_owned();
+        let syscall = read("syscall");
+        let tid = task.file_name().to_string_lossy().to_string();
+        let mut fields = syscall.split_whitespace();
+        if fields.next() == Some("202")
+            && let Some(address) = fields.next()
+        {
+            futex_waiters
+                .entry(address.to_owned())
+                .or_default()
+                .push(tid.clone());
+        }
+        tracing::error!(
+            tid = %tid,
+            name = %read("comm"),
+            %state,
+            wchan = %read("wchan"),
+            %syscall,
+            "thread state during runtime stall"
+        );
+    }
+    for (address, threads) in futex_waiters {
+        tracing::error!(
+            futex = %address,
+            threads = ?threads,
+            "threads waiting on the same futex"
+        );
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn dump_thread_states() {}
+
+/// Watches rows that never leave `Loading`. A request can be lost to a
+/// transient failure, a cancelled effect or a stalled cache read; without this
+/// watchdog the row would keep its spinner until the app restarts because both
+/// the visibility loader and `LoadRange` deliberately skip `Loading` rows.
+pub fn start_stuck_catalog_watcher(runtime: Arc<Runtime<DesktopEnv, AppModel>>) {
+    if !startup_resilience_enabled() || STUCK_WATCHER.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(STUCK_CHECK_INTERVAL).await;
+            let Ok(model) = runtime.model() else {
+                break;
+            };
+            let mut retry = Vec::new();
+            let mut reported = Vec::new();
+            {
+                let tracked = STUCK_CATALOGS.get_or_init(|| Mutex::new(HashMap::new()));
+                let mut tracked = tracked
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut still_loading = HashSet::new();
+                for (index, catalog) in model.board.catalogs.iter().enumerate() {
+                    let Some(page) = catalog.first() else {
+                        continue;
+                    };
+                    if !matches!(
+                        page.content,
+                        Some(stremio_core::models::common::Loadable::Loading)
+                    ) {
+                        continue;
+                    }
+                    let key = format!(
+                        "{}|{}|{}",
+                        page.request.base, page.request.path.r#type, page.request.path.id
+                    );
+                    still_loading.insert(key.clone());
+                    let entry = tracked.entry(key.clone()).or_insert(StuckCatalog {
+                        first_seen: Instant::now(),
+                        last_retry: None,
+                        attempts: 0,
+                    });
+                    if entry.first_seen.elapsed() < STUCK_AFTER {
+                        continue;
+                    }
+                    if entry.attempts < STUCK_MAX_ATTEMPTS {
+                        if entry
+                            .last_retry
+                            .is_some_and(|at| at.elapsed() < STUCK_RETRY_GAP)
+                        {
+                            continue;
+                        }
+                        entry.last_retry = Some(Instant::now());
+                        entry.attempts += 1;
+                        retry.push(index);
+                        reported.push(format!("{key} (attempt {})", entry.attempts));
+                    } else if entry.attempts != u8::MAX
+                        && entry
+                            .last_retry
+                            .is_none_or(|at| at.elapsed() >= STUCK_RETRY_GAP)
+                    {
+                        entry.attempts = u8::MAX;
+                        tracing::error!(
+                            catalog = %key,
+                            "catalog row is still loading after automatic retries"
+                        );
+                    }
+                }
+                tracked.retain(|key, _| still_loading.contains(key));
+            }
+            drop(model);
+            if !retry.is_empty() {
+                tracing::warn!(
+                    catalogs = ?reported,
+                    "catalog rows stuck in Loading; re-requesting them"
+                );
+                runtime.dispatch(RuntimeAction {
+                    field: Some(AppModelField::Board),
+                    action: Action::CatalogsWithExtra(ActionCatalogsWithExtra::RetryStuck(retry)),
+                });
+            }
+        }
+    });
+}
 pub fn get_catalog_loader() -> Option<&'static tokio::sync::mpsc::Sender<usize>> {
     BOARD_CATALOG_LOADER.get()
 }
@@ -205,19 +521,17 @@ pub fn setup(
         let ui_weak = ui_weak.clone();
         move |id| {
             let id = id.to_string();
-            let preview = runtime.model().ok().and_then(|model| {
-                model
-                    .board
-                    .catalogs
-                    .iter()
-                    .flatten()
-                    .find_map(|page| match page.content.as_ref() {
-                        Some(stremio_core::models::common::Loadable::Ready(items)) => {
-                            items.iter().find(|i| i.id == id).cloned()
+            let preview =
+                runtime.model().ok().and_then(|model| {
+                    model.board.catalogs.iter().flatten().find_map(|page| {
+                        match page.content.as_ref() {
+                            Some(stremio_core::models::common::Loadable::Ready(items)) => {
+                                items.iter().find(|i| i.id == id).cloned()
+                            }
+                            _ => None,
                         }
-                        _ => None,
                     })
-            });
+                });
 
             if let Some(preview) = preview {
                 runtime.dispatch(RuntimeAction {
@@ -438,7 +752,7 @@ pub fn sync(
     continue_watching: &ContinueWatchingPreview,
     board: &CatalogsWithExtra,
     addons: &[Descriptor],
-    _ui_weak: &slint::Weak<MainWindow>,
+    ui_weak: &slint::Weak<MainWindow>,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
 ) {
     let (show_warning, lib_flags, saved_stream_keys) = if let Ok(model) = runtime.model() {
@@ -468,7 +782,11 @@ pub fn sync(
 
         (show_warning, lib_flags, saved_stream_keys)
     } else {
-        (false, std::collections::HashMap::new(), std::collections::HashSet::new())
+        (
+            false,
+            std::collections::HashMap::new(),
+            std::collections::HashSet::new(),
+        )
     };
 
     ui.set_board_show_server_warning(show_warning);
@@ -551,8 +869,9 @@ pub fn sync(
     };
     let has_continue_watching = !continue_watching_items.is_empty();
     let existing_cw = ui.get_board_continue_watching();
-    let continue_watching_model = if let Some(vec_model) =
-        existing_cw.as_any().downcast_ref::<slint::VecModel<MediaCardItem>>()
+    let continue_watching_model = if let Some(vec_model) = existing_cw
+        .as_any()
+        .downcast_ref::<slint::VecModel<MediaCardItem>>()
     {
         let existing_len = vec_model.row_count();
         let new_len = continue_watching_items.len();
@@ -621,7 +940,9 @@ pub fn sync(
                 ))
                 .copied()
                 .unwrap_or(page.request.path.id.as_str());
-            if let Some(section) = project_catalog_section(catalog_index, catalog, catalog_name, Some(&lib_flags)) {
+            if let Some(section) =
+                project_catalog_section(catalog_index, catalog, catalog_name, Some(&lib_flags))
+            {
                 board_sections.push(section);
             }
         }
@@ -638,7 +959,10 @@ pub fn sync(
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(vec_model) = existing.as_any().downcast_ref::<slint::VecModel<BoardSection>>() {
+    if let Some(vec_model) = existing
+        .as_any()
+        .downcast_ref::<slint::VecModel<BoardSection>>()
+    {
         let existing_len = vec_model.row_count();
         let new_len = board_sections.len();
         let common_len = existing_len.min(new_len);
@@ -679,13 +1003,32 @@ pub fn sync(
     // are still being resolved, show the pulsing skeleton animation.
     let any_catalogs = !board.catalogs.is_empty();
     let has_content = ui.get_board_sections().row_count() > 0
-        && (has_continue_watching || board.catalogs.iter().any(|c| c.first().is_some_and(|p| matches!(&p.content, Some(stremio_core::models::common::Loadable::Ready(_))))));
-    let is_loading = !has_content && (!any_catalogs || board.catalogs.iter().any(|c| c.first().is_none_or(|p| p.content.is_none() || matches!(&p.content, Some(stremio_core::models::common::Loadable::Loading)))));
+        && (has_continue_watching
+            || board.catalogs.iter().any(|c| {
+                c.first().is_some_and(|p| {
+                    matches!(
+                        &p.content,
+                        Some(stremio_core::models::common::Loadable::Ready(_))
+                    )
+                })
+            }));
+    let is_loading = !has_content
+        && (!any_catalogs
+            || board.catalogs.iter().any(|c| {
+                c.first().is_none_or(|p| {
+                    p.content.is_none()
+                        || matches!(
+                            &p.content,
+                            Some(stremio_core::models::common::Loadable::Loading)
+                        )
+                })
+            }));
     ui.set_board_loading(is_loading);
     let has_errors = board_has_real_errors(board);
     ui.set_board_has_errors(has_errors);
     if has_errors {
         schedule_board_auto_retry(runtime.clone());
+        ensure_recovery_watcher(runtime.clone(), ui_weak.to_owned());
     } else if board_is_healthy(board) {
         // A full success ends the retry episode, so a later network hiccup gets
         // its own bounded set of automatic attempts.
@@ -694,9 +1037,11 @@ pub fn sync(
 
     // Proactively keep initial catalog loading rolling if any top catalogs are still unloaded.
     if let Some(loader) = BOARD_CATALOG_LOADER.get() {
-        let has_unloaded_initial = board.catalogs.iter().take(3).any(|cat| {
-            cat.first().is_none_or(|p| p.content.is_none())
-        });
+        let has_unloaded_initial = board
+            .catalogs
+            .iter()
+            .take(3)
+            .any(|cat| cat.first().is_none_or(|p| p.content.is_none()));
         if has_unloaded_initial {
             let _ = loader.try_send(0);
         }
@@ -737,7 +1082,10 @@ fn update_board_card_state(
     for section_idx in 0..sections.row_count() {
         if let Some(section) = sections.row_data(section_idx) {
             let items = section.items;
-            if let Some(vec_items) = items.as_any().downcast_ref::<slint::VecModel<MediaCardItem>>() {
+            if let Some(vec_items) = items
+                .as_any()
+                .downcast_ref::<slint::VecModel<MediaCardItem>>()
+            {
                 for item_idx in 0..vec_items.row_count() {
                     if let Some(mut card) = vec_items.row_data(item_idx) {
                         if card.id == id {
@@ -786,8 +1134,7 @@ mod tests {
             Loadable::Err(ResourceError::UnexpectedResponse("network down".to_owned()));
         assert!(loadable_is_real_error(Some(&failed)));
 
-        let ready: Loadable<Vec<MetaItemPreview>, ResourceError> =
-            Loadable::Ready(Vec::new());
+        let ready: Loadable<Vec<MetaItemPreview>, ResourceError> = Loadable::Ready(Vec::new());
         assert!(!loadable_is_real_error(Some(&ready)));
         assert!(!loadable_is_real_error::<Vec<MetaItemPreview>>(None));
     }

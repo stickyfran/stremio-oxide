@@ -1,7 +1,7 @@
 # Roadmap: resiliencia de arranque, red y contenido
 
 **Fecha:** 2026-11-05
-**Estado:** Fases 0, 1 y 6.1 implementadas en `0.99.86`; Fase 2 (reintento programado) y Fase 4 (fallback extendido) implementadas en `0.99.87`. Pendientes: Fase 3, Fase 5 y Fases 6.2–6.4.
+**Estado:** Fases 0–6 implementadas entre `0.99.86` y `0.99.88`. La Fase 7 (matriz de pruebas amplia y métricas de 7 días) sigue abierta por depender de uso real.
 **Alcance:** recuperación del contenido remoto (catálogos y detalles), arranque en frío, cierre de la aplicación y los dos bugs colaterales confirmados (panics y cierre lento).
 **Documentos relacionados:** `Roadmap_Cache_Inteligente_y_Tray.md`, `Roadmap_Cache_Thumbnails_Derivados.md`.
 
@@ -183,7 +183,7 @@ Riesgo: medio-alto por el watcher D-Bus. Aislarlo tras el flag de la Fase 0.
 
 ---
 
-### Fase 3 — Preparar el arranque sin bloquear la UI
+### Fase 3 — Preparar el arranque sin bloquear la UI (implementada en 0.99.88)
 
 **Objetivo:** reducir la probabilidad del fallo inicial, sin retrasar la primera pintura.
 
@@ -204,11 +204,11 @@ Riesgo: bajo-medio. El riesgo es añadir latencia; se mide.
 
 ---
 
-### Fase 4 — Endurecer el caché HTTP (fallback extendido implementado en 0.99.87)
+### Fase 4 — Endurecer el caché HTTP (completa en 0.99.87–0.99.88)
 
 **Objetivo:** que la red no sea imprescindible para lo que ya se vio.
 
-Implementado en `0.99.87`: una entrada 2xx válida se conserva como fallback aunque supere la ventana de retención de 30 días; si la red falla, se sirve y sube `stale_served_on_error`. Pendientes: métrica separada por tipo de recurso e invalidación manual desde Ajustes.
+Implementado en `0.99.87`: una entrada 2xx válida se conserva como fallback aunque supere la ventana de retención de 30 días; si la red falla, se sirve y sube `stale_served_on_error`. En `0.99.88`: métricas de stale por tipo de recurso y botón **Clear Addon Cache** en Ajustes → Backup & Diagnostics.
 
 Trabajo:
 
@@ -226,7 +226,7 @@ Riesgo: bajo. Es una mejora localizada en `core-env/src/http_cache.rs`.
 
 ---
 
-### Fase 5 — Core: semántica de errores reintentables (opcional, upstream)
+### Fase 5 — Core: semántica de errores reintentables (implementada en 0.99.88 con parche vendorizado)
 
 **Objetivo:** arreglar la raíz, no solo la app.
 
@@ -237,6 +237,8 @@ Opciones, de menor a mayor intrusión:
 3. No parchear y quedarse con la solución de Fase 1/2.
 
 Recomendación: intentar (1); si no hay respuesta en un ciclo de release, (2) con un diff mínimo y tests propios.
+
+Implementado en `0.99.88` con la opción (2): `vendor/stremio-core` (1,9 MB, sin historial) aplica dos cambios documentados en `PATCHES.md`: no reutilizar `Loadable::Err` al repetir una petición y aceptar catálogos vacíos como `Ready(vec![])`. El `Cargo.toml` lo activa con `[patch."https://github.com/perpetus/stremio-core.git"]`.
 
 Criterio de aceptación:
 
@@ -254,7 +256,7 @@ Riesgo: alto (dependencia externa). Por eso va después de las fases que ya resu
 - Opciones: parche vendorizado que convierta el `expect` en `let _ =` (perder el evento al cerrar es correcto), o garantizar que no se despache después de cerrar el runtime.
 - Test: cerrar la app 50 veces con reproducción y sin ella; cero SIGABRT.
 
-#### 6.2 Cierre lento (6 s)
+#### 6.2 Cierre lento (6 s) — implementado en 0.99.88
 
 - `app/src/main.rs:355`: watchdog de 6 s.
 - Investigar qué bloquea después de los logs de métricas (probablemente el drop del runtime de Tokio esperando tareas bloqueantes).
@@ -264,13 +266,13 @@ Riesgo: alto (dependencia externa). Por eso va después de las fases que ya resu
   - Cerrar explícitamente los hilos bloqueantes (librqbit, mpv) antes del drop.
 - Criterio: p95 de cierre <1 s; watchdog solo como último recurso.
 
-#### 6.3 Instancia única
+#### 6.3 Instancia única — implementado en 0.99.88
 
 - Añadir `SO_REUSEADDR` y un log cuando el bind falle.
 - Acortar la espera de `forward` a 1,5 s y no reintentar el bind si el puerto está ocupado por un proceso vivo.
 - Criterio: relanzar mientras la instancia anterior cierra no deja la app "sin abrir".
 
-#### 6.4 Tray en frío
+#### 6.4 Tray en frío — medición implementada en 0.99.88
 
 - `app/src/tray/standard.rs:14` y `vendor/i-slint-core/items/system_tray/ksni.rs:300` crean el tray de forma bloqueante en el hilo de UI.
 - Medir el tiempo de `tray::setup` y, si supera 250 ms, registrar warning. Si se confirma bloqueo en frío, diferir la creación 2 s después del primer frame o comprobar antes que exista `StatusNotifierWatcher`.
@@ -345,3 +347,30 @@ Riesgo: alto (dependencia externa). Por eso va después de las fases que ya resu
 - La app se recupera sola al volver la red en la mayoría de los casos.
 - Cerrar no tarda más de 1 s ni genera crash reports.
 - Todo cubierto por tests y con métricas que lo demuestren.
+
+---
+
+## 9. Cuelgue intermitente del runtime (en curso)
+
+Síntoma confirmado en la sesión de `2026-11-06T01:42Z`: 7 filas quedaron en `Loading`, el watchdog las reintentó dos veces y a las `01:43:25Z` el heartbeat registró `async runtime appears stalled`. Los 21 workers de tokio estaban en `futex_wait` y la app ya no volvió a responder hasta cerrarse a mano.
+
+### Fase 7.1 — Diagnóstico (implementada en 0.99.88)
+
+- [x] Heartbeat de tokio (tarea + hilo del sistema) que detecta bloqueos de 5 s y vuelca el estado de todos los hilos.
+- [x] El volcado se repite cada 30 s mientras el bloqueo persiste y se registra la duración al recuperarse.
+- [x] `Runtime::model()` registra el hilo y el sitio (`file:line`) que tiene el guard de lectura.
+- [x] Toda adquisición de lectura/escritura del modelo sondea 2 s con `try_read`/`try_write`; si no la obtiene, registra quién la tiene, si el que espera ya tenía una lectura (lectura reentrante = deadlock) y vuelca los hilos.
+- [x] El comportamiento del lock no cambia: solo se añade visibilidad.
+- [x] El volcado del heartbeat incluye permisos disponibles y conexiones ociosas del pool de base de datos; una conexión retenida más de 10 s avisa al devolverse.
+- [x] Corregido un panic del executor secuencial (`there is no reactor running`) que cerraba la app al primer efecto secuencial en release.
+
+### Fase 7.2 — Corrección (pendiente)
+
+- [ ] Usar el informe del próximo cuelgue para identificar el guard que nunca se libera.
+- [ ] Según el resultado: acortar guards, prohibir lecturas anidadas o mover las escrituras del modelo a un hilo dedicado.
+- [ ] Añadir una red de seguridad en la UI: fila en error con reintento tras 60 s y aviso si el runtime lleva >30 s caído.
+
+### Fase 7.3 — Pruebas (pendiente)
+
+- [ ] Test determinista de contención: un lector mantiene el guard y un escritor debe registrar el aviso y completar al soltarse.
+- [ ] Bucle de ~20 arranques buscando `model lock waited too long` o `runtime appears stalled`.

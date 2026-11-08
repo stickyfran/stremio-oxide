@@ -13,11 +13,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 use stremio_core::{
+    models::player::Selected,
     models::{
         installed_addons_with_filters::InstalledAddonsRequest,
         library_with_filters::LibraryRequest, library_with_filters::Sort,
     },
-    models::player::Selected,
     runtime::{
         Runtime, RuntimeAction,
         msg::{Action, ActionCatalogsWithExtra, ActionLoad},
@@ -285,12 +285,15 @@ pub fn setup_ui_callbacks(
         let playback_selections = playback_selections.clone();
         let download_manager = download_manager_clone;
         move |selection_id| {
-            let Some((selected, _stream_name)) = playback_selections.resolve(selection_id.as_str()) else {
+            let Some((selected, _stream_name)) = playback_selections.resolve(selection_id.as_str())
+            else {
                 tracing::warn!(selection_id = %selection_id, "download selection expired");
                 return;
             };
 
-            let Some(ui) = ui_weak.upgrade() else { return; };
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
             let detail_title = ui.get_detail_title().to_string();
             let is_series = ui.get_detail_is_series();
             let title = if is_series {
@@ -319,15 +322,20 @@ pub fn setup_ui_callbacks(
 
             let download_manager = download_manager.clone();
             tokio::spawn(async move {
-                let resolution = crate::integrations::resolve_explicit_selection(selected.clone()).await;
+                let resolution =
+                    crate::integrations::resolve_explicit_selection(selected.clone()).await;
                 let final_stream = match resolution {
                     crate::integrations::DebridResolution::Resolved(res) => res.stream,
-                    crate::integrations::DebridResolution::Uncached { selected, .. } => selected.stream,
+                    crate::integrations::DebridResolution::Uncached { selected, .. } => {
+                        selected.stream
+                    }
                     crate::integrations::DebridResolution::Fallback(res) => res.stream,
                 };
 
                 let download_url = match &final_stream.source {
-                    stremio_core::types::resource::StreamSource::Url { url } => Some(url.to_string()),
+                    stremio_core::types::resource::StreamSource::Url { url } => {
+                        Some(url.to_string())
+                    }
                     _ => None,
                 };
 
@@ -338,7 +346,13 @@ pub fn setup_ui_callbacks(
                         kind: crate::downloads::DownloadSourceKind::DirectHttp,
                     };
                     let _ = download_manager
-                        .enqueue("default", &title, &sanitized_filename, &destination_dir, source)
+                        .enqueue(
+                            "default",
+                            &title,
+                            &sanitized_filename,
+                            &destination_dir,
+                            source,
+                        )
                         .await;
                 }
             });

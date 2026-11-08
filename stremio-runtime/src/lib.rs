@@ -20,7 +20,8 @@ use axum::{
         header::{
             ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, ACCEPT_RANGES, CACHE_CONTROL, CONNECTION,
             CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, DATE, ETAG, HOST,
-            IF_RANGE, LAST_MODIFIED, LOCATION, ORIGIN, RANGE, SERVER, TRANSFER_ENCODING, USER_AGENT,
+            IF_RANGE, LAST_MODIFIED, LOCATION, ORIGIN, RANGE, SERVER, TRANSFER_ENCODING,
+            USER_AGENT,
         },
     },
     middleware::{self, Next},
@@ -827,7 +828,10 @@ fn router(state: AppState) -> Router {
         .route("/{info_hash}/{idx}/{*filename}", get(stream_named))
         .fallback(fallback)
         .layer(TraceLayer::new_for_http())
-        .layer(middleware::from_fn_with_state(allow_lan, local_request_guard))
+        .layer(middleware::from_fn_with_state(
+            allow_lan,
+            local_request_guard,
+        ))
         .layer(cors)
         .with_state(state)
 }
@@ -855,19 +859,17 @@ fn origin_is_allowed(value: &HeaderValue) -> bool {
         return false;
     };
     if matches!(url.scheme(), "http" | "https")
-        && url
-            .host()
-            .is_some_and(|host| match host {
-                url::Host::Domain(domain) => {
-                    domain.eq_ignore_ascii_case("localhost")
-                        || domain.eq_ignore_ascii_case("app.strem.io")
-                        || domain.eq_ignore_ascii_case("web.stremio.com")
-                        || domain.ends_with(".strem.io")
-                        || domain.ends_with(".stremio.com")
-                }
-                url::Host::Ipv4(address) => address.is_loopback(),
-                url::Host::Ipv6(address) => address.is_loopback(),
-            })
+        && url.host().is_some_and(|host| match host {
+            url::Host::Domain(domain) => {
+                domain.eq_ignore_ascii_case("localhost")
+                    || domain.eq_ignore_ascii_case("app.strem.io")
+                    || domain.eq_ignore_ascii_case("web.stremio.com")
+                    || domain.ends_with(".strem.io")
+                    || domain.ends_with(".stremio.com")
+            }
+            url::Host::Ipv4(address) => address.is_loopback(),
+            url::Host::Ipv6(address) => address.is_loopback(),
+        })
     {
         return true;
     }
@@ -892,15 +894,18 @@ async fn local_request_guard(
             is_trusted_origin = true;
         } else {
             warn!(origin = %origin.to_str().unwrap_or("<invalid>"), "rejected cross-origin request");
-            return (StatusCode::FORBIDDEN, "cross-origin requests are not allowed").into_response();
+            return (
+                StatusCode::FORBIDDEN,
+                "cross-origin requests are not allowed",
+            )
+                .into_response();
         }
     }
     if let Some(site) = headers.get("sec-fetch-site") {
         let site = site.to_str().unwrap_or("<invalid>");
         if !matches!(site, "same-origin" | "none") && !is_trusted_origin {
             warn!(%site, "rejected cross-site request");
-            return (StatusCode::FORBIDDEN, "cross-site requests are not allowed")
-                .into_response();
+            return (StatusCode::FORBIDDEN, "cross-site requests are not allowed").into_response();
         }
     }
     if !allow_lan
@@ -1232,10 +1237,9 @@ mod tests {
         let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let occupied_port = occupied.local_addr().unwrap().port();
 
-        let listener =
-            bind_http_listener(IpAddr::V4(Ipv4Addr::LOCALHOST), occupied_port)
-                .await
-                .unwrap();
+        let listener = bind_http_listener(IpAddr::V4(Ipv4Addr::LOCALHOST), occupied_port)
+            .await
+            .unwrap();
 
         assert_ne!(listener.local_addr().unwrap().port(), occupied_port);
     }
@@ -1423,14 +1427,30 @@ mod tests {
     #[test]
     fn origin_is_allowed_permits_loopback_and_stremio_domains() {
         use http::HeaderValue;
-        assert!(origin_is_allowed(&HeaderValue::from_static("http://127.0.0.1:11470")));
-        assert!(origin_is_allowed(&HeaderValue::from_static("http://localhost:8080")));
-        assert!(origin_is_allowed(&HeaderValue::from_static("https://app.strem.io")));
-        assert!(origin_is_allowed(&HeaderValue::from_static("https://web.stremio.com")));
-        assert!(origin_is_allowed(&HeaderValue::from_static("https://staging.strem.io")));
-        assert!(origin_is_allowed(&HeaderValue::from_static("stremio://torrentio.strem.fun")));
+        assert!(origin_is_allowed(&HeaderValue::from_static(
+            "http://127.0.0.1:11470"
+        )));
+        assert!(origin_is_allowed(&HeaderValue::from_static(
+            "http://localhost:8080"
+        )));
+        assert!(origin_is_allowed(&HeaderValue::from_static(
+            "https://app.strem.io"
+        )));
+        assert!(origin_is_allowed(&HeaderValue::from_static(
+            "https://web.stremio.com"
+        )));
+        assert!(origin_is_allowed(&HeaderValue::from_static(
+            "https://staging.strem.io"
+        )));
+        assert!(origin_is_allowed(&HeaderValue::from_static(
+            "stremio://torrentio.strem.fun"
+        )));
 
-        assert!(!origin_is_allowed(&HeaderValue::from_static("https://malicious-website.com")));
-        assert!(!origin_is_allowed(&HeaderValue::from_static("http://192.168.1.50:8080")));
+        assert!(!origin_is_allowed(&HeaderValue::from_static(
+            "https://malicious-website.com"
+        )));
+        assert!(!origin_is_allowed(&HeaderValue::from_static(
+            "http://192.168.1.50:8080"
+        )));
     }
 }

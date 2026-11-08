@@ -648,7 +648,9 @@ impl DownloadManager {
         }
 
         // Determine if server honored range request or sent full body / restarted
-        let (file, downloaded, bytes_total) = if resume_from > 0 && response.status() == StatusCode::PARTIAL_CONTENT {
+        let (file, downloaded, bytes_total) = if resume_from > 0
+            && response.status() == StatusCode::PARTIAL_CONTENT
+        {
             let range_consistent = if let Some(cr) = response.headers().get(CONTENT_RANGE) {
                 cr.to_str()
                     .map(|s| s.starts_with(&format!("bytes {resume_from}-")))
@@ -667,7 +669,11 @@ impl DownloadManager {
                     .open(&part_path)
                     .await
                     .map_err(|_| DownloadError::Filesystem)?;
-                (tokio::io::BufWriter::with_capacity(512 * 1024, raw_file), resume_from, bytes_total)
+                (
+                    tokio::io::BufWriter::with_capacity(512 * 1024, raw_file),
+                    resume_from,
+                    bytes_total,
+                )
             } else {
                 tracing::warn!(%resume_from, "Content-Range mismatch on resume; restarting download from 0");
                 let bytes_total = response.content_length();
@@ -678,7 +684,11 @@ impl DownloadManager {
                     .open(&part_path)
                     .await
                     .map_err(|_| DownloadError::Filesystem)?;
-                (tokio::io::BufWriter::with_capacity(512 * 1024, raw_file), 0, bytes_total)
+                (
+                    tokio::io::BufWriter::with_capacity(512 * 1024, raw_file),
+                    0,
+                    bytes_total,
+                )
             }
         } else {
             // Server returned 200 OK (ignored Range or new download)
@@ -690,30 +700,31 @@ impl DownloadManager {
                 .open(&part_path)
                 .await
                 .map_err(|_| DownloadError::Filesystem)?;
-            (tokio::io::BufWriter::with_capacity(512 * 1024, raw_file), 0, bytes_total)
+            (
+                tokio::io::BufWriter::with_capacity(512 * 1024, raw_file),
+                0,
+                bytes_total,
+            )
         };
 
         let mut file = file;
         let mut downloaded = downloaded;
-        update_progress(
-            &job.id,
-            DownloadState::Downloading,
-            downloaded,
-            bytes_total,
-        )
-        .await?;
+        update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
 
         let mut stream = response.bytes_stream();
         let mut last_progress_time = std::time::Instant::now();
         loop {
             if cancellation.is_cancelled() {
-                update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
+                update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total)
+                    .await?;
                 file.flush().await.map_err(|_| DownloadError::Filesystem)?;
                 return Ok(());
             }
 
             // Per-chunk read timeout (45s) to detect stalled TCP streams without dying on long downloads
-            let next_chunk = match tokio::time::timeout(Duration::from_secs(45), stream.next()).await {
+            let next_chunk = match tokio::time::timeout(Duration::from_secs(45), stream.next())
+                .await
+            {
                 Ok(Some(chunk_res)) => chunk_res.map_err(|_| DownloadError::Network)?,
                 Ok(None) => break, // EOF reached cleanly
                 Err(_) => {
@@ -732,7 +743,8 @@ impl DownloadManager {
             let should_persist = last_progress_time.elapsed() >= Duration::from_millis(500);
             if should_persist {
                 last_progress_time = std::time::Instant::now();
-                update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
+                update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total)
+                    .await?;
                 let _ = self.progress.send(Some(DownloadProgress {
                     job_id: job.id.clone(),
                     state: DownloadState::Downloading,

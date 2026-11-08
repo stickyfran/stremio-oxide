@@ -23,10 +23,13 @@ use stremio_core::{
 
 mod http_cache;
 
+pub use http_cache::{ConnectivitySnapshot, connectivity_snapshot, probe_connectivity};
+
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static TOKIO_HANDLE: OnceLock<Handle> = OnceLock::new();
 type SequentialFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 const SEQUENTIAL_QUEUE_CAPACITY: usize = 64;
+const SEQUENTIAL_EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 const SEQUENTIAL_WORKER_STACK_BYTES: usize = 512 * 1024;
 static SEQUENTIAL_EXECUTOR: OnceLock<SyncSender<SequentialFuture>> = OnceLock::new();
 static SEQUENTIAL_SATURATED: AtomicBool = AtomicBool::new(false);
@@ -94,7 +97,17 @@ fn sequential_executor() -> Option<&'static SyncSender<SequentialFuture>> {
 
 fn run_sequential(handle: &Handle, receiver: Receiver<SequentialFuture>) {
     while let Ok(future) = receiver.recv() {
-        handle.block_on(future);
+        // One wedged effect must not freeze every later sequential effect.
+        // The timeout has to be created *inside* `block_on`: `tokio::time::timeout`
+        // registers a timer when it is constructed, and this thread does not
+        // have a runtime context until `block_on` enters it.
+        if handle
+            .block_on(async { tokio::time::timeout(SEQUENTIAL_EFFECT_TIMEOUT, future).await })
+            .is_err()
+        {
+            tracing::error!("sequential core effect timed out and was cancelled");
+            invalidate_db_connections();
+        }
     }
 }
 
@@ -477,19 +490,20 @@ async fn prepare_profile_for_storage(
         Some(key) => {
             let secret =
                 serde_json::to_vec(key).map_err(|error| EnvError::Serde(error.to_string()))?;
-            credential_store()
-                .put(
+            vault_bounded(
+                "vault put",
+                credential_store().put(
                     &reference,
                     credential_store::SecretKind::StremioAuth,
                     credential_store::SecretValue::new(secret),
-                )
-                .await
-                .map_err(|error| credential_error("store profile credential", error))?;
+                ),
+            )
+            .await
+            .map_err(|error| credential_error("store profile credential", error))?;
             *key = serde_json::Value::String(AUTH_VAULT_SENTINEL.to_owned());
             Ok(())
         }
-        None => credential_store()
-            .delete(&reference)
+        None => vault_bounded("vault delete", credential_store().delete(&reference))
             .await
             .map_err(|error| credential_error("delete profile credential", error)),
     }
@@ -505,8 +519,7 @@ async fn rehydrate_profile_from_vault(
     let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
     let reference = vault_reference(profile_id)?;
     if key.as_str() == Some(AUTH_VAULT_SENTINEL) {
-        let secret = credential_store()
-            .get(&reference)
+        let secret = vault_bounded("vault get", credential_store().get(&reference))
             .await
             .map_err(|error| credential_error("read profile credential", error))?;
         *key = serde_json::from_slice(secret.expose())
@@ -519,14 +532,16 @@ async fn rehydrate_profile_from_vault(
     let plaintext = key.clone();
     let secret =
         serde_json::to_vec(&plaintext).map_err(|error| EnvError::Serde(error.to_string()))?;
-    credential_store()
-        .put(
+    vault_bounded(
+        "vault migrate",
+        credential_store().put(
             &reference,
             credential_store::SecretKind::StremioAuth,
             credential_store::SecretValue::new(secret),
-        )
-        .await
-        .map_err(|error| credential_error("migrate profile credential", error))?;
+        ),
+    )
+    .await
+    .map_err(|error| credential_error("migrate profile credential", error))?;
     *key = serde_json::Value::String(AUTH_VAULT_SENTINEL.to_owned());
     let redacted =
         serde_json::to_string(raw).map_err(|error| EnvError::Serde(error.to_string()))?;
@@ -592,7 +607,63 @@ pub fn install_database(database: turso::Database) -> Result<(), DatabaseAlready
 /// and transactions cannot interleave with another task's work.
 pub(crate) struct DbConn {
     conn: Option<turso::Connection>,
+    epoch: u64,
+    since: Instant,
     _permit: OwnedSemaphorePermit,
+}
+
+/// Bumped whenever a database operation is cancelled by a timeout. A
+/// connection cancelled mid-statement may be left busy, so every connection
+/// leased before the bump is discarded instead of being pooled again.
+static DB_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Drops all pooled connections and prevents currently leased ones from being
+/// returned. Called after a timeout cancelled a database operation.
+pub(crate) fn invalidate_db_connections() {
+    DB_EPOCH.fetch_add(1, Ordering::AcqRel);
+    DB_POOL
+        .idle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+}
+
+const DB_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
+/// A connection leased for longer than this is reported on drop. It usually
+/// means a caller is holding it across a network or vault operation, which
+/// eventually exhausts the pool and stalls every database user.
+const DB_CONN_HOLD_WARN: Duration = Duration::from_secs(10);
+const STORAGE_OP_TIMEOUT: Duration = Duration::from_secs(15);
+const VAULT_OP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Bounds a storage operation so a wedged database or credential vault cannot
+/// stall a core effect forever.
+async fn bounded<T>(
+    operation: &'static str,
+    limit: Duration,
+    future: impl Future<Output = Result<T, EnvError>>,
+) -> Result<T, EnvError> {
+    match tokio::time::timeout(limit, future).await {
+        Ok(result) => result,
+        Err(_) => {
+            invalidate_db_connections();
+            tracing::error!(operation, "core storage operation timed out");
+            Err(EnvError::Other(format!("{operation} timed out")))
+        }
+    }
+}
+
+async fn vault_bounded<T>(
+    operation: &'static str,
+    future: impl Future<Output = Result<T, credential_store::CredentialError>>,
+) -> Result<T, credential_store::CredentialError> {
+    match tokio::time::timeout(VAULT_OP_TIMEOUT, future).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::error!(operation, "credential vault operation timed out");
+            Err(credential_store::CredentialError::Unavailable)
+        }
+    }
 }
 
 impl Deref for DbConn {
@@ -615,7 +686,17 @@ impl DerefMut for DbConn {
 
 impl Drop for DbConn {
     fn drop(&mut self) {
+        let held = self.since.elapsed();
+        if held >= DB_CONN_HOLD_WARN {
+            tracing::warn!(
+                held_ms = held.as_millis(),
+                "core database connection was held for too long"
+            );
+        }
         if let Some(conn) = self.conn.take() {
+            if self.epoch != DB_EPOCH.load(Ordering::Acquire) {
+                return;
+            }
             DB_POOL
                 .idle
                 .lock()
@@ -645,12 +726,26 @@ async fn create_db_connection() -> Result<turso::Connection, EnvError> {
 }
 
 pub(crate) async fn get_db_conn() -> Result<DbConn, EnvError> {
-    let permit = DB_POOL
-        .permits
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| EnvError::Other("core database pool is closed".to_owned()))?;
+    let started = Instant::now();
+    let permit = tokio::time::timeout(
+        DB_POOL_ACQUIRE_TIMEOUT,
+        DB_POOL.permits.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| {
+        tracing::error!("timed out waiting for a core database connection");
+        EnvError::Other("timed out waiting for a database connection".to_owned())
+    })?
+    .map_err(|_| EnvError::Other("core database pool is closed".to_owned()))?;
+    let waited = started.elapsed();
+    if waited >= DB_CONN_HOLD_WARN {
+        tracing::warn!(
+            waited_ms = waited.as_millis(),
+            idle = DB_POOL.idle.lock().map(|idle| idle.len()).unwrap_or(0),
+            "waited too long for a core database connection"
+        );
+    }
+    let epoch = DB_EPOCH.load(Ordering::Acquire);
     let pooled = DB_POOL
         .idle
         .lock()
@@ -662,8 +757,22 @@ pub(crate) async fn get_db_conn() -> Result<DbConn, EnvError> {
     };
     Ok(DbConn {
         conn: Some(conn),
+        epoch,
+        since: Instant::now(),
         _permit: permit,
     })
+}
+
+/// Returns `(available_pool_permits, idle_connections)`. Used by the stall
+/// diagnostics: zero available permits during a freeze means every database
+/// user is waiting for a connection that was never returned.
+pub fn db_pool_snapshot() -> (usize, usize) {
+    let idle = DB_POOL
+        .idle
+        .lock()
+        .map(|connections| connections.len())
+        .unwrap_or(0);
+    (DB_POOL.permits.available_permits(), idle)
 }
 
 fn read_database_slot<T: Clone>(slot: &RwLock<Option<T>>) -> Option<T> {
@@ -744,6 +853,12 @@ pub async fn maintain_http_cache() -> Result<(), EnvError> {
     http_cache::maintain().await.map_err(EnvError::Other)
 }
 
+/// Clears only the addon response cache, leaving images, settings and library
+/// untouched. Used by the Settings > Diagnostics action.
+pub async fn clear_http_cache() -> Result<(), EnvError> {
+    http_cache::clear_http_cache().await
+}
+
 impl Env for DesktopEnv {
     fn fetch<IN, OUT>(request: Request<IN>) -> TryEnvFuture<OUT>
     where
@@ -765,7 +880,7 @@ impl Env for DesktopEnv {
     ) -> TryEnvFuture<Option<T>> {
         let key = key.to_owned();
         let profile_id = active_profile_scope();
-        async move {
+        bounded("get_storage", STORAGE_OP_TIMEOUT, async move {
             let cached_value_str = if is_debounced_key(&key) {
                 let cache_key = (profile_id.clone(), key.clone());
                 let pending = pending_storage().lock().unwrap_or_else(|p| p.into_inner());
@@ -817,7 +932,7 @@ impl Env for DesktopEnv {
             serde_json::from_value(json)
                 .map(Some)
                 .map_err(|error| EnvError::Serde(error.to_string()))
-        }
+        })
         .boxed()
     }
 
@@ -831,12 +946,11 @@ impl Env for DesktopEnv {
             },
             None => None,
         };
-        async move {
+        bounded("set_storage", STORAGE_OP_TIMEOUT, async move {
             if key == PROFILE_STORAGE_KEY && value_json.is_none() {
                 let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
                 let reference = vault_reference(&profile_id)?;
-                credential_store()
-                    .delete(&reference)
+                vault_bounded("vault delete", credential_store().delete(&reference))
                     .await
                     .map_err(|error| credential_error("delete profile credential", error))?;
             }
@@ -891,7 +1005,7 @@ impl Env for DesktopEnv {
                 .map_err(|e| EnvError::StorageWriteError(e.to_string()))?;
             }
             Ok(())
-        }
+        })
         .boxed()
     }
 

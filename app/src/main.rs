@@ -313,6 +313,7 @@ async fn run_app(
                 .window()
                 .with_winit_window(|w| w.set_maximized(true));
         }
+        let tray_started = Instant::now();
         let tray = match tray::setup(&startup_ui, &startup_navigation) {
             Ok(tray) => Some(tray),
             Err(error) => {
@@ -320,6 +321,18 @@ async fn run_app(
                 None
             }
         };
+        let tray_elapsed = tray_started.elapsed();
+        if tray_elapsed > Duration::from_millis(250) {
+            tracing::warn!(
+                elapsed_ms = tray_elapsed.as_millis() as u64,
+                "system tray setup blocked the UI thread"
+            );
+        } else {
+            tracing::info!(
+                elapsed_ms = tray_elapsed.as_millis() as u64,
+                "system tray ready"
+            );
+        }
         let updater = updater::setup(&startup_ui, tray.as_ref(), installer_request);
         let failure_ui = startup_ui.as_weak();
         let result = finish_startup(
@@ -352,7 +365,7 @@ async fn run_app(
     let ui_result = tokio::task::block_in_place(slint::run_event_loop);
     // Last-resort guard: if any native teardown (libmpv, torrent session, DB)
     // wedges, the process still terminates instead of lingering invisibly.
-    spawn_exit_watchdog(Duration::from_secs(6));
+    spawn_exit_watchdog(Duration::from_secs(3));
     if let Some(reporter) = performance_reporter {
         reporter.abort();
     }
@@ -421,6 +434,7 @@ struct AppSession {
 
 impl AppSession {
     fn shutdown(mut self) -> anyhow::Result<()> {
+        let shutdown_started = Instant::now();
         // Stop the supervisor first so the watchdog cannot resurrect the server
         // while it is being torn down.
         self.server_task.abort();
@@ -431,6 +445,10 @@ impl AppSession {
         drop(self.tray.take());
         self.command_task.abort();
         self.download_ui_task.abort();
+        tracing::info!(
+            elapsed_ms = shutdown_started.elapsed().as_millis() as u64,
+            "shutdown stage: background tasks stopped"
+        );
         let playback_result = match self.native_playback.take() {
             Some(playback) => playback.shutdown(),
             None => Ok(()),
@@ -450,7 +468,7 @@ impl AppSession {
             std::thread::spawn(move || {
                 let _ = done_tx.send(handle.join());
             });
-            match tokio::task::block_in_place(|| done_rx.recv_timeout(Duration::from_secs(3))) {
+            match tokio::task::block_in_place(|| done_rx.recv_timeout(Duration::from_secs(2))) {
                 Ok(Ok(Some(source))) => tracing::info!(?source, "stremio-runtime stopped"),
                 Ok(Ok(None)) => tracing::info!("stremio-runtime stopped"),
                 Ok(Err(error)) => tracing::warn!(%error, "error joining stremio-runtime"),
@@ -461,13 +479,17 @@ impl AppSession {
         } else {
             self.server_task.abort();
         }
+        tracing::info!(
+            elapsed_ms = shutdown_started.elapsed().as_millis() as u64,
+            "shutdown stage: streaming server stopped"
+        );
 
         playback_result?;
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let _ = config::save_config_async(&config::load_config()).await;
                 if tokio::time::timeout(
-                    std::time::Duration::from_millis(2000),
+                    std::time::Duration::from_millis(1000),
                     db::close_and_checkpoint_db(),
                 )
                 .await
@@ -477,6 +499,10 @@ impl AppSession {
                 }
             });
         });
+        tracing::info!(
+            elapsed_ms = shutdown_started.elapsed().as_millis() as u64,
+            "shutdown complete"
+        );
         Ok(())
     }
 }
@@ -864,12 +890,17 @@ async fn finish_startup(
                     effective_url = url_str,
                     "streaming server readiness confirmed; synchronizing core model"
                 );
-                if let Ok(parsed_url) = url::Url::parse(url_str)
-                    && let Ok(model) = rt.model()
-                    && model.ctx.profile.settings.streaming_server_url != parsed_url
-                {
-                    let mut settings = model.ctx.profile.settings.clone();
-                    settings.streaming_server_url = parsed_url;
+                // Never dispatch while holding the model read guard: dispatch
+                // takes the write lock and would deadlock against ourselves.
+                let updated_settings = url::Url::parse(url_str).ok().and_then(|parsed_url| {
+                    let model = rt.model().ok()?;
+                    (model.ctx.profile.settings.streaming_server_url != parsed_url).then(|| {
+                        let mut settings = model.ctx.profile.settings.clone();
+                        settings.streaming_server_url = parsed_url;
+                        settings
+                    })
+                });
+                if let Some(settings) = updated_settings {
                     rt.dispatch(RuntimeAction {
                         field: Some(AppModelField::Ctx),
                         action: Action::Ctx(ActionCtx::UpdateSettings(settings)),
@@ -1100,6 +1131,8 @@ async fn finish_startup(
     };
 
     callbacks::trigger_initial_load(&runtime);
+    crate::models::board::start_stuck_catalog_watcher(runtime.clone());
+    crate::models::board::start_runtime_heartbeat();
     {
         // Diagnostic for the intermittent first-launch failure: if a remote
         // catalog fails once, stremio-core keeps the `Loadable::Err` for the
@@ -1831,6 +1864,22 @@ fn setup_operations(ui: &MainWindow, downloads: Arc<downloads::DownloadManager>)
                     Ok(path) => set_operations_status(
                         ui_weak,
                         format!("Redacted diagnostics created at {}", path.display()),
+                        false,
+                    ),
+                    Err(error) => set_operations_status(ui_weak, error.to_string(), false),
+                }
+            });
+        }
+    });
+    ui.on_operations_clear_cache({
+        let ui_weak = ui_weak.clone();
+        move || {
+            let ui_weak = ui_weak.clone();
+            tokio::spawn(async move {
+                match core_env::clear_http_cache().await {
+                    Ok(()) => set_operations_status(
+                        ui_weak,
+                        "Addon cache cleared. Catalogs will load fresh next time.".to_owned(),
                         false,
                     ),
                     Err(error) => set_operations_status(ui_weak, error.to_string(), false),

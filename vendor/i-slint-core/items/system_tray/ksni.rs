@@ -18,8 +18,16 @@ use ::ksni::blocking::TrayMethods;
 #[derive(Clone)]
 enum MenuNode {
     Separator,
-    SubMenu { label: std::string::String, enabled: bool, children: std::vec::Vec<MenuNode> },
-    Standard { label: std::string::String, enabled: bool, entry_index: usize },
+    SubMenu {
+        label: std::string::String,
+        enabled: bool,
+        children: std::vec::Vec<MenuNode>,
+    },
+    Standard {
+        label: std::string::String,
+        enabled: bool,
+        entry_index: usize,
+    },
 }
 
 enum Event {
@@ -66,7 +74,10 @@ impl ::ksni::Tray for KsniTray {
     // which is a plain-text field per the spec (the `description` slot is the
     // one that accepts HTML markup), so no escaping is applied.
     fn tool_tip(&self) -> ::ksni::ToolTip {
-        ::ksni::ToolTip { title: self.tooltip.clone(), ..Default::default() }
+        ::ksni::ToolTip {
+            title: self.tooltip.clone(),
+            ..Default::default()
+        }
     }
 
     // Slint's `title` is the descriptive name — it goes into SNI `Title`,
@@ -80,7 +91,10 @@ impl ::ksni::Tray for KsniTray {
     }
 
     fn menu(&self) -> std::vec::Vec<::ksni::MenuItem<KsniTray>> {
-        self.menu.iter().map(|n| node_to_ksni(n, &self.event_tx)).collect()
+        self.menu
+            .iter()
+            .map(|n| node_to_ksni(n, &self.event_tx))
+            .collect()
     }
 }
 
@@ -90,14 +104,22 @@ fn node_to_ksni(
 ) -> ::ksni::MenuItem<KsniTray> {
     match node {
         MenuNode::Separator => ::ksni::MenuItem::Separator,
-        MenuNode::SubMenu { label, enabled, children } => ::ksni::menu::SubMenu {
+        MenuNode::SubMenu {
+            label,
+            enabled,
+            children,
+        } => ::ksni::menu::SubMenu {
             label: label.clone(),
             enabled: *enabled,
             submenu: children.iter().map(|c| node_to_ksni(c, event_tx)).collect(),
             ..Default::default()
         }
         .into(),
-        MenuNode::Standard { label, enabled, entry_index } => {
+        MenuNode::Standard {
+            label,
+            enabled,
+            entry_index,
+        } => {
             let tx = event_tx.clone();
             let entry_index = *entry_index;
             ::ksni::menu::StandardItem {
@@ -213,7 +235,9 @@ impl PlatformTray {
         // If the conversion fails (image with no rgba8 buffer), keep the
         // previous icon. Mirrors the silent-failure behavior elsewhere on
         // this backend; the platform handle is best-effort.
-        let Ok(new_icon) = image_to_argb_icon(icon) else { return };
+        let Ok(new_icon) = image_to_argb_icon(icon) else {
+            return;
+        };
         *self.icon.borrow_mut() = new_icon.clone();
         if let Some(handle) = self.handle.borrow().as_ref() {
             handle.update(move |tray: &mut KsniTray| {
@@ -245,8 +269,7 @@ impl PlatformTray {
 
 const TRAY_ICON_NAME: &str = "stremio-oxide-tray";
 const TRAY_ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <path fill="#ffffff" fill-rule="evenodd" stroke="#000000" stroke-opacity="0.45"
-        stroke-width="1.5" stroke-linejoin="round" paint-order="stroke fill"
+  <path fill="#ffffff" fill-rule="evenodd"
         d="M10.6 2.4Q12 1 13.4 2.4L21.6 10.6Q23 12 21.6 13.4L13.4 21.6Q12 23 10.6 21.6L2.4 13.4Q1 12 2.4 10.6ZM9.5 8L16 12L9.5 16Z"/>
 </svg>
 "##;
@@ -294,7 +317,11 @@ fn image_to_argb_icon(image: &Image) -> Result<::ksni::Icon, Error> {
     for pixel in data.chunks_exact_mut(4) {
         pixel.rotate_right(1) // rgba to argb
     }
-    Ok(::ksni::Icon { width, height, data })
+    Ok(::ksni::Icon {
+        width,
+        height,
+        data,
+    })
 }
 
 fn spawn_tray(
@@ -304,7 +331,13 @@ fn spawn_tray(
     menu: std::vec::Vec<MenuNode>,
     event_tx: &async_channel::Sender<Event>,
 ) -> Result<::ksni::blocking::Handle<KsniTray>, Error> {
-    let tray = KsniTray { icon, tooltip, title, menu, event_tx: event_tx.clone() };
+    let tray = KsniTray {
+        icon,
+        tooltip,
+        title,
+        menu,
+        event_tx: event_tx.clone(),
+    };
     // Blocks briefly on D-Bus name claim / service setup, then spawns the
     // service loop on its own background thread. Returning the handle
     // synchronously eliminates the pending-menu race an async spawn would
@@ -318,14 +351,20 @@ fn spawn_tray(
 
 async fn dispatch_loop(rx: async_channel::Receiver<Event>, self_weak: crate::item_tree::ItemWeak) {
     while let Ok(event) = rx.recv().await {
-        let Some(item_rc) = self_weak.upgrade() else { continue };
-        let Some(tray) = item_rc.downcast::<super::SystemTrayIcon>() else { continue };
+        let Some(item_rc) = self_weak.upgrade() else {
+            continue;
+        };
+        let Some(tray) = item_rc.downcast::<super::SystemTrayIcon>() else {
+            continue;
+        };
         let tray = tray.as_pin_ref();
 
         match event {
             Event::Menu(entry_index) => {
                 let menu_borrow = tray.data.menu.borrow();
-                let Some(state) = menu_borrow.as_ref() else { continue };
+                let Some(state) = menu_borrow.as_ref() else {
+                    continue;
+                };
                 if let Some(entry) = state.entries.get(entry_index) {
                     vtable::VRc::borrow(&state.menu_vrc).activate(entry);
                 }
@@ -343,7 +382,9 @@ fn build_ksni_menu(
 ) -> std::vec::Vec<MenuNode> {
     let mut top = SharedVector::<MenuEntry>::default();
     menu.sub_menu(None, &mut top);
-    top.iter().map(|entry| entry_to_node(menu, entry, 0, entries_out)).collect()
+    top.iter()
+        .map(|entry| entry_to_node(menu, entry, 0, entries_out))
+        .collect()
 }
 
 fn entry_to_node(

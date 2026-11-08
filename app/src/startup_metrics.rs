@@ -81,7 +81,9 @@ impl StartupMetrics {
             return;
         }
         // Only print once both server and first sync have occurred, or on drop
-        if let (Some(server_ready), Some(first_sync)) = (self.t_server_ready.get(), self.t_first_sync.get()) {
+        if let (Some(server_ready), Some(first_sync)) =
+            (self.t_server_ready.get(), self.t_first_sync.get())
+        {
             static REPORT_PRINTED: OnceLock<()> = OnceLock::new();
             if REPORT_PRINTED.set(()).is_ok() {
                 let ms = |instant: &Instant| instant.duration_since(self.t_start).as_millis();

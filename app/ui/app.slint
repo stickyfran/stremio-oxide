@@ -406,6 +406,7 @@ export component MainWindow inherits Window {
     in-out property <[BoardSection]> board-sections: [];
     in-out property <bool> board-show-server-warning: false;
     in-out property <bool> board-has-errors: false;
+    in-out property <bool> board-offline: false;
     in-out property <bool> board-loading: true;
     in-out property <[BoardSection]> search-sections: [];
     in-out property <[SearchSuggestion]> search-suggestions: [];
@@ -1174,6 +1175,7 @@ export component MainWindow inherits Window {
     callback operations-preview-restore(string, string);
     callback operations-apply-restore(string, string);
     callback operations-create-diagnostics(string);
+    callback operations-clear-cache;
     callback operations-run-speed-test(string);
     callback operations-save-network(string, string);
     callback operations-apply-layout(string);
@@ -1739,6 +1741,7 @@ export component MainWindow inherits Window {
                             : root.board-loading;
                         show-server-warning: root.board-show-server-warning;
                         has-errors: root.board-has-errors;
+                        offline: root.board-offline;
                         retry => { board-retry(); }
                         item-selected(id, media-type, video-id) => {
                             board-item-selected(id, media-type, video-id);
@@ -2156,6 +2159,7 @@ export component MainWindow inherits Window {
                         operations-preview-restore(path, pass) => { root.operations-preview-restore(path, pass); }
                         operations-apply-restore(path, pass) => { root.operations-apply-restore(path, pass); }
                         operations-create-diagnostics(path) => { root.operations-create-diagnostics(path); }
+                        operations-clear-cache => { root.operations-clear-cache(); }
                         operations-run-speed-test(url) => { root.operations-run-speed-test(url); }
                         operations-save-network(reg, bw) => { root.operations-save-network(reg, bw); }
                         operations-apply-layout(preset) => { root.operations-apply-layout(preset); }
@@ -2824,6 +2828,7 @@ export component MainWindow inherits Window {
             preview-restore(path, passphrase) => { root.operations-preview-restore(path, passphrase); }
             apply-restore(path, passphrase) => { root.operations-apply-restore(path, passphrase); }
             create-diagnostics(path) => { root.operations-create-diagnostics(path); }
+            clear-http-cache => { root.operations-clear-cache(); }
             run-speed-test(endpoint) => { root.operations-run-speed-test(endpoint); }
             save-network(region, bandwidth) => { root.operations-save-network(region, bandwidth); }
             apply-layout(preset) => { root.operations-apply-layout(preset); }

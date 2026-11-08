@@ -297,7 +297,9 @@ impl PlaybackSelections {
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .get(&stream_selection_id(resource_index, stream_index))
                         .copied()
-                        .or_else(|| stream_ranking::parse_debrid_availability_from_text(&description))
+                        .or_else(|| {
+                            stream_ranking::parse_debrid_availability_from_text(&description)
+                        })
                         .or_else(|| stream_ranking::parse_debrid_availability_from_text(&name)),
                 });
             }
@@ -501,7 +503,10 @@ impl PlaybackSelections {
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(pinned) = pinned.as_ref() {
-                return Some((pinned.selection.selected.clone(), pinned.selection.stream_name.clone()));
+                return Some((
+                    pinned.selection.selected.clone(),
+                    pinned.selection.stream_name.clone(),
+                ));
             }
         }
         None

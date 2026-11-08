@@ -343,11 +343,17 @@ pub fn setup(
                             .find(|item| item.id == id)
                         {
                             ui.set_discover_preview_title(item.name.as_str().into());
-                            ui.set_discover_preview_description(item.description.as_deref().unwrap_or_default().into());
-                            ui.set_discover_preview_year(item.release_info.as_deref().unwrap_or_default().into());
+                            ui.set_discover_preview_description(
+                                item.description.as_deref().unwrap_or_default().into(),
+                            );
+                            ui.set_discover_preview_year(
+                                item.release_info.as_deref().unwrap_or_default().into(),
+                            );
                             if let Some(poster) = item.poster.as_ref() {
                                 ui.set_discover_preview_poster_url(poster.as_str().into());
-                                ui.set_discover_preview_poster(crate::image_cache::get_poster_image(&item.poster, &ui_weak));
+                                ui.set_discover_preview_poster(
+                                    crate::image_cache::get_poster_image(&item.poster, &ui_weak),
+                                );
                             }
                         }
                     }
@@ -682,15 +688,16 @@ pub fn sync(
         let _span = tracing::info_span!("chunk_discover_rows").entered();
         let chunked = crate::models::chunk_vector_owned(visible_items, columns);
         let existing = ui.get_discover_rows();
-        if let Some(vec_model) = existing.as_any().downcast_ref::<slint::VecModel<DiscoverRow>>() {
+        if let Some(vec_model) = existing
+            .as_any()
+            .downcast_ref::<slint::VecModel<DiscoverRow>>()
+        {
             let existing_len = vec_model.row_count();
             let common_len = existing_len.min(chunked.len());
             for (index, row_items) in chunked.iter().take(common_len).enumerate() {
-                let updated_in_place = vec_model
-                    .row_data(index)
-                    .is_some_and(|existing_row| {
-                        crate::models::update_media_card_cols_in_place(&existing_row.cols, row_items)
-                    });
+                let updated_in_place = vec_model.row_data(index).is_some_and(|existing_row| {
+                    crate::models::update_media_card_cols_in_place(&existing_row.cols, row_items)
+                });
                 if !updated_in_place {
                     vec_model.set_row_data(
                         index,
@@ -738,7 +745,10 @@ pub fn sync(
             ui.set_discover_preview_title(first_item.name.as_str().into());
             if let Some(poster) = first_item.poster.as_ref() {
                 ui.set_discover_preview_poster_url(poster.as_str().into());
-                ui.set_discover_preview_poster(crate::image_cache::get_poster_image(&first_item.poster, &ui_weak));
+                ui.set_discover_preview_poster(crate::image_cache::get_poster_image(
+                    &first_item.poster,
+                    &ui_weak,
+                ));
             }
             ui.set_discover_preview_description("".into());
             ui.set_discover_preview_ratings_loading(true);

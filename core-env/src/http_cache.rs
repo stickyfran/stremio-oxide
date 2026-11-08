@@ -1,9 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::IpAddr,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -29,7 +29,11 @@ const STREAM_MAX_ENTRIES: usize = 64;
 const STREAM_MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CONCURRENT_REVALIDATIONS: usize = 2;
 
-static REVALIDATING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+/// Cache keys (precomputed hashes) that currently have a revalidation in
+/// flight. Entries are leases: a cancelled task can never leave a key marked
+/// forever and, crucially, no runtime worker ever blocks on this registry.
+static REVALIDATING: OnceLock<Mutex<HashMap<u64, Instant>>> = OnceLock::new();
+const REVALIDATION_LEASE: Duration = Duration::from_secs(120);
 static REVALIDATION_LIMITER: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 static MISS_LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     OnceLock::new();
@@ -52,16 +56,117 @@ struct CacheMetrics {
     revalidate_200: AtomicU64,
     network_error: AtomicU64,
     stale_served_on_error: AtomicU64,
+    stale_catalog: AtomicU64,
+    stale_addon_catalog: AtomicU64,
+    stale_meta: AtomicU64,
+    stale_stream: AtomicU64,
     singleflight_joined: AtomicU64,
     stream_hit: AtomicU64,
     response_bytes: AtomicU64,
     slow_reads: AtomicU64,
+    db_timeouts: AtomicU64,
 }
 
 static METRICS: OnceLock<CacheMetrics> = OnceLock::new();
 
 fn metrics() -> &'static CacheMetrics {
     METRICS.get_or_init(CacheMetrics::default)
+}
+
+fn record_stale_served(kind: ResourceKind) {
+    let metric = match kind {
+        ResourceKind::Catalog | ResourceKind::LegacyCatalog => &metrics().stale_catalog,
+        ResourceKind::AddonCatalog | ResourceKind::Manifest => &metrics().stale_addon_catalog,
+        ResourceKind::Meta | ResourceKind::LegacyMeta => &metrics().stale_meta,
+        ResourceKind::Stream => &metrics().stale_stream,
+    };
+    metric.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Process-wide view of transport health. It is updated by real requests, so
+/// the UI can distinguish "the addon answered with empty content" from "the
+/// machine has no usable network" without issuing probes on every frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ConnectivitySnapshot {
+    pub consecutive_failures: u32,
+    pub seconds_since_last_response: Option<u64>,
+}
+
+static CONSECUTIVE_NETWORK_FAILURES: AtomicU32 = AtomicU32::new(0);
+static LAST_NETWORK_RESPONSE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+fn note_network_response() {
+    CONSECUTIVE_NETWORK_FAILURES.store(0, Ordering::Release);
+    let Some(mut slot) = try_lock_no_block(LAST_NETWORK_RESPONSE.get_or_init(|| Mutex::new(None)))
+    else {
+        // Timestamp bookkeeping is best effort; never stall the caller for it.
+        return;
+    };
+    *slot = Some(Instant::now());
+}
+
+fn note_network_failure() {
+    CONSECUTIVE_NETWORK_FAILURES.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Transport-level failures observed in this process since the last response.
+/// HTTP error statuses count as a response: the network itself is reachable.
+pub fn connectivity_snapshot() -> ConnectivitySnapshot {
+    let seconds_since_last_response = LAST_NETWORK_RESPONSE
+        .get()
+        .and_then(|slot| try_lock_no_block(slot).and_then(|slot| *slot))
+        .map(|instant| instant.elapsed().as_secs());
+    ConnectivitySnapshot {
+        consecutive_failures: CONSECUTIVE_NETWORK_FAILURES.load(Ordering::Acquire),
+        seconds_since_last_response,
+    }
+}
+
+/// Bounded connectivity probe used when addon rows are failing. It deliberately
+/// bypasses the HTTP cache and treats any HTTP response as "network is back".
+pub async fn probe_connectivity(url: &str, timeout: Duration) -> bool {
+    let Ok(url) = url::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let Ok(client) = reqwest::Client::builder().timeout(timeout).build() else {
+        return false;
+    };
+    match client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+        .await
+    {
+        Ok(_) => {
+            note_network_response();
+            true
+        }
+        Err(_) => {
+            note_network_failure();
+            false
+        }
+    }
+}
+
+/// Removes only the addon response cache. Settings, the library, images and the
+/// session stream cache (signed URLs) are handled separately or untouched.
+pub async fn clear_http_cache() -> Result<(), EnvError> {
+    let conn = get_db_conn().await?;
+    conn.execute("DELETE FROM http_cache", ())
+        .await
+        .map_err(|error| EnvError::Other(error.to_string()))?;
+    drop(conn);
+    if let Some(cache) = STREAM_CACHE.get()
+        && let Some(mut cache) = try_lock_no_block(cache)
+    {
+        cache.clear();
+        STREAM_CACHE_BYTES.store(0, Ordering::Relaxed);
+    }
+    tracing::info!("addon HTTP cache cleared manually");
+    Ok(())
 }
 
 /// Emits one aggregate line after startup so benchmarks have a stable summary
@@ -104,10 +209,10 @@ fn describe_request_failure(request: &CacheRequest, error: &str) -> RequestFailu
 }
 
 fn record_request_failure(request: &CacheRequest, error: &str) {
-    let mut slot = FIRST_REQUEST_FAILURE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(mut slot) = try_lock_no_block(FIRST_REQUEST_FAILURE.get_or_init(|| Mutex::new(None)))
+    else {
+        return;
+    };
     if slot.is_some() {
         return;
     }
@@ -122,11 +227,9 @@ fn record_request_failure(request: &CacheRequest, error: &str) {
 }
 
 fn first_request_failure() -> Option<RequestFailure> {
-    FIRST_REQUEST_FAILURE.get().and_then(|slot| {
-        slot.lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    })
+    FIRST_REQUEST_FAILURE
+        .get()
+        .and_then(|slot| try_lock_no_block(slot).and_then(|slot| slot.clone()))
 }
 
 pub(crate) fn log_metrics_summary(label: &str) {
@@ -142,10 +245,15 @@ pub(crate) fn log_metrics_summary(label: &str) {
         revalidate_200 = metrics.revalidate_200.load(Ordering::Relaxed),
         network_error = metrics.network_error.load(Ordering::Relaxed),
         stale_served_on_error = metrics.stale_served_on_error.load(Ordering::Relaxed),
+        stale_catalog = metrics.stale_catalog.load(Ordering::Relaxed),
+        stale_addon_catalog = metrics.stale_addon_catalog.load(Ordering::Relaxed),
+        stale_meta = metrics.stale_meta.load(Ordering::Relaxed),
+        stale_stream = metrics.stale_stream.load(Ordering::Relaxed),
         singleflight_joined = metrics.singleflight_joined.load(Ordering::Relaxed),
         stream_hit = metrics.stream_hit.load(Ordering::Relaxed),
         response_bytes = metrics.response_bytes.load(Ordering::Relaxed),
         slow_reads = metrics.slow_reads.load(Ordering::Relaxed),
+        db_timeouts = metrics.db_timeouts.load(Ordering::Relaxed),
         first_failure_host = failure.as_ref().map(|f| f.host.as_str()).unwrap_or(""),
         first_failure_kind = failure.as_ref().map(|f| f.resource_kind).unwrap_or(""),
         first_failure_error = failure.as_ref().map(|f| f.error.as_str()).unwrap_or(""),
@@ -155,6 +263,18 @@ pub(crate) fn log_metrics_summary(label: &str) {
 
 fn pending_access_touches() -> &'static Mutex<HashMap<String, i64>> {
     PENDING_ACCESS_TOUCHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Never block a thread on an internal bookkeeping lock. All the structures
+/// guarded by `try_lock_no_block` are caches/registries: skipping an update
+/// when another task holds the lock is always safe, while blocking a Tokio
+/// worker on a `std::sync::Mutex` can freeze the entire async runtime.
+fn try_lock_no_block<T>(mutex: &Mutex<T>) -> Option<std::sync::MutexGuard<'_, T>> {
+    match mutex.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -294,10 +414,28 @@ struct NetworkResponse {
     vary_star: bool,
 }
 
+/// Hard upper bound for a whole cached fetch (DB read, singleflight wait,
+/// network, DB write). Guarantees a caller can never stay pending forever.
+const FETCH_HARD_TIMEOUT: Duration = Duration::from_secs(25);
+
 pub(crate) async fn fetch<OUT>(
     request: CacheRequest,
     client: reqwest::Client,
 ) -> Result<OUT, EnvError>
+where
+    for<'de> OUT: Deserialize<'de> + Send + 'static,
+{
+    let url = sanitized_url_for_log(&request.url);
+    match tokio::time::timeout(FETCH_HARD_TIMEOUT, fetch_inner::<OUT>(request, client)).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::error!(%url, "HTTP fetch exceeded hard timeout; aborting it");
+            Err(EnvError::Fetch("request timed out".to_owned()))
+        }
+    }
+}
+
+async fn fetch_inner<OUT>(request: CacheRequest, client: reqwest::Client) -> Result<OUT, EnvError>
 where
     for<'de> OUT: Deserialize<'de> + Send + 'static,
 {
@@ -326,6 +464,11 @@ where
                 match serde_json::from_slice::<OUT>(&entry.body) {
                     Ok(value) => {
                         metrics().hit_fresh.fetch_add(1, Ordering::Relaxed);
+                        tracing::info!(
+                            cache_key = %request.cache_key,
+                            kind = ?request.resource_kind,
+                            "HTTP cache fresh hit"
+                        );
                         schedule_access_touch(request.cache_key.clone(), now);
                         if entry.should_revalidate(now, request.resource_kind) {
                             schedule_revalidation::<OUT>(request, entry, client);
@@ -371,6 +514,12 @@ where
             && let Ok(value) = serde_json::from_slice::<OUT>(&entry.body)
         {
             metrics().hit_fresh.fetch_add(1, Ordering::Relaxed);
+            tracing::info!(
+                cache_key = %request.cache_key,
+                kind = ?request.resource_kind,
+                joined,
+                "HTTP cache fresh hit after joining singleflight"
+            );
             schedule_access_touch(request.cache_key.clone(), now);
             if entry.should_revalidate(now, request.resource_kind) {
                 schedule_revalidation::<OUT>(request, entry, client);
@@ -380,11 +529,23 @@ where
     }
 
     metrics().miss.fetch_add(1, Ordering::Relaxed);
+    tracing::info!(
+        cache_key = %request.cache_key,
+        kind = ?request.resource_kind,
+        joined,
+        "HTTP cache miss; fetching from network"
+    );
     let generation = begin_foreground_generation(&request.cache_key);
     let response = match send_request_with_retry(&client, &request, None).await {
         Ok(response) => response,
         Err(error) => {
             metrics().network_error.fetch_add(1, Ordering::Relaxed);
+            tracing::info!(
+                cache_key = %request.cache_key,
+                kind = ?request.resource_kind,
+                %error,
+                "HTTP network fetch failed"
+            );
             if let Some(value) = stale_entry
                 .as_ref()
                 .and_then(|entry| stale_value::<OUT>(entry))
@@ -392,6 +553,7 @@ where
                 metrics()
                     .stale_served_on_error
                     .fetch_add(1, Ordering::Relaxed);
+                record_stale_served(request.resource_kind);
                 metrics().hit_stale.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!(
                     url = %sanitized_url_for_log(&request.url),
@@ -415,6 +577,7 @@ where
                 metrics()
                     .stale_served_on_error
                     .fetch_add(1, Ordering::Relaxed);
+                record_stale_served(request.resource_kind);
                 tracing::debug!(
                     url = %sanitized_url_for_log(&request.url),
                     %error,
@@ -508,9 +671,7 @@ fn stream_cache() -> &'static Mutex<HashMap<String, StreamEntry>> {
 }
 
 fn read_stream_entry(cache_key: &str) -> Option<Vec<u8>> {
-    let mut cache = stream_cache()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut cache = try_lock_no_block(stream_cache())?;
     let expired = cache
         .get(cache_key)
         .is_some_and(|entry| entry.stored_at.elapsed() > STREAM_TTL);
@@ -524,9 +685,9 @@ fn read_stream_entry(cache_key: &str) -> Option<Vec<u8>> {
 }
 
 fn remove_stream_entry(cache_key: &str) {
-    let mut cache = stream_cache()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut cache) = try_lock_no_block(stream_cache()) else {
+        return;
+    };
     if let Some(entry) = cache.remove(cache_key) {
         STREAM_CACHE_BYTES.fetch_sub(entry.body.len(), Ordering::Relaxed);
     }
@@ -536,9 +697,9 @@ fn write_stream_entry(cache_key: String, body: Vec<u8>) {
     if body.len() > STREAM_MAX_BYTES {
         return;
     }
-    let mut cache = stream_cache()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut cache) = try_lock_no_block(stream_cache()) else {
+        return;
+    };
     if let Some(previous) = cache.remove(&cache_key) {
         STREAM_CACHE_BYTES.fetch_sub(previous.body.len(), Ordering::Relaxed);
     }
@@ -578,38 +739,56 @@ where
 }
 
 struct MissLock {
-    cache_key: String,
+    cache_key: Option<String>,
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Drop for MissLock {
     fn drop(&mut self) {
+        let Some(cache_key) = self.cache_key.as_deref() else {
+            return;
+        };
         let Some(locks) = MISS_LOCKS.get() else {
             return;
         };
-        let mut locks = locks
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut locks = match try_lock_no_block(locks) {
+            Some(locks) => locks,
+            None => {
+                // Cleanup is opportunistic: leaving the entry behind only
+                // means a later request reuses the same singleflight lock.
+                tracing::debug!(cache_key, "miss lock registry busy while cleaning up");
+                return;
+            }
+        };
         if Arc::strong_count(&self.lock) == 2 {
-            locks.remove(&self.cache_key);
+            locks.remove(cache_key);
         }
     }
 }
 
 fn miss_lock(cache_key: &str) -> MissLock {
     let locks = MISS_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
-    let mut locks = locks
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut locks) = try_lock_no_block(locks) else {
+        // Never block a runtime worker behind the singleflight registry. The
+        // request proceeds with a private lock instead of joining other
+        // requests for the same key.
+        tracing::debug!(cache_key, "miss lock registry busy; bypassing singleflight");
+        return MissLock {
+            cache_key: None,
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+        };
+    };
     let lock = locks
         .entry(cache_key.to_owned())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone();
     MissLock {
-        cache_key: cache_key.to_owned(),
+        cache_key: Some(cache_key.to_owned()),
         lock,
     }
 }
+
+const BYPASSED_GENERATION: u64 = u64::MAX;
 
 #[derive(Clone, Default)]
 struct CacheGeneration {
@@ -617,11 +796,16 @@ struct CacheGeneration {
     foreground: u64,
 }
 
+fn try_lock_generations<'a>() -> Option<std::sync::MutexGuard<'a, HashMap<String, CacheGeneration>>>
+{
+    let generations = CACHE_GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()));
+    try_lock_no_block(generations)
+}
+
 fn begin_foreground_generation(cache_key: &str) -> u64 {
-    let mut generations = CACHE_GENERATIONS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut generations) = try_lock_generations() else {
+        return BYPASSED_GENERATION;
+    };
     let generation = generations.entry(cache_key.to_owned()).or_default();
     generation.sequence = generation.sequence.wrapping_add(1);
     generation.foreground = generation.foreground.wrapping_add(1);
@@ -629,33 +813,40 @@ fn begin_foreground_generation(cache_key: &str) -> u64 {
 }
 
 fn begin_revalidation_generation(cache_key: &str) -> u64 {
-    let mut generations = CACHE_GENERATIONS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut generations) = try_lock_generations() else {
+        return BYPASSED_GENERATION;
+    };
     let generation = generations.entry(cache_key.to_owned()).or_default();
     generation.sequence = generation.sequence.wrapping_add(1);
     generation.sequence
 }
 
 fn foreground_generation_is_current(cache_key: &str, foreground: u64) -> bool {
+    if foreground == BYPASSED_GENERATION {
+        return true;
+    }
     let Some(generations) = CACHE_GENERATIONS.get() else {
         return true;
     };
+    let Some(generations) = try_lock_no_block(generations) else {
+        return true;
+    };
     generations
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(cache_key)
         .is_none_or(|generation| generation.foreground == foreground)
 }
 
 fn revalidation_generation_is_current(cache_key: &str, sequence: u64) -> bool {
+    if sequence == BYPASSED_GENERATION {
+        return true;
+    }
     let Some(generations) = CACHE_GENERATIONS.get() else {
         return true;
     };
+    let Some(generations) = try_lock_no_block(generations) else {
+        return true;
+    };
     generations
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(cache_key)
         .is_none_or(|generation| generation.sequence == sequence)
 }
@@ -680,10 +871,11 @@ fn host_is_backing_off(url: &str) -> bool {
     let Some(host) = host_key(url) else {
         return false;
     };
-    HOST_BACKOFF
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    let Some(backoffs) = try_lock_no_block(HOST_BACKOFF.get_or_init(|| Mutex::new(HashMap::new())))
+    else {
+        return false;
+    };
+    backoffs
         .get(&host)
         .is_some_and(|backoff| Instant::now() < backoff.retry_at)
 }
@@ -692,21 +884,22 @@ fn record_host_success(url: &str) {
     let Some(host) = host_key(url) else {
         return;
     };
-    HOST_BACKOFF
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&host);
+    if let Some(mut backoffs) =
+        try_lock_no_block(HOST_BACKOFF.get_or_init(|| Mutex::new(HashMap::new())))
+    {
+        backoffs.remove(&host);
+    }
 }
 
 fn record_host_failure(url: &str) {
     let Some(host) = host_key(url) else {
         return;
     };
-    let mut backoffs = HOST_BACKOFF
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut backoffs) =
+        try_lock_no_block(HOST_BACKOFF.get_or_init(|| Mutex::new(HashMap::new())))
+    else {
+        return;
+    };
     let failure = backoffs.entry(host).or_insert(HostBackoff {
         failures: 0,
         retry_at: Instant::now(),
@@ -722,7 +915,7 @@ fn schedule_revalidation<OUT>(request: CacheRequest, entry: HttpCacheEntry, clie
 where
     for<'de> OUT: Deserialize<'de> + Send + 'static,
 {
-    let Some(guard) = RevalidationGuard::acquire(request.cache_key.clone()) else {
+    let Some(guard) = RevalidationGuard::acquire(&request.cache_key) else {
         return;
     };
     metrics()
@@ -916,11 +1109,18 @@ async fn send_request(
 
     tracing::debug!(method = "GET", url = %log_url, "Sending Core API request");
     let start = std::time::Instant::now();
-    let response = builder.send().await.map_err(|error| {
-        let error = error.without_url();
-        tracing::error!(url = %log_url, error = %error, "Core API request failed");
-        EnvError::Fetch(error.to_string())
-    })?;
+    let response = match builder.send().await {
+        Ok(response) => {
+            note_network_response();
+            response
+        }
+        Err(error) => {
+            note_network_failure();
+            let error = error.without_url();
+            tracing::error!(url = %log_url, error = %error, "Core API request failed");
+            return Err(EnvError::Fetch(error.to_string()));
+        }
+    };
     let elapsed = start.elapsed().as_millis();
     let status = response.status();
     if elapsed > 300 {
@@ -983,7 +1183,35 @@ fn directive_present(value: &str, directive: &str) -> bool {
         .any(|part| part == directive)
 }
 
+const CACHE_DB_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// A cache read must never keep a catalogue row in `Loading` forever. If the
+/// local database is slow or wedged we abandon the lookup and fetch from the
+/// network instead; the request itself is unaffected.
+async fn with_db_timeout<T>(
+    operation: &'static str,
+    future: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(CACHE_DB_TIMEOUT, future).await {
+        Ok(result) => result,
+        Err(_) => {
+            metrics().db_timeouts.fetch_add(1, Ordering::Relaxed);
+            // The cancelled statement may have left its connection busy.
+            crate::invalidate_db_connections();
+            tracing::warn!(
+                operation,
+                "HTTP cache database operation timed out; continuing without the cache"
+            );
+            Err(format!("HTTP cache database timeout during {operation}"))
+        }
+    }
+}
+
 async fn read_entry(cache_key: &str) -> Result<Option<HttpCacheEntry>, String> {
+    with_db_timeout("read", read_entry_inner(cache_key)).await
+}
+
+async fn read_entry_inner(cache_key: &str) -> Result<Option<HttpCacheEntry>, String> {
     let conn = get_db_conn().await.map_err(|error| error.to_string())?;
     let mut rows = conn
         .query(
@@ -1014,6 +1242,14 @@ async fn read_entry(cache_key: &str) -> Result<Option<HttpCacheEntry>, String> {
 }
 
 async fn write_response(
+    request: &CacheRequest,
+    response: NetworkResponse,
+    now: i64,
+) -> Result<(), String> {
+    with_db_timeout("write", write_response_inner(request, response, now)).await
+}
+
+async fn write_response_inner(
     request: &CacheRequest,
     response: NetworkResponse,
     now: i64,
@@ -1064,9 +1300,11 @@ async fn write_response(
 }
 
 fn schedule_access_touch(cache_key: String, now: i64) {
-    let mut pending = pending_access_touches()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(mut pending) = try_lock_no_block(pending_access_touches()) else {
+        // Access timestamps are advisory; skipping one is harmless.
+        tracing::debug!(cache_key = %cache_key, "access touch registry busy; skipping touch");
+        return;
+    };
     pending.insert(cache_key, now);
     if pending.len() >= 64 {
         drop(pending);
@@ -1089,17 +1327,25 @@ fn schedule_access_touch(cache_key: String, now: i64) {
 
 /// Writes the coalesced `accessed_at` updates in a single burst.
 pub(crate) async fn flush_access_touches() {
+    if let Err(error) = with_db_timeout("flush_access_touches", flush_access_touches_inner()).await
+    {
+        tracing::debug!(%error, "HTTP cache access timestamp flush skipped");
+    }
+}
+
+async fn flush_access_touches_inner() -> Result<(), String> {
     let touches: Vec<(String, i64)> = {
-        let mut pending = pending_access_touches()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(mut pending) = try_lock_no_block(pending_access_touches()) else {
+            return Ok(());
+        };
         pending.drain().collect()
     };
     if touches.is_empty() {
-        return;
+        return Ok(());
     }
-    let Ok(conn) = get_db_conn().await else {
-        return;
+    let conn = match get_db_conn().await {
+        Ok(conn) => conn,
+        Err(error) => return Err(error.to_string()),
     };
     for (cache_key, now) in touches {
         let min_timestamp = now - 300;
@@ -1113,9 +1359,14 @@ pub(crate) async fn flush_access_touches() {
             tracing::debug!(%error, "HTTP cache access timestamp update failed");
         }
     }
+    Ok(())
 }
 
 async fn delete_entry(cache_key: &str) -> Result<(), String> {
+    with_db_timeout("delete", delete_entry_inner(cache_key)).await
+}
+
+async fn delete_entry_inner(cache_key: &str) -> Result<(), String> {
     let conn = get_db_conn().await.map_err(|error| error.to_string())?;
     conn.execute("DELETE FROM http_cache WHERE cache_key = ?", [cache_key])
         .await
@@ -1124,6 +1375,20 @@ async fn delete_entry(cache_key: &str) -> Result<(), String> {
 }
 
 async fn mark_validated(
+    cache_key: &str,
+    validated_at: i64,
+    accessed_at: i64,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+) -> Result<(), String> {
+    with_db_timeout(
+        "mark_validated",
+        mark_validated_inner(cache_key, validated_at, accessed_at, etag, last_modified),
+    )
+    .await
+}
+
+async fn mark_validated_inner(
     cache_key: &str,
     validated_at: i64,
     accessed_at: i64,
@@ -1155,6 +1420,10 @@ async fn mark_validated(
 }
 
 pub(crate) async fn maintain() -> Result<(), String> {
+    with_db_timeout("maintain", maintain_inner()).await
+}
+
+async fn maintain_inner() -> Result<(), String> {
     let mut conn = get_db_conn().await.map_err(|error| error.to_string())?;
     let cutoff = chrono::Utc::now().timestamp() - MAX_AGE_SECONDS;
     conn.execute(
@@ -1282,31 +1551,37 @@ fn classify_legacy(url: &url::Url) -> Option<ResourceKind> {
     }
 }
 
-struct RevalidationGuard {
-    cache_key: String,
+struct RevalidationGuard;
+
+fn cache_key_hash(cache_key: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    cache_key.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl RevalidationGuard {
-    fn acquire(cache_key: String) -> Option<Self> {
-        let revalidating = REVALIDATING.get_or_init(|| Mutex::new(HashSet::new()));
-        let mut revalidating = revalidating
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        revalidating
-            .insert(cache_key.clone())
-            .then_some(Self { cache_key })
-    }
-}
-
-impl Drop for RevalidationGuard {
-    fn drop(&mut self) {
-        let Some(revalidating) = REVALIDATING.get() else {
-            return;
+    fn acquire(cache_key: &str) -> Option<Self> {
+        let hash = cache_key_hash(cache_key);
+        let revalidating = REVALIDATING.get_or_init(|| Mutex::new(HashMap::new()));
+        // Never block a runtime worker on this registry. If another task holds
+        // the lock we simply skip scheduling; the next cache hit retries.
+        let mut revalidating = match try_lock_no_block(revalidating) {
+            Some(revalidating) => revalidating,
+            None => {
+                tracing::debug!("revalidation registry busy; skipping revalidation");
+                return None;
+            }
         };
-        revalidating
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.cache_key);
+        let now = Instant::now();
+        if revalidating.get(&hash).is_some_and(|expiry| *expiry > now) {
+            return None;
+        }
+        if revalidating.len() >= 1024 {
+            revalidating.retain(|_, expiry| *expiry > now);
+        }
+        revalidating.insert(hash, now + REVALIDATION_LEASE);
+        Some(Self)
     }
 }
 

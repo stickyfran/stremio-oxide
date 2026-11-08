@@ -124,7 +124,9 @@ pub trait ServerConnector: Send + Sync + 'static {
 
 #[cfg(feature = "in-process")]
 fn in_process_router() -> Result<axum::Router> {
-    Err(anyhow::anyhow!("in-process router disabled; use HTTP loopback"))
+    Err(anyhow::anyhow!(
+        "in-process router disabled; use HTTP loopback"
+    ))
 }
 
 pub struct AppServerConnector {

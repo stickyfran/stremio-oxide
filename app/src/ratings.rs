@@ -51,10 +51,7 @@ pub fn clear_current_media() {
     {
         id.clear();
     }
-    if let Ok(mut guard) = DETAIL_ABORT_HANDLE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-    {
+    if let Ok(mut guard) = DETAIL_ABORT_HANDLE.get_or_init(|| Mutex::new(None)).lock() {
         if let Some(prev) = guard.take() {
             prev.abort();
         }
@@ -68,10 +65,7 @@ pub fn clear_current_preview_media() {
     {
         id.clear();
     }
-    if let Ok(mut guard) = PREVIEW_ABORT_HANDLE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-    {
+    if let Ok(mut guard) = PREVIEW_ABORT_HANDLE.get_or_init(|| Mutex::new(None)).lock() {
         if let Some(prev) = guard.take() {
             prev.abort();
         }
