@@ -1289,6 +1289,45 @@ pub fn sync(
         }
 
         if id_changed || route_opened {
+            // Details embeds the same trailer preview surface used by the
+            // discover/library drawer. Start it here so the inline mini-player
+            // shows real video frames instead of a static button.
+            if let Some(preview_player) = crate::preview_player::global() {
+                let stream_url = meta_item
+                    .preview
+                    .trailer_streams
+                    .first()
+                    .and_then(|stream| {
+                        if let stremio_core::types::resource::StreamSource::YouTube { yt_id } =
+                            &stream.source
+                        {
+                            Some(format!("https://www.youtube.com/watch?v={yt_id}"))
+                        } else {
+                            crate::playback::trailer_stream_url(
+                                stream,
+                                None,
+                                &stremio_core::types::profile::Settings::default(),
+                            )
+                        }
+                    });
+                let trailer = crate::playback::TrailerPreview {
+                    meta_id: meta_item.preview.id.clone(),
+                    title: detail_title.to_string(),
+                    year: detail_released_date.to_string(),
+                    runtime: detail_runtime.to_string(),
+                    rating: detail_rating.to_string(),
+                    description: detail_description.to_string(),
+                    genres: Vec::new(),
+                    poster: meta_item.preview.poster.clone(),
+                    in_library: is_in_library,
+                    stream_url,
+                    preview: Some(meta_item.preview.clone()),
+                };
+                preview_player.begin_details(&ui, &trailer);
+            }
+        }
+
+        if id_changed || route_opened {
             let resumed_season = meta_details
                 .library_item
                 .as_ref()

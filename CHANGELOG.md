@@ -2,6 +2,16 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.92.1 - 2026-11-08
+
+### Discover
+
+- Clicking a card that already shows its preview drawer now opens the full details on the first click. Previously this required a fast double-click because the second single click was swallowed by the "already selected" state.
+
+### Details trailer
+
+- The big "Watch Trailer" card in the full details page is now an inline mini-player, matching the preview drawer: it shows real trailer frames, plays/pauses on click, supports mute, seeking and double-click to open the full player.
+
 ## 0.99.92 - 2026-11-07
 
 ### End of an episode no longer shows a spurious playback error

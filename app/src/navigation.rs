@@ -291,6 +291,11 @@ impl NavigationController {
         ui.set_show_details(state.show_details());
         ui.set_show_player(state.show_player());
         ui.set_addon_details_open(state.show_addon_details());
+        if !state.show_details()
+            && let Some(preview) = crate::preview_player::global()
+        {
+            preview.dismiss_if_surface_details();
+        }
     }
 
     fn read_state(&self) -> RwLockReadGuard<'_, NavigationSnapshot> {

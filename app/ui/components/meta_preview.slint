@@ -215,58 +215,213 @@ export component MetaLinks inherits Rectangle {
     }
 }
 
-export component TrailerCardPreview inherits ButtonSurface {
+// Inline trailer player embedded in the full details page. Mirrors the video
+// zone of the preview drawer so the trailer is a real mini-player instead of a
+// button that jumps straight to the full player.
+export component TrailerMiniPlayer inherits Rectangle {
     in property <length> unit: Theme.root-font-size;
-    in property <string> title: @tr("Watch Trailer");
+    in property <image> poster;
+    in property <bool> has-trailer: false;
+    in property <image> video-frame;
+    in property <bool> has-video-frame: false;
+    in property <bool> video-loading: false;
+    in property <bool> video-playing: false;
+    in property <bool> video-muted: true;
+    in property <float> video-progress: 0.0;
+    in property <string> video-time-label: "";
 
-    height: 5.5 * root.unit;
+    callback toggle-playback;
+    callback toggle-muted;
+    callback maximize;
+    callback seek-relative(float);
+    callback seek-progress(float);
+
+    height: min(self.width * 9 / 16, 24 * root.unit);
+    background: Theme.background;
     border-radius: Theme.border-radius;
-    background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
-    border-width: self.has-hover || self.has-focus ? Theme.focus-outline-size : 1px;
-    border-color: self.has-hover || self.has-focus ? Theme.accent : Theme.card-border;
-    accessible-name: root.title;
+    border-width: 1px;
+    border-color: Theme.card-border;
+    clip: true;
 
-    HorizontalLayout {
-        padding-left: 1.5 * root.unit;
-        padding-right: 1.5 * root.unit;
-        spacing: 1.25 * root.unit;
-        alignment: start;
+    // Backdrop: item poster while the decoder produces the first frame.
+    if (root.poster.width > 0) : Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.poster;
+        image-fit: cover;
+        opacity: root.has-video-frame ? 0 : 0.45;
+        animate opacity { duration: 150ms; }
+    }
 
-        Rectangle {
-            width: 3.5 * root.unit;
-            height: 3.5 * root.unit;
+    if (root.has-video-frame) : Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.video-frame;
+        image-fit: contain;
+    }
+
+    // Click = play/pause, double-click = full player, scroll = seek.
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => {
+            if (root.has-trailer) {
+                root.toggle-playback();
+            }
+        }
+        double-clicked => {
+            if (root.has-trailer) {
+                root.maximize();
+            }
+        }
+        scroll-event(event) => {
+            if (root.has-trailer && event.delta-y != 0px) {
+                root.seek-relative(event.delta-y > 0px ? 5.0 : -5.0);
+            }
+            accept
+        }
+    }
+
+    if (!root.video-playing && root.has-trailer) : ButtonSurface {
+        width: 4.5 * root.unit;
+        height: 4.5 * root.unit;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: self.has-hover
+            ? Theme.accent.with-alpha(0.85)
+            : Theme.background.with-alpha(0.7);
+        border-width: 1px;
+        border-color: Theme.accent;
+        accessible-name: @tr("Watch Trailer");
+        clicked => { root.toggle-playback(); }
+
+        Image {
+            width: 2 * root.unit;
+            height: 2 * root.unit;
+            x: (parent.width - self.width) / 2 + 0.15 * root.unit;
             y: (parent.height - self.height) / 2;
-            border-radius: self.height / 2;
-            background: Theme.accent.with-alpha(0.2);
-            border-width: 1px;
-            border-color: Theme.accent;
+            source: @image-url("../assets/images/icons/play.svg");
+            colorize: Theme.primary-foreground;
+        }
+    }
+
+    if (root.video-loading && !root.has-video-frame) : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: Theme.background.with-alpha(0.5);
+
+        Text {
+            text: @tr("Loading trailer...");
+            color: Theme.text-primary;
+            font-size: 0.9 * root.unit;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+
+    // Surface controls (mute / open in the full player).
+    if (root.has-trailer) : HorizontalLayout {
+        x: parent.width - self.width - 0.75 * root.unit;
+        y: 0.75 * root.unit;
+        height: 2.4 * root.unit;
+        spacing: 0.5 * root.unit;
+        alignment: center;
+
+        if (root.video-playing) : ButtonSurface {
+            width: 2.4 * root.unit;
+            height: 2.4 * root.unit;
+            border-radius: self.width / 2;
+            background: self.has-hover ? Theme.overlay-hover : Theme.background.with-alpha(0.65);
+            accessible-name: root.video-muted ? @tr("Unmute trailer") : @tr("Mute trailer");
+            clicked => { root.toggle-muted(); }
 
             Image {
-                x: (parent.width - self.width) / 2 + 1px;
+                x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                width: 1.6 * root.unit;
-                height: 1.6 * root.unit;
-                source: @image-url("../assets/images/icons/play.svg");
-                colorize: Theme.accent;
+                width: 1.25 * root.unit;
+                height: 1.25 * root.unit;
+                source: root.video-muted
+                    ? @image-url("../assets/images/icons/volume-off.svg")
+                    : @image-url("../assets/images/icons/volume-high.svg");
+                colorize: Theme.primary-foreground;
                 image-fit: contain;
             }
         }
 
-        VerticalLayout {
-            alignment: center;
-            spacing: 0.15 * root.unit;
+        ButtonSurface {
+            width: 2.4 * root.unit;
+            height: 2.4 * root.unit;
+            border-radius: self.width / 2;
+            background: self.has-hover ? Theme.overlay-hover : Theme.background.with-alpha(0.65);
+            accessible-name: @tr("Watch trailer in full player");
+            clicked => { root.maximize(); }
 
-            Text {
-                text: root.title;
-                color: Theme.primary-foreground;
-                font-size: 1.1 * root.unit;
-                font-weight: 600;
-                vertical-alignment: center;
+            Image {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 1.25 * root.unit;
+                height: 1.25 * root.unit;
+                source: @image-url("../assets/images/icons/maximize.svg");
+                colorize: Theme.primary-foreground;
+                image-fit: contain;
             }
-            Text {
-                text: @tr("Official YouTube Trailer");
-                color: Theme.text-secondary;
-                font-size: 0.85 * root.unit;
+        }
+    }
+
+    // Progress bar / time, identical to the drawer scrubber.
+    if (root.video-playing || root.video-progress > 0.0) : Rectangle {
+        y: parent.height - 2.2 * root.unit;
+        width: parent.width;
+        height: 2.2 * root.unit;
+        background: @linear-gradient(180deg, Theme.background.with-alpha(0) 0%, Theme.background.with-alpha(0.85) 100%);
+
+        HorizontalLayout {
+            padding-left: 0.75 * root.unit;
+            padding-right: 0.75 * root.unit;
+            spacing: 0.75 * root.unit;
+            alignment: center;
+
+            scrubber-box := Rectangle {
+                horizontal-stretch: 1;
+                height: 0.4 * root.unit;
+                y: (parent.height - self.height) / 2;
+                background: Theme.divider;
+                border-radius: self.height / 2;
+
+                Rectangle {
+                    width: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress));
+                    height: parent.height;
+                    background: Theme.accent;
+                    border-radius: self.height / 2;
+                }
+
+                Rectangle {
+                    x: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress)) - self.width / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 0.9 * root.unit;
+                    height: 0.9 * root.unit;
+                    border-radius: self.width / 2;
+                    background: Theme.primary-foreground;
+                }
+
+                TouchArea {
+                    width: parent.width;
+                    height: 1.5 * root.unit;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        if (scrubber-box.width > 0px) {
+                            root.seek-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
+                        }
+                    }
+                }
+            }
+
+            if (root.video-time-label != "") : Text {
+                text: root.video-time-label;
+                color: Theme.primary-foreground;
+                font-size: 0.75 * root.unit;
+                font-weight: 500;
                 vertical-alignment: center;
             }
         }
@@ -297,6 +452,14 @@ export component MetaPreview inherits Rectangle {
     in property <[string]> cast: [];
     in property <[string]> directors: [];
     in property <bool> show-trailer: false;
+    in property <image> trailer-poster;
+    in property <image> trailer-video-frame;
+    in property <bool> trailer-has-video-frame: false;
+    in property <bool> trailer-video-loading: false;
+    in property <bool> trailer-video-playing: false;
+    in property <bool> trailer-video-muted: true;
+    in property <float> trailer-video-progress: 0.0;
+    in property <string> trailer-video-time-label: "";
     in property <bool> show-library-actions: false;
     in property <bool> in-library: false;
     in property <bool> watched: false;
@@ -307,6 +470,11 @@ export component MetaPreview inherits Rectangle {
     in property <bool> ratings-enabled: true;
     in property <bool> show-share: false;
     callback trailer-requested;
+    callback trailer-toggle-playback;
+    callback trailer-toggle-muted;
+    callback trailer-maximize;
+    callback trailer-seek-relative(float);
+    callback trailer-seek-progress(float);
     callback library-requested(bool);
     callback watched-requested(bool);
     callback show-requested;
@@ -659,10 +827,23 @@ export component MetaPreview inherits Rectangle {
                 }
             }
 
-            if (!root.compact && root.show-trailer) : TrailerCardPreview {
+            if (!root.compact && root.show-trailer) : TrailerMiniPlayer {
                 width: parent.width;
                 unit: root.unit;
-                clicked => { root.trailer-requested(); }
+                poster: root.trailer-poster;
+                has-trailer: root.show-trailer;
+                video-frame: root.trailer-video-frame;
+                has-video-frame: root.trailer-has-video-frame;
+                video-loading: root.trailer-video-loading;
+                video-playing: root.trailer-video-playing;
+                video-muted: root.trailer-video-muted;
+                video-progress: root.trailer-video-progress;
+                video-time-label: root.trailer-video-time-label;
+                toggle-playback => { root.trailer-toggle-playback(); }
+                toggle-muted => { root.trailer-toggle-muted(); }
+                maximize => { root.trailer-maximize(); }
+                seek-relative(offset) => { root.trailer-seek-relative(offset); }
+                seek-progress(progress) => { root.trailer-seek-progress(progress); }
             }
         }
     }

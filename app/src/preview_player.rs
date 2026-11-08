@@ -160,6 +160,14 @@ impl PreviewPlayer {
         lock_state(&self.state).active_id.clone()
     }
 
+    /// Stops the inline details mini-player when its route is left, without
+    /// touching a drawer or hover session owned by another surface.
+    pub fn dismiss_if_surface_details(&self) {
+        if lock_state(&self.state).surface == PreviewSurface::Details {
+            self.dismiss();
+        }
+    }
+
     pub fn current_stream_and_pos(&self) -> Option<(String, f64)> {
         let state = lock_state(&self.state);
         let url = state.stream_url.clone()?;
@@ -173,6 +181,7 @@ impl PreviewPlayer {
         }
         let (source, projection) = {
             let mut state = lock_state(&self.state);
+            state.surface = PreviewSurface::Hover;
             state.generation = state.generation.wrapping_add(1);
             state.active_id = Some(trailer.meta_id.clone());
             state.stream_url = trailer.stream_url.clone();
@@ -213,11 +222,24 @@ impl PreviewPlayer {
 
     /// Opens a session for the right preview drawer.
     pub fn begin_drawer(&self, ui: &MainWindow, trailer: &TrailerPreview) {
+        self.begin_surface(ui, trailer, PreviewSurface::Drawer);
+    }
+
+    /// Opens a session for the inline trailer player embedded in the details
+    /// page. It projects into the same drawer video properties because the
+    /// details mini-player reuses that surface, but it is tracked separately so
+    /// leaving the route can stop the decoder without disturbing a drawer.
+    pub fn begin_details(&self, ui: &MainWindow, trailer: &TrailerPreview) {
+        self.begin_surface(ui, trailer, PreviewSurface::Details);
+    }
+
+    fn begin_surface(&self, ui: &MainWindow, trailer: &TrailerPreview, surface: PreviewSurface) {
         if trailer.stream_url.is_some() {
             self.ensure_started();
         }
         let (source, projection, should_play) = {
             let mut state = lock_state(&self.state);
+            state.surface = surface;
             state.generation = state.generation.wrapping_add(1);
             state.active_id = Some(trailer.meta_id.clone());
             state.stream_url = trailer.stream_url.clone();
@@ -268,6 +290,7 @@ impl PreviewPlayer {
     pub fn dismiss(&self) {
         let projection = {
             let mut state = lock_state(&self.state);
+            state.surface = PreviewSurface::Hover;
             state.generation = state.generation.wrapping_add(1);
             state.active_id = None;
             state.stream_url = None;
@@ -573,10 +596,18 @@ impl PreviewPlayer {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreviewSurface {
+    Hover,
+    Drawer,
+    Details,
+}
+
 struct PreviewState {
     enabled: bool,
     autoplay: bool,
     worker_ready: bool,
+    surface: PreviewSurface,
     generation: u64,
     active_id: Option<String>,
     stream_url: Option<String>,
@@ -595,6 +626,7 @@ impl PreviewState {
             enabled,
             autoplay,
             worker_ready: false,
+            surface: PreviewSurface::Hover,
             generation: 0,
             active_id: None,
             stream_url: None,

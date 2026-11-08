@@ -317,7 +317,15 @@ export component DiscoverPage inherits Rectangle {
                         enable-hover-preview: root.enable-hover-preview;
                         hover-preview-delay: root.hover-preview-delay;
                         item-selected(id, media-type, video-id) => {
-                            root.item-selected(id, media-type, video-id);
+                            // Clicking the card that is already showing its
+                            // preview opens the full details, matching the
+                            // expected single-click-to-open behavior without
+                            // requiring a fast double-click.
+                            if (id == root.selected-id) {
+                                root.item-activated(id, media-type, video-id);
+                            } else {
+                                root.item-selected(id, media-type, video-id);
+                            }
                         }
                         item-activated(id, media-type, video-id) => {
                             root.item-activated(id, media-type, video-id);

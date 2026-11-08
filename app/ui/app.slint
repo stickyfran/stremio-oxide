@@ -2452,6 +2452,18 @@ export component MainWindow inherits Window {
             is-watched: detail-is-watched;
             has-trailer: detail-has-trailer;
             trailer-selection-id: detail-trailer-selection-id;
+            trailer-video-frame: root.preview-drawer-video-frame;
+            trailer-has-video-frame: root.preview-drawer-has-video-frame;
+            trailer-video-loading: root.preview-drawer-video-loading;
+            trailer-video-playing: root.preview-drawer-video-playing;
+            trailer-video-muted: root.preview-drawer-video-muted;
+            trailer-video-progress: root.preview-drawer-video-progress;
+            trailer-video-time-label: root.preview-drawer-video-time-label;
+            trailer-toggle-playback => { root.preview-drawer-toggle-playback(); }
+            trailer-toggle-muted => { root.preview-drawer-toggle-muted(); }
+            trailer-maximize => { root.preview-drawer-maximize(); }
+            trailer-seek-relative(offset) => { root.preview-drawer-seek-relative(offset); }
+            trailer-seek-progress(progress) => { root.preview-drawer-seek-progress(progress); }
             toggle-library => { details-toggle-library(); }
             toggle-watched => { details-toggle-watched(); }
             notifications-changed(enabled) => { details-notifications-changed(enabled); }
