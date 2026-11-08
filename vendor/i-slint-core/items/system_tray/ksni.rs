@@ -51,15 +51,12 @@ impl ::ksni::Tray for KsniTray {
 
     // STREMIO-NATIVE PATCH: some SNI hosts ignore icon_pixmap when icon_name is
     // empty and fall back to the desktop application's (orange) icon. Publish a
-    // real themed name backed by the extra icon theme path below, keeping the
-    // embedded ARGB pixmap as the host-independent fallback.
+    // real themed name, backed both by the extra icon theme path and by the
+    // user's hicolor theme, keeping the embedded ARGB pixmap as the
+    // host-independent fallback.
     fn icon_name(&self) -> std::string::String {
-        if ensure_tray_icon_theme().is_empty() {
-            // If the private theme cannot be written, fall back to the pixmap.
-            std::string::String::new()
-        } else {
-            TRAY_ICON_NAME.into()
-        }
+        ensure_tray_icon_theme();
+        TRAY_ICON_NAME.into()
     }
 
     fn icon_theme_path(&self) -> std::string::String {
@@ -282,6 +279,11 @@ fn ensure_tray_icon_theme() -> std::string::String {
     use std::sync::OnceLock;
     static PATH: OnceLock<std::string::String> = OnceLock::new();
     PATH.get_or_init(|| {
+        // Plasma/KDE ignore IconThemePath and resolve IconName through the
+        // global theme, falling back to the app's orange icon when the name is
+        // unknown. Installing the same glyph in hicolor (inherited by every
+        // theme) makes the name resolve everywhere.
+        install_icon_in_user_theme();
         let base = std::env::var_os("XDG_RUNTIME_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
@@ -300,6 +302,31 @@ fn ensure_tray_icon_theme() -> std::string::String {
         base.to_string_lossy().into_owned()
     })
     .clone()
+}
+
+/// Copies the white glyph into the user's hicolor icon theme, which is part of
+/// every icon theme's inheritance chain. Best effort: any failure leaves the
+/// embedded pixmap as the fallback.
+fn install_icon_in_user_theme() {
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(".local").join("share"))
+        });
+    let Some(data_home) = data_home else {
+        return;
+    };
+    for subdir in ["scalable/status", "24x24/status"] {
+        let dir = data_home.join("icons").join("hicolor").join(subdir);
+        if std::fs::create_dir_all(&dir).is_err() {
+            continue;
+        }
+        let _ = write_if_different(
+            &dir.join(std::format!("{TRAY_ICON_NAME}.svg")),
+            TRAY_ICON_SVG.as_bytes(),
+        );
+    }
 }
 
 fn write_if_different(path: &std::path::Path, contents: &[u8]) -> bool {

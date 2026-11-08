@@ -2,6 +2,12 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.91 - 2026-11-07
+
+### Tray icon on KDE
+
+- The tray icon is now reliably white on Plasma. KDE ignores the SNI `IconThemePath` and resolves `IconName` against the global theme, so it fell back to the orange application icon. The monochrome glyph is now also installed into the user's `hicolor` theme, where every icon theme finds it, and the embedded ARGB pixmap remains as fallback.
+
 ## 0.99.90 - 2026-11-07
 
 ### Root-cause fix for the intermittent startup hang
