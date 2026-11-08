@@ -816,7 +816,7 @@ async fn finish_startup(
     startup_storage.profile.settings.streaming_server_url = url::Url::parse(&server_url)?;
 
     let StartupStorage {
-        profile,
+        mut profile,
         library,
         streams_bucket,
         server_urls,
@@ -824,6 +824,11 @@ async fn finish_startup(
         search_history,
         dismissed_events,
     } = startup_storage;
+
+    // Migrate default audio language to "original" for profiles that still hold the legacy default "eng"
+    if profile.settings.audio_language.as_deref().is_none_or(|l| l.is_empty() || l == "eng") {
+        profile.settings.audio_language = Some("original".to_string());
+    }
 
     let (continue_watching_preview, continue_watching_preview_effects) =
         ContinueWatchingPreview::new(&library, &notifications);

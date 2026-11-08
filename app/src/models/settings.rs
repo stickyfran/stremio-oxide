@@ -665,13 +665,21 @@ fn interface_language_code(value: &str) -> String {
 }
 
 fn language_code(value: &str) -> String {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("original") || value.is_empty() {
+        return "original".to_owned();
+    }
     find_interface_language(value)
         .map(|language| language.code)
-        .unwrap_or_else(|| value.trim())
+        .unwrap_or_else(|| value)
         .to_owned()
 }
 
 fn language_display(value: &str) -> String {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("original") || value.is_empty() {
+        return "Original".to_owned();
+    }
     find_interface_language(value)
         .map(|language| language.name)
         .unwrap_or(value)
@@ -682,6 +690,18 @@ fn map_interface_language_to_locale(value: &str) -> &'static str {
     find_interface_language(value)
         .map(|language| language.locale)
         .unwrap_or("en-US")
+}
+
+fn audio_language_options() -> slint::ModelRc<slint::SharedString> {
+    let mut languages = INTERFACE_LANGUAGES.iter().collect::<Vec<_>>();
+    languages.sort_by_key(|language| language.name.to_lowercase());
+
+    let mut names = Vec::with_capacity(languages.len() + 1);
+    names.push(slint::SharedString::from("Original"));
+    for language in languages {
+        names.push(slint::SharedString::from(language.name));
+    }
+    slint::ModelRc::new(slint::VecModel::from(names))
 }
 
 fn interface_language_options() -> slint::ModelRc<slint::SharedString> {
@@ -770,6 +790,7 @@ pub fn setup(
     native_playback: Option<&NativePlaybackBridge>,
 ) {
     ui.set_settings_interface_language_options(interface_language_options());
+    ui.set_settings_audio_language_options(audio_language_options());
     ui.set_settings_thumbnail_previews(config.thumbnail_previews_enabled);
     let omniphony_decoder_available =
         native_playback.is_some_and(NativePlaybackBridge::omniphony_decoder_available);
@@ -1717,7 +1738,7 @@ pub fn sync(
             .audio_language
             .as_deref()
             .map(language_display)
-            .unwrap_or_else(|| "English".to_owned())
+            .unwrap_or_else(|| "Original".to_owned())
             .into(),
     );
     ui.set_settings_ass_subtitles_styling(settings.ass_subtitles_styling);

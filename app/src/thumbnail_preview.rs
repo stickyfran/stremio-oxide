@@ -276,7 +276,7 @@ impl ThumbnailPreview {
 
     pub fn hover(&self, progress: f32, duration: f64) {
         self.ensure_started();
-        let command = {
+        let (request_opt, projection) = {
             let mut coordinator = lock_coordinator(&self.coordinator);
             if !coordinator.enabled
                 || !coordinator.worker_ready
@@ -291,32 +291,39 @@ impl ThumbnailPreview {
             }
             let progress = progress.clamp(0.0, 1.0);
             let seconds = (duration * f64::from(progress)).clamp(0.0, (duration - 0.001).max(0.0));
-            coordinator.next_request_id = coordinator.next_request_id.wrapping_add(1).max(1);
-            let request_id = coordinator.next_request_id;
-            coordinator.hover = Some(HoverState {
-                request_id,
-                requested_at: Instant::now(),
-            });
-            coordinator.loading = true;
             coordinator.hover_x = progress;
             coordinator.time_label = format_timestamp(seconds);
-            let request = ThumbnailRequest {
-                generation: coordinator.generation,
-                request_id,
-                seconds,
+
+            let should_request = coordinator.last_requested_seconds.is_none_or(|last| {
+                (last - seconds).abs() >= 0.50
+            }) || coordinator.hover.is_none();
+
+            let request = if should_request {
+                coordinator.last_requested_seconds = Some(seconds);
+                coordinator.next_request_id = coordinator.next_request_id.wrapping_add(1).max(1);
+                let request_id = coordinator.next_request_id;
+                coordinator.hover = Some(HoverState {
+                    request_id,
+                    requested_at: Instant::now(),
+                });
+                coordinator.loading = !coordinator.has_frame;
+                Some(ThumbnailRequest {
+                    generation: coordinator.generation,
+                    request_id,
+                    seconds,
+                })
+            } else {
+                None
             };
-            tracing::debug!(
-                generation = request.generation,
-                request_id,
-                requested_seconds = seconds,
-                "thumbnail requested"
-            );
+
             let projection = coordinator.next_projection(false);
             (request, projection)
         };
-        self.apply_projection_now(command.1);
-        if let Some(controller) = self.controller() {
-            log_worker_command(controller.request(command.0));
+        self.apply_projection_now(projection);
+        if let Some(request) = request_opt {
+            if let Some(controller) = self.controller() {
+                log_worker_command(controller.request(request));
+            }
         }
     }
 
@@ -325,6 +332,7 @@ impl ThumbnailPreview {
             let mut coordinator = lock_coordinator(&self.coordinator);
             coordinator.hover = None;
             coordinator.loading = false;
+            coordinator.last_requested_seconds = None;
             coordinator.next_projection(false)
         };
         self.apply_projection_now(projection);
@@ -343,6 +351,8 @@ impl ThumbnailPreview {
             coordinator.loading = false;
             coordinator.has_frame = false;
             coordinator.last_quality = None;
+            coordinator.last_requested_seconds = None;
+            coordinator.last_displayed_request_id = 0;
             coordinator.status = if coordinator.enabled {
                 "Waiting for a video…".to_owned()
             } else {
@@ -432,16 +442,23 @@ impl ThumbnailPreview {
         let ui = self.ui.clone();
         let coordinator = self.coordinator.clone();
         let _ = slint::invoke_from_event_loop(move || {
-            let current = {
-                let coordinator = lock_coordinator(&coordinator);
-                coordinator.ui_token == update.token
+            let valid = {
+                let mut coordinator = lock_coordinator(&coordinator);
+                if coordinator.enabled
                     && coordinator.generation == update.generation
                     && coordinator
                         .hover
                         .as_ref()
                         .is_some_and(|hover| hover.request_id == update.request_id)
+                {
+                    coordinator.has_frame = true;
+                    coordinator.loading = false;
+                    true
+                } else {
+                    false
+                }
             };
-            if !current {
+            if !valid {
                 return;
             }
             let Some(ui) = ui.upgrade() else {
@@ -453,6 +470,9 @@ impl ThumbnailPreview {
                 update.height,
             );
             ui.set_player_thumbnail_preview(slint::Image::from_rgba8(buffer));
+            ui.set_player_thumbnail_has_frame(true);
+            ui.set_player_thumbnail_loading(false);
+            ui.set_player_thumbnail_visible(true);
             apply_projection(&ui, &update.projection);
         });
     }
@@ -470,6 +490,8 @@ struct ThumbnailCoordinator {
     warming_started: Option<Instant>,
     hover: Option<HoverState>,
     next_request_id: u64,
+    last_displayed_request_id: u64,
+    last_requested_seconds: Option<f64>,
     ui_token: u64,
     loading: bool,
     has_frame: bool,
@@ -490,6 +512,8 @@ impl ThumbnailCoordinator {
             warming_started: None,
             hover: None,
             next_request_id: 0,
+            last_displayed_request_id: 0,
+            last_requested_seconds: None,
             ui_token: 0,
             loading: false,
             has_frame: false,
@@ -555,6 +579,7 @@ struct UiProjection {
 }
 
 struct FrameUpdate {
+    #[allow(dead_code)]
     token: u64,
     generation: u64,
     request_id: u64,

@@ -189,17 +189,24 @@ export component Slider inherits Rectangle {
             if (event.kind == PointerEventKind.down) {
                 slider-focus.focus();
                 root.update-from-pointer();
+                root.hover-position-changed(root.value-at(self.mouse-x));
             } else if (event.kind == PointerEventKind.up) {
                 root.update-from-pointer();
                 root.released(root.value);
                 root.completed(root.value);
+                if (!self.has-hover) {
+                    root.hover-left();
+                }
             } else if (event.kind == PointerEventKind.cancel) {
                 root.released(root.value);
                 root.completed(root.value);
+                if (!self.has-hover) {
+                    root.hover-left();
+                }
             }
         }
         moved => {
-            if (self.has-hover) {
+            if (self.has-hover || self.pressed) {
                 root.hover-position-changed(root.value-at(self.mouse-x));
             }
             if (self.pressed) {
@@ -210,16 +217,16 @@ export component Slider inherits Rectangle {
 
     private property <length> tracked-mouse-x: slider-area.mouse-x;
     changed tracked-mouse-x => {
-        if (slider-area.has-hover && !slider-area.pressed) {
+        if (slider-area.has-hover || slider-area.pressed) {
             root.hover-position-changed(root.value-at(slider-area.mouse-x));
         }
     }
 
-    private property <bool> is-hovering: slider-area.has-hover;
+    private property <bool> is-hovering: slider-area.has-hover || slider-area.pressed;
     changed is-hovering => {
-        if (self.is-hovering && !slider-area.pressed) {
+        if (self.is-hovering) {
             root.hover-position-changed(root.value-at(slider-area.mouse-x));
-        } else if (!self.is-hovering) {
+        } else {
             root.hover-left();
         }
     }

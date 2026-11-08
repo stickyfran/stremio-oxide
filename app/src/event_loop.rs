@@ -332,13 +332,18 @@ pub fn install_hover_preview_callbacks(
         let preview = preview.clone();
         let ui_weak = ui_weak.clone();
         move || {
-            let Some(ui) = ui_weak.upgrade() else {
-                return;
-            };
-            let trailer_id = ui.get_detail_trailer_selection_id();
-            if !trailer_id.is_empty() {
-                preview.dismiss();
-                ui.invoke_play_stream(trailer_id);
+            if let Some(ui) = ui_weak.upgrade() {
+                preview.open_fullscreen(&ui);
+            }
+        }
+    });
+
+    ui.on_preview_drawer_exit_fullscreen({
+        let preview = preview.clone();
+        let ui_weak = ui_weak.clone();
+        move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                preview.close_fullscreen(&ui);
             }
         }
     });

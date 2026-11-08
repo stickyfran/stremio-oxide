@@ -271,7 +271,7 @@ export component DetailsPage inherits Rectangle {
             watched: root.is-watched;
             show-ratings: true;
             show-share: true;
-            trailer-requested => { root.play-trailer(root.trailer-selection-id != "" ? root.trailer-selection-id : "trailer"); }
+            trailer-requested => { root.trailer-maximize(); }
             imdb-requested => {
                 if (root.imdb-url != "") {
                     root.open-external-url(root.imdb-url);

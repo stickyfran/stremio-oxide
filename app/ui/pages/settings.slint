@@ -236,7 +236,8 @@ export component SettingsPage inherits Rectangle {
     in-out property <color> subtitles-background-color: #00000000;
     in-out property <color> subtitles-outline-color: #000000ff;
     in-out property <bool> ass-subtitles-styling: false;
-    in-out property <string> audio-language: "English";
+    in-out property <string> audio-language: "Original";
+    in property <[string]> audio-language-options: [];
     in-out property <string> spatial-audio-mode: "Disabled";
     in property <string> spatial-audio-status: "Spatial audio disabled";
     in property <bool> omniphony-audio-available: false;
@@ -885,8 +886,8 @@ export component SettingsPage inherits Rectangle {
                             width: 16 * root.unit;
                             unit: root.unit;
                             field-width: 16 * root.unit;
-                            value: root.audio-language != "" ? root.audio-language : "English";
-                            options: root.subtitles-language-options.length > 0 ? root.subtitles-language-options : root.interface-language-options;
+                            value: root.audio-language != "" ? root.audio-language : "Original";
+                            options: root.audio-language-options.length > 0 ? root.audio-language-options : (root.subtitles-language-options.length > 0 ? root.subtitles-language-options : root.interface-language-options);
                             open: root.audio-language-open;
                             toggle => { root.audio-language-open = !root.audio-language-open; }
                             selected(value) => {

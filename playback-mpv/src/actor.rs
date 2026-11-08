@@ -34,6 +34,8 @@ pub struct AudioTrack {
     pub language: Option<String>,
     pub codec: Option<String>,
     pub selected: bool,
+    pub default: bool,
+    pub original: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -2026,6 +2028,8 @@ fn parse_tracks(node: &MpvNode) -> (Vec<AudioTrack>, Vec<SubtitleTrack>) {
         let mut language = None;
         let mut codec = None;
         let mut selected = false;
+        let mut is_default = false;
+        let mut is_original = false;
         let mut external = false;
         let mut source_url = None;
         for index in 0..len {
@@ -2050,6 +2054,8 @@ fn parse_tracks(node: &MpvNode) -> (Vec<AudioTrack>, Vec<SubtitleTrack>) {
                 b"lang" => language = node_string(value),
                 b"codec" => codec = node_string(value),
                 b"selected" => selected = node_flag(value).unwrap_or(false),
+                b"default" => is_default = node_flag(value).unwrap_or(false),
+                b"original" => is_original = node_flag(value).unwrap_or(false),
                 b"external" => external = node_flag(value).unwrap_or(false),
                 b"external-filename" => source_url = node_string(value),
                 _ => {}
@@ -2058,13 +2064,27 @@ fn parse_tracks(node: &MpvNode) -> (Vec<AudioTrack>, Vec<SubtitleTrack>) {
 
         let Some(id) = id else { continue };
         match kind {
-            Some(TrackKind::Audio) => audio.push(AudioTrack {
-                id,
-                title,
-                language,
-                codec,
-                selected,
-            }),
+            Some(TrackKind::Audio) => {
+                let title_indicates_original = title
+                    .as_deref()
+                    .is_some_and(|t| {
+                        let lower = t.to_ascii_lowercase();
+                        lower.contains("original")
+                            || lower.contains("[org]")
+                            || lower.contains("(org)")
+                            || lower.contains("[orig]")
+                            || lower.contains("(orig)")
+                    });
+                audio.push(AudioTrack {
+                    id,
+                    title,
+                    language,
+                    codec,
+                    selected,
+                    default: is_default,
+                    original: is_original || title_indicates_original,
+                });
+            }
             Some(TrackKind::Subtitle) => subtitles.push(SubtitleTrack {
                 id,
                 title,

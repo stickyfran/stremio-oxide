@@ -237,51 +237,60 @@ impl PreviewPlayer {
         if trailer.stream_url.is_some() {
             self.ensure_started();
         }
-        let (source, projection, should_play) = {
+        let (source, projection, should_play, reuse_existing) = {
             let mut state = lock_state(&self.state);
-            state.surface = surface;
-            state.generation = state.generation.wrapping_add(1);
-            state.active_id = Some(trailer.meta_id.clone());
-            state.stream_url = trailer.stream_url.clone();
-            state.has_frame = false;
-            state.position = 0.0;
-            state.duration = 0.0;
-            let playable = state.worker_ready && trailer.stream_url.is_some();
-            let should_play = playable && state.autoplay;
-            state.loading = should_play;
-            state.playing = should_play;
-            state.status = if trailer.stream_url.is_none() {
-                "No trailer available for this title.".to_owned()
-            } else if !state.worker_ready {
-                "The preview decoder is unavailable.".to_owned()
+            state.last_trailer = Some(trailer.clone());
+            let is_same_trailer = state.active_id.as_deref() == Some(trailer.meta_id.as_str());
+            if is_same_trailer && state.has_frame && state.stream_url.is_some() {
+                state.surface = surface;
+                (None, state.projection(), state.playing, true)
             } else {
-                String::new()
-            };
-            let source = should_play.then(|| PreviewSource {
-                generation: state.generation,
-                url: trailer.stream_url.clone().unwrap_or_default(),
-                start_seconds: TRAILER_START_SECONDS,
-                muted: state.muted,
-            });
-            (source, state.projection(), should_play)
+                state.surface = surface;
+                state.generation = state.generation.wrapping_add(1);
+                state.active_id = Some(trailer.meta_id.clone());
+                state.stream_url = trailer.stream_url.clone();
+                state.has_frame = false;
+                state.position = 0.0;
+                state.duration = 0.0;
+                let playable = state.worker_ready && trailer.stream_url.is_some();
+                let should_play = playable && state.autoplay;
+                state.loading = should_play;
+                state.playing = should_play;
+                state.status = if trailer.stream_url.is_none() {
+                    "No trailer available for this title.".to_owned()
+                } else if !state.worker_ready {
+                    "The preview decoder is unavailable.".to_owned()
+                } else {
+                    String::new()
+                };
+                let source = should_play.then(|| PreviewSource {
+                    generation: state.generation,
+                    url: trailer.stream_url.clone().unwrap_or_default(),
+                    start_seconds: TRAILER_START_SECONDS,
+                    muted: state.muted,
+                });
+                (source, state.projection(), should_play, false)
+            }
         };
 
-        ui.set_preview_drawer_video_frame(slint::Image::default());
-        ui.set_preview_drawer_has_video_frame(false);
-        ui.set_preview_drawer_video_loading(projection.loading);
-        ui.set_preview_drawer_video_playing(projection.playing);
-        ui.set_preview_drawer_video_muted(projection.muted);
-        ui.set_preview_drawer_autoplay_enabled(projection.autoplay);
-        ui.set_preview_drawer_video_progress(0.0);
-        ui.set_preview_drawer_video_time_label("0:00 / 0:00".into());
+        if !reuse_existing {
+            ui.set_preview_drawer_video_frame(slint::Image::default());
+            ui.set_preview_drawer_has_video_frame(false);
+            ui.set_preview_drawer_video_loading(projection.loading);
+            ui.set_preview_drawer_video_playing(projection.playing);
+            ui.set_preview_drawer_video_muted(projection.muted);
+            ui.set_preview_drawer_autoplay_enabled(projection.autoplay);
+            ui.set_preview_drawer_video_progress(0.0);
+            ui.set_preview_drawer_video_time_label("0:00 / 0:00".into());
 
-        if let Some(controller) = self.controller() {
-            if should_play {
-                if let Some(source) = source {
-                    log_worker_command(controller.play(source));
+            if let Some(controller) = self.controller() {
+                if should_play {
+                    if let Some(source) = source {
+                        log_worker_command(controller.play(source));
+                    }
+                } else {
+                    log_worker_command(controller.stop());
                 }
-            } else {
-                log_worker_command(controller.stop());
             }
         }
     }
@@ -308,6 +317,7 @@ impl PreviewPlayer {
         let ui = self.ui.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui.upgrade() {
+                ui.set_preview_drawer_video_fullscreen(false);
                 ui.set_preview_drawer_video_frame(slint::Image::default());
                 ui.set_preview_drawer_has_video_frame(false);
                 ui.set_preview_drawer_video_loading(false);
@@ -319,13 +329,48 @@ impl PreviewPlayer {
         self.schedule_projection_with_clear(projection);
     }
 
+    /// Opens the current trailer in YouTube-style full screen.
+    pub fn open_fullscreen(&self, ui: &MainWindow) {
+        self.ensure_started();
+        let should_start = {
+            let mut state = lock_state(&self.state);
+            if state.active_id.is_none() && let Some(last) = state.last_trailer.clone() {
+                state.active_id = Some(last.meta_id.clone());
+                state.stream_url = last.stream_url.clone();
+                state.generation = state.generation.wrapping_add(1);
+                state.has_frame = false;
+                state.position = 0.0;
+                state.duration = 0.0;
+            }
+            !state.playing
+        };
+        if should_start {
+            self.toggle_playback();
+        }
+        ui.set_preview_drawer_video_fullscreen(true);
+    }
+
+    /// Closes the fullscreen trailer overlay back to the mini-player.
+    pub fn close_fullscreen(&self, ui: &MainWindow) {
+        ui.set_preview_drawer_video_fullscreen(false);
+    }
+
     /// Flips the play/pause state for the drawer video.
     pub fn toggle_playback(&self) -> bool {
         self.ensure_started();
         let (new_playing, source_to_play, need_pause) = {
             let mut state = lock_state(&self.state);
             if state.active_id.is_none() {
-                return false;
+                if let Some(last) = state.last_trailer.clone() {
+                    state.active_id = Some(last.meta_id.clone());
+                    state.stream_url = last.stream_url.clone();
+                    state.generation = state.generation.wrapping_add(1);
+                    state.has_frame = false;
+                    state.position = 0.0;
+                    state.duration = 0.0;
+                } else {
+                    return false;
+                }
             }
             if state.playing {
                 state.playing = false;
@@ -618,6 +663,7 @@ struct PreviewState {
     position: f64,
     duration: f64,
     status: String,
+    last_trailer: Option<TrailerPreview>,
 }
 
 impl PreviewState {
@@ -637,6 +683,7 @@ impl PreviewState {
             position: 0.0,
             duration: 0.0,
             status: String::new(),
+            last_trailer: None,
         }
     }
 

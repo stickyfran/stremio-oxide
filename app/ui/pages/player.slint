@@ -1639,7 +1639,7 @@ export component PlayerPage inherits Rectangle {
 
         // Menus and display controls are independently anchored to the right.
         HorizontalLayout {
-            width: is-series ? 676px : 608px;
+            width: is-series ? 744px : 676px;
             x: parent.width - self.width - 32px;
             y: 88px;
             height: 64px;
@@ -1781,6 +1781,12 @@ export component PlayerPage inherits Rectangle {
                     show-upscaler-menu = false;
                     show-playlist-drawer = false;
                 }
+            }
+
+            PlayerIconButton {
+                icon-source: @image-url("../assets/images/icons/maximize.svg");
+                tooltip: @tr("CTX_FULLSCREEN" => "Fullscreen") + " (F)";
+                clicked => { root.toggle-fullscreen(); }
             }
         }
     }

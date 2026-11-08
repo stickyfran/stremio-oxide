@@ -526,6 +526,7 @@ export component MainWindow inherits Window {
     in-out property <bool> preview-drawer-autoplay-enabled: false;
     in-out property <float> preview-drawer-video-progress: 0.0;
     in-out property <string> preview-drawer-video-time-label: "";
+    in-out property <bool> preview-drawer-video-fullscreen: false;
 
     callback preview-drawer-toggle-playback();
     callback preview-drawer-toggle-muted();
@@ -534,6 +535,7 @@ export component MainWindow inherits Window {
     callback preview-drawer-seek-relative(float);
     callback preview-drawer-seek-progress(float);
     callback preview-drawer-close();
+    callback preview-drawer-exit-fullscreen();
 
     // Hover trailer preview popup. The backend owns everything except the
     // anchor geometry, which only the hovered card knows.
@@ -628,7 +630,9 @@ export component MainWindow inherits Window {
     changed hover-preview-route-visible => {
         if (!root.hover-preview-route-visible) {
             root.hover-preview-close();
-            root.preview-drawer-close();
+            if (root.effective-show-player) {
+                root.preview-drawer-close();
+            }
         }
     }
     changed effective-active-tab => {
@@ -858,7 +862,8 @@ export component MainWindow inherits Window {
     in-out property <string> settings-seek-short-duration: "3";
     in-out property <string> settings-next-video-popup-duration: "35";
     in-out property <string> settings-external-player: "";
-    in-out property <string> settings-audio-language: "English";
+    in-out property <string> settings-audio-language: "Original";
+    in-out property <[string]> settings-audio-language-options: [];
     in-out property <string> settings-spatial-audio-mode: "Disabled";
     in-out property <string> settings-spatial-audio-status: "Spatial audio disabled";
     in-out property <bool> settings-omniphony-audio-available: false;
@@ -1288,9 +1293,13 @@ export component MainWindow inherits Window {
         }
         KeyBinding {
             keys: @keys(Escape);
-            enabled: (!root.effective-show-player && (root.shortcuts-modal-open || root.gamepad-modal-open))
+            enabled: (!root.effective-show-player && (root.shortcuts-modal-open || root.gamepad-modal-open || root.preview-drawer-video-fullscreen))
                 || (root.effective-show-player && root.player-pip-active);
             activated => {
+                if (root.preview-drawer-video-fullscreen) {
+                    root.preview-drawer-exit-fullscreen();
+                    return;
+                }
                 if (root.player-pip-active) {
                     root.player-toggle-pip();
                     return;
@@ -1298,6 +1307,41 @@ export component MainWindow inherits Window {
                 root.shortcuts-modal-open = false;
                 root.gamepad-modal-open = false;
                 app-shortcuts.focus();
+            }
+        }
+        KeyBinding {
+            keys: @keys(Space);
+            enabled: root.preview-drawer-video-fullscreen && !FocusTracker.text-input-focused;
+            activated => {
+                root.preview-drawer-toggle-playback();
+            }
+        }
+        KeyBinding {
+            keys: @keys("f");
+            enabled: root.preview-drawer-video-fullscreen && !FocusTracker.text-input-focused;
+            activated => {
+                root.preview-drawer-exit-fullscreen();
+            }
+        }
+        KeyBinding {
+            keys: @keys("m");
+            enabled: root.preview-drawer-video-fullscreen && !FocusTracker.text-input-focused;
+            activated => {
+                root.preview-drawer-toggle-muted();
+            }
+        }
+        KeyBinding {
+            keys: @keys(LeftArrow);
+            enabled: root.preview-drawer-video-fullscreen && !FocusTracker.text-input-focused;
+            activated => {
+                root.preview-drawer-seek-relative(-10.0);
+            }
+        }
+        KeyBinding {
+            keys: @keys(RightArrow);
+            enabled: root.preview-drawer-video-fullscreen && !FocusTracker.text-input-focused;
+            activated => {
+                root.preview-drawer-seek-relative(10.0);
             }
         }
     }
@@ -2092,6 +2136,7 @@ export component MainWindow inherits Window {
                         next-video-popup-duration: settings-next-video-popup-duration;
                         external-player: settings-external-player;
                         audio-language: settings-audio-language;
+                        audio-language-options: settings-audio-language-options;
                         spatial-audio-mode: settings-spatial-audio-mode;
                         spatial-audio-status: settings-spatial-audio-status;
                         omniphony-audio-available: settings-omniphony-audio-available;
@@ -2752,6 +2797,316 @@ export component MainWindow inherits Window {
                 if (root.effective-show-player && !root.player-menu-open
                     && !app-shortcuts.has-focus) {
                     app-shortcuts.focus();
+                }
+            }
+        }
+
+        if (root.preview-drawer-video-fullscreen) : Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #000000;
+            z: 2500;
+
+            property <bool> fs-controls-visible: !root.preview-drawer-video-playing || fs-touch.has-hover;
+
+            if (root.preview-drawer-has-video-frame) : Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.preview-drawer-video-frame;
+                image-fit: contain;
+            }
+
+            fs-touch := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => {
+                    root.preview-drawer-toggle-playback();
+                }
+                double-clicked => {
+                    root.preview-drawer-exit-fullscreen();
+                }
+            }
+
+            if (root.preview-drawer-video-loading && !root.preview-drawer-has-video-frame) : Rectangle {
+                width: 100px;
+                height: 100px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+
+                Text {
+                    text: "…";
+                    color: #ff0000;
+                    font-size: 48px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            if (!root.preview-drawer-video-playing && root.preview-drawer-has-video-frame) : Rectangle {
+                width: 72px;
+                height: 72px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: 36px;
+                background: #000000a0;
+
+                Image {
+                    width: 34px;
+                    height: 34px;
+                    x: (parent.width - self.width) / 2 + 3px;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("assets/images/icons/play.svg");
+                    colorize: #ffffff;
+                    image-fit: contain;
+                }
+            }
+
+            if (self.fs-controls-visible) : Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: 80px;
+                background: @linear-gradient(180deg, #000000e6 0%, #00000080 60%, #00000000 100%);
+
+                HorizontalLayout {
+                    x: 24px;
+                    y: 18px;
+                    width: parent.width - 48px;
+                    height: 44px;
+                    spacing: 16px;
+                    alignment: start;
+
+                    ButtonSurface {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: self.has-hover ? #ffffff25 : transparent;
+                        accessible-name: "Cerrar pantalla completa (Esc)";
+                        clicked => { root.preview-drawer-exit-fullscreen(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 22px;
+                            height: 22px;
+                            source: @image-url("assets/images/icons/chevron-back.svg");
+                            colorize: #ffffff;
+                            image-fit: contain;
+                        }
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        height: 40px;
+                        text: root.detail-title != ""
+                            ? (root.detail-title + " - Trailer")
+                            : (root.discover-preview-title != ""
+                                ? (root.discover-preview-title + " - Trailer")
+                                : "Trailer Oficial");
+                        color: #ffffff;
+                        font-size: 16px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    ButtonSurface {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: self.has-hover ? #ffffff25 : transparent;
+                        accessible-name: "Cerrar pantalla completa";
+                        clicked => { root.preview-drawer-exit-fullscreen(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 18px;
+                            height: 18px;
+                            source: @image-url("assets/images/icons/close.svg");
+                            colorize: #ffffff;
+                            image-fit: contain;
+                        }
+                    }
+                }
+            }
+
+            if (self.fs-controls-visible) : Rectangle {
+                x: 0px;
+                y: parent.height - 110px;
+                width: parent.width;
+                height: 110px;
+                background: @linear-gradient(0deg, #000000fa 0%, #000000b0 50%, #00000000 100%);
+
+                Slider {
+                    x: 24px;
+                    y: 12px;
+                    width: parent.width - 48px;
+                    height: 32px;
+                    unit: 16px;
+                    minimum: 0.0;
+                    maximum: 1.0;
+                    step: 0.001;
+                    value: root.preview-drawer-video-progress;
+                    track-inset: 10px;
+                    track-size: 5px;
+                    thumb-size: 15px;
+                    hover-thumb-size: 19px;
+                    track-color: #ffffff33;
+                    track-opacity: 1.0;
+                    buffered-color: #ffffff70;
+                    progress-color: #ff0000;
+                    thumb-color: #ff0000;
+                    thumb-border-width: 2px;
+                    thumb-border-color: #ff4444;
+                    completed(val) => { root.preview-drawer-seek-progress(val); }
+                    changed(val) => { root.preview-drawer-seek-progress(val); }
+                }
+
+                HorizontalLayout {
+                    x: 24px;
+                    y: 50px;
+                    width: parent.width - 48px;
+                    height: 44px;
+                    spacing: 8px;
+                    alignment: start;
+
+                    ButtonSurface {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: self.has-hover ? #ffffff20 : transparent;
+                        accessible-name: root.preview-drawer-video-playing ? "Pausar" : "Reproducir";
+                        clicked => { root.preview-drawer-toggle-playback(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 22px;
+                            height: 22px;
+                            source: root.preview-drawer-video-playing
+                                ? @image-url("assets/images/icons/pause.svg")
+                                : @image-url("assets/images/icons/play.svg");
+                            colorize: #ffffff;
+                            image-fit: contain;
+                        }
+                    }
+
+                    ButtonSurface {
+                        width: 36px;
+                        height: 40px;
+                        border-radius: 18px;
+                        background: self.has-hover ? #ffffff20 : transparent;
+                        accessible-name: "Retroceder 10 segundos";
+                        clicked => { root.preview-drawer-seek-relative(-10.0); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 20px;
+                            height: 20px;
+                            source: @image-url("assets/images/icons/skip-15-back.svg");
+                            colorize: #ffffff;
+                            image-fit: contain;
+                        }
+                    }
+
+                    ButtonSurface {
+                        width: 36px;
+                        height: 40px;
+                        border-radius: 18px;
+                        background: self.has-hover ? #ffffff20 : transparent;
+                        accessible-name: "Avanzar 10 segundos";
+                        clicked => { root.preview-drawer-seek-relative(10.0); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 20px;
+                            height: 20px;
+                            source: @image-url("assets/images/icons/skip-15-forward.svg");
+                            colorize: #ffffff;
+                            image-fit: contain;
+                        }
+                    }
+
+                    ButtonSurface {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: self.has-hover ? #ffffff20 : transparent;
+                        accessible-name: root.preview-drawer-video-muted ? "Activar sonido" : "Silenciar";
+                        clicked => { root.preview-drawer-toggle-muted(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 22px;
+                            height: 22px;
+                            source: root.preview-drawer-video-muted
+                                ? @image-url("assets/images/icons/volume-mute.svg")
+                                : @image-url("assets/images/icons/volume-high.svg");
+                            colorize: #ffffff;
+                            image-fit: contain;
+                        }
+                    }
+
+                    Text {
+                        height: 40px;
+                        text: root.preview-drawer-video-time-label;
+                        color: #eeeeee;
+                        font-size: 13px;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    ButtonSurface {
+                        height: 32px;
+                        border-radius: 16px;
+                        background: root.preview-drawer-autoplay-enabled ? #ff000030 : #ffffff18;
+                        border-width: 1px;
+                        border-color: root.preview-drawer-autoplay-enabled ? #ff0000 : #ffffff30;
+                        accessible-name: "Autoplay";
+                        clicked => { root.preview-drawer-toggle-autoplay(); }
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 6px;
+                            alignment: center;
+
+                            Text {
+                                text: "Autoplay: " + (root.preview-drawer-autoplay-enabled ? "ON" : "OFF");
+                                color: root.preview-drawer-autoplay-enabled ? #ff4444 : #cccccc;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    ButtonSurface {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: self.has-hover ? #ffffff20 : transparent;
+                        accessible-name: "Salir de pantalla completa (Esc)";
+                        clicked => { root.preview-drawer-exit-fullscreen(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 22px;
+                            height: 22px;
+                            source: @image-url("assets/images/icons/minimize.svg");
+                            colorize: #ffffff;
+                            image-fit: contain;
+                        }
+                    }
                 }
             }
         }

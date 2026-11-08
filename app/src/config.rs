@@ -234,6 +234,9 @@ impl AppConfig {
             }
             self.config_version = 3;
         }
+        if self.config_version < 4 {
+            self.config_version = 4;
+        }
         self.config_version != original_version
     }
 }
@@ -425,7 +428,7 @@ mod tests {
         let mut config = legacy_config();
 
         assert!(config.migrate());
-        assert_eq!(config.config_version, 3);
+        assert_eq!(config.config_version, 4);
         assert_eq!(config.theme.background, "#0c0b11");
         assert_eq!(config.theme.secondary_background, "#1a173e");
         assert_eq!(config.theme.success, "#22b365");
@@ -437,7 +440,7 @@ mod tests {
         config.theme.accent = "#ff3366".to_string();
 
         assert!(config.migrate());
-        assert_eq!(config.config_version, 3);
+        assert_eq!(config.config_version, 4);
         assert_eq!(config.theme.background, "#08070d");
         assert_eq!(config.theme.accent, "#ff3366");
     }
@@ -453,7 +456,7 @@ mod tests {
         };
 
         assert!(config.migrate());
-        assert_eq!(config.config_version, 3);
+        assert_eq!(config.config_version, 4);
         assert_eq!(
             config.hover_trailer_preview_delay_ms,
             DEFAULT_HOVER_PREVIEW_DELAY_MS

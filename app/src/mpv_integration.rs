@@ -420,6 +420,7 @@ struct SessionState {
     stream_switch_position: Option<f64>,
     pending_pause_restore: Option<bool>,
     load_watchdog_task: Option<tokio::task::JoinHandle<()>>,
+    audio_track_recorded: bool,
 }
 
 impl SessionState {
@@ -2260,6 +2261,7 @@ impl NativePlaybackBridge {
         ui.on_player_cycle_audio({
             let controller = self.controller.clone();
             let state = self.state.clone();
+            let core = core.clone();
             let weak = ui.as_weak();
             move || {
                 let snapshot = read_state(&state).clone();
@@ -2280,6 +2282,12 @@ impl NativePlaybackBridge {
                 let track = snapshot.audio_tracks.get(next_idx as usize);
                 let track_id = track.map(|t| t.id.clone());
                 log_command(controller.send(PlaybackCommand::SetAudioTrack(track_id)));
+                update_stream_state(&core, |stream_state| {
+                    stream_state.audio_track = track.cloned().map(|track| AudioTrack {
+                        id: track.id,
+                        language: track.language,
+                    });
+                });
                 if let Some(ui) = weak.upgrade() {
                     ui.set_player_active_audio_idx(next_idx);
                     let label = if let Some(t) = track {
@@ -4304,6 +4312,32 @@ fn dispatch_state_to_core(
     if let Some(action) = video_params_action {
         dispatch_player(core, action);
     }
+    if state.loaded && !state.audio_tracks.is_empty() {
+        if let Some(ref active_id) = state.active_audio_track {
+            let should_record = {
+                let mut current = lock_session(session);
+                if !current.audio_track_recorded {
+                    current.audio_track_recorded = true;
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_record {
+                if let Some(active_track) = state.audio_tracks.iter().find(|t| &t.id == active_id) {
+                    let active_track = active_track.clone();
+                    update_stream_state(core, |stream_state| {
+                        if stream_state.audio_track.is_none() {
+                            stream_state.audio_track = Some(AudioTrack {
+                                id: active_track.id,
+                                language: active_track.language,
+                            });
+                        }
+                    });
+                }
+            }
+        }
+    }
     if let Some(skip_button_state) = skip_button_state {
         let ui = ui.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -4342,6 +4376,81 @@ fn expand_language_code(code: &str) -> String {
     }
 }
 
+fn map_country_or_language_to_alang(term: &str) -> Option<&'static str> {
+    let term = term.trim().to_ascii_lowercase();
+    match term.as_str() {
+        "japan" | "japanese" | "jp" => Some("jpn,ja,japanese"),
+        "korea" | "south korea" | "korean" | "kr" => Some("kor,ko,korean"),
+        "spain" | "spanish" | "mexico" | "argentina" | "colombia" | "chile" | "es" => {
+            Some("spa,es,spanish")
+        }
+        "france" | "french" | "fr" => Some("fra,fre,fr,french"),
+        "germany" | "german" | "de" => Some("deu,ger,de,german"),
+        "italy" | "italian" | "it" => Some("ita,it,italian"),
+        "brazil" | "portugal" | "portuguese" | "pt" => Some("por,pt,portuguese"),
+        "russia" | "russian" | "ru" => Some("rus,ru,russian"),
+        "china" | "chinese" | "taiwan" | "hong kong" | "mandarin" | "cantonese" | "zh" => {
+            Some("zho,chi,zh,chinese")
+        }
+        "india" | "hindi" | "hi" | "tamil" | "telugu" | "malayalam" => {
+            Some("hin,hi,hindi,tam,tel,mal")
+        }
+        "turkey" | "turkish" | "tr" => Some("tur,tr,turkish"),
+        "poland" | "polish" | "pl" => Some("pol,pl,polish"),
+        "sweden" | "swedish" | "se" | "sv" => Some("swe,sv,swedish"),
+        "norway" | "norwegian" | "no" => Some("nor,no,norwegian"),
+        "denmark" | "danish" | "dk" | "da" => Some("dan,da,danish"),
+        "netherlands" | "dutch" | "nl" => Some("nld,dut,nl,dutch"),
+        "united kingdom" | "uk" | "united states" | "usa" | "us" | "canada" | "australia"
+        | "english" | "en" => Some("eng,en,english"),
+        _ => None,
+    }
+}
+
+fn infer_original_audio_language(model: &AppModel) -> Option<String> {
+    let meta_item = model
+        .player
+        .meta_item
+        .as_ref()
+        .and_then(|m| m.content.as_ref())
+        .and_then(Loadable::ready)
+        .or_else(|| {
+            model
+                .meta_details
+                .meta_items
+                .iter()
+                .find_map(|item| item.content.as_ref().and_then(Loadable::ready))
+        });
+
+    let Some(meta) = meta_item else {
+        return None;
+    };
+
+    let id_lower = meta.preview.id.to_ascii_lowercase();
+    let type_lower = meta.preview.r#type.to_ascii_lowercase();
+    let is_anime = id_lower.starts_with("kitsu:")
+        || type_lower == "anime"
+        || meta.preview.links.iter().any(|l| {
+            (l.category.eq_ignore_ascii_case("genre") || l.category.eq_ignore_ascii_case("genres"))
+                && (l.name.eq_ignore_ascii_case("anime") || l.name.eq_ignore_ascii_case("animation"))
+        });
+
+    if is_anime {
+        return Some("jpn,ja,japanese".to_string());
+    }
+
+    for link in &meta.preview.links {
+        let cat = link.category.to_ascii_lowercase();
+        if cat == "country" || cat == "origin" || cat == "language" || cat == "genre" || cat == "genres" {
+            if let Some(alang) = map_country_or_language_to_alang(&link.name) {
+                return Some(alang.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 fn restore_stream_state(
     core: &Arc<Runtime<DesktopEnv, AppModel>>,
     controller: &Arc<OnceLock<PlaybackController>>,
@@ -4352,10 +4461,25 @@ fn restore_stream_state(
     };
     let model = core.model().ok();
     let settings = model.as_ref().map(|m| m.ctx.profile.settings.clone());
-    let stream_state = model.and_then(|m| m.player.stream_state.clone());
+    let stream_state = model.as_ref().and_then(|m| m.player.stream_state.clone());
+
+    let is_preferred_original = settings.as_ref().map_or(true, |s| {
+        s.audio_language.as_deref().is_none_or(|l| {
+            l.is_empty() || l.eq_ignore_ascii_case("original") || l.eq_ignore_ascii_case("auto")
+        })
+    });
 
     if let Some(ref settings) = settings {
-        if let Some(ref audio_lang) = settings.audio_language {
+        if is_preferred_original {
+            let inferred = model.as_deref().and_then(infer_original_audio_language);
+            if let Some(alang) = inferred {
+                log_command(controller.send(PlaybackCommand::SetAudioLanguage(alang)));
+            } else {
+                // When "Original" is chosen, leave alang empty so MPV's track selector picks
+                // the container's default or original track instead of forcing a dub!
+                log_command(controller.send(PlaybackCommand::SetAudioLanguage("".to_string())));
+            }
+        } else if let Some(ref audio_lang) = settings.audio_language {
             let alang_expanded = expand_language_code(audio_lang);
             log_command(controller.send(PlaybackCommand::SetAudioLanguage(alang_expanded)));
         }
@@ -4373,6 +4497,12 @@ fn restore_stream_state(
             log_command(controller.send(PlaybackCommand::SetSpeed(f64::from(speed))));
         }
         if let Some(ref audio) = stream_state.audio_track {
+            if let Some(ref lang) = audio.language {
+                if !lang.is_empty() {
+                    let alang_expanded = expand_language_code(lang);
+                    log_command(controller.send(PlaybackCommand::SetAudioLanguage(alang_expanded)));
+                }
+            }
             log_command(controller.send(PlaybackCommand::SetAudioTrack(Some(audio.id.clone()))));
         } else {
             log_command(controller.send(PlaybackCommand::SetAudioTrack(Some("auto".to_string()))));

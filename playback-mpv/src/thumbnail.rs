@@ -743,6 +743,11 @@ fn process_request(
         ) {
             return;
         }
+        if !is_request_current(shared, versioned.revision) {
+            // A newer scrub position is waiting; yield immediately so the worker
+            // handles the latest scrub position instead of stalling on an exact seek.
+            return;
+        }
         if !wait_until_exact_due(shared, versioned, config.exact_seek_delay) {
             return;
         }
@@ -828,19 +833,26 @@ fn seek_and_capture_once(
     seek_mode: &str,
     quality: ThumbnailQuality,
 ) -> RequestAttempt {
-    if !throttle_seek(shared, versioned.revision, state, config.fast_seek_interval) {
+    let is_fast = quality == ThumbnailQuality::Fast;
+    if !is_fast && !throttle_seek(shared, versioned.revision, state, config.fast_seek_interval) {
         return RequestAttempt::Cancelled;
     }
     if let Err(error) = seek(client, seconds, seek_mode) {
         return RequestAttempt::Failed(ThumbnailUnavailableReason::SeekFailed(error.to_string()));
     }
     state.last_seek_started = Some(Instant::now());
+    let cancellation = if is_fast {
+        let source_revision = lock_mailbox(shared).source_revision;
+        Cancellation::ActiveScrub { source_revision }
+    } else {
+        Cancellation::Request(versioned.revision)
+    };
     match wait_for_event(
         client,
         shared,
         EVENT_PLAYBACK_RESTART,
         Instant::now() + config.seek_timeout,
-        Cancellation::Request(versioned.revision),
+        cancellation,
     ) {
         WaitOutcome::Reached => {}
         WaitOutcome::Cancelled => return RequestAttempt::Cancelled,
@@ -853,14 +865,20 @@ fn seek_and_capture_once(
             return RequestAttempt::Failed(ThumbnailUnavailableReason::SeekFailed(message));
         }
     }
-    if !is_request_current(shared, versioned.revision) {
+    if !is_fast && !is_request_current(shared, versioned.revision) {
+        return RequestAttempt::Cancelled;
+    }
+    if is_fast && lock_mailbox(shared).latest_request.is_none() {
         return RequestAttempt::Cancelled;
     }
     match capture_frame(client, versioned.request, seconds, rotation, quality) {
-        Ok(frame) if is_request_current(shared, versioned.revision) => {
-            RequestAttempt::Captured(frame)
+        Ok(frame) => {
+            if is_fast || is_request_current(shared, versioned.revision) {
+                RequestAttempt::Captured(frame)
+            } else {
+                RequestAttempt::Cancelled
+            }
         }
-        Ok(_) => RequestAttempt::Cancelled,
         Err(reason) => RequestAttempt::Failed(reason),
     }
 }
@@ -990,6 +1008,7 @@ fn emit_request_failure(
 enum Cancellation {
     Source(u64),
     Request(u64),
+    ActiveScrub { source_revision: u64 },
 }
 
 enum WaitOutcome {
@@ -1073,6 +1092,11 @@ fn cancellation_invalid_locked(mailbox: &Mailbox, cancellation: Cancellation) ->
     match cancellation {
         Cancellation::Source(revision) => mailbox.source_revision != revision,
         Cancellation::Request(revision) => mailbox.request_revision != revision,
+        Cancellation::ActiveScrub { source_revision } => {
+            mailbox.source_revision != source_revision
+                || !mailbox.controls.is_empty()
+                || mailbox.latest_request.is_none()
+        }
     }
 }
 
