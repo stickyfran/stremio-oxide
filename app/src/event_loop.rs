@@ -297,6 +297,20 @@ pub fn install_hover_preview_callbacks(
         }
     });
 
+    ui.on_preview_drawer_change_volume({
+        let preview = preview.clone();
+        move |vol| {
+            preview.set_volume(vol);
+        }
+    });
+
+    ui.on_preview_drawer_change_speed({
+        let preview = preview.clone();
+        move |speed| {
+            preview.set_speed(speed);
+        }
+    });
+
     ui.on_preview_drawer_toggle_autoplay({
         let preview = preview.clone();
         move || {

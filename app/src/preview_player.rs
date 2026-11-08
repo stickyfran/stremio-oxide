@@ -181,11 +181,14 @@ impl PreviewPlayer {
         }
         let (source, projection) = {
             let mut state = lock_state(&self.state);
+            state.last_trailer = Some(trailer.clone());
             state.surface = PreviewSurface::Hover;
             state.generation = state.generation.wrapping_add(1);
             state.active_id = Some(trailer.meta_id.clone());
             state.stream_url = trailer.stream_url.clone();
             state.has_frame = false;
+            state.position = 0.0;
+            state.duration = 0.0;
             let playable = state.enabled && state.worker_ready && trailer.stream_url.is_some();
             state.loading = playable;
             state.playing = playable;
@@ -210,6 +213,12 @@ impl PreviewPlayer {
         apply_metadata(ui, trailer);
         apply_projection(ui, &projection);
         ui.set_hover_preview_frame(slint::Image::default());
+        ui.set_preview_drawer_video_playing(projection.playing);
+        ui.set_preview_drawer_video_muted(projection.muted);
+        ui.set_preview_drawer_video_volume(projection.volume);
+        ui.set_preview_drawer_video_speed(projection.speed);
+        ui.set_preview_drawer_video_progress(0.0);
+        ui.set_preview_drawer_video_time_label("0:00 / 0:00".into());
 
         if let Some(controller) = self.controller() {
             let result = match source {
@@ -279,6 +288,8 @@ impl PreviewPlayer {
             ui.set_preview_drawer_video_loading(projection.loading);
             ui.set_preview_drawer_video_playing(projection.playing);
             ui.set_preview_drawer_video_muted(projection.muted);
+            ui.set_preview_drawer_video_volume(projection.volume);
+            ui.set_preview_drawer_video_speed(projection.speed);
             ui.set_preview_drawer_autoplay_enabled(projection.autoplay);
             ui.set_preview_drawer_video_progress(0.0);
             ui.set_preview_drawer_video_time_label("0:00 / 0:00".into());
@@ -415,19 +426,61 @@ impl PreviewPlayer {
 
     /// Flips the mute state and returns the new value.
     pub fn toggle_muted(&self) -> bool {
-        let (muted, projection) = {
+        let (muted, vol, projection) = {
             let mut state = lock_state(&self.state);
             state.muted = !state.muted;
-            (state.muted, state.projection())
+            if !state.muted && state.volume < 0.05 {
+                state.volume = 0.75;
+            }
+            (state.muted, state.volume, state.projection())
         };
         if let Some(controller) = self.controller() {
             log_worker_command(controller.set_muted(muted));
+            if !muted {
+                log_worker_command(controller.set_volume(f64::from(vol) * 100.0));
+            }
         }
         if let Some(ui) = self.ui.upgrade() {
             ui.set_preview_drawer_video_muted(muted);
+            ui.set_preview_drawer_video_volume(vol);
         }
         self.schedule_projection(projection);
         muted
+    }
+
+    /// Sets trailer volume in `[0.0..=1.0]` and unmutes when `volume > 0`.
+    pub fn set_volume(&self, volume: f32) {
+        let clamped = volume.clamp(0.0, 1.0);
+        let (muted, projection) = {
+            let mut state = lock_state(&self.state);
+            state.volume = clamped;
+            state.muted = clamped <= 0.001;
+            (state.muted, state.projection())
+        };
+        if let Some(controller) = self.controller() {
+            log_worker_command(controller.set_volume(f64::from(clamped) * 100.0));
+            log_worker_command(controller.set_muted(muted));
+        }
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_preview_drawer_video_volume(clamped);
+            ui.set_preview_drawer_video_muted(muted);
+        }
+        self.schedule_projection(projection);
+    }
+
+    /// Sets trailer playback speed (e.g. 0.5, 0.75, 1.0, 1.25, 1.5, 2.0).
+    pub fn set_speed(&self, speed: f32) {
+        let clamped = speed.clamp(0.25, 2.0);
+        {
+            let mut state = lock_state(&self.state);
+            state.speed = clamped;
+        }
+        if let Some(controller) = self.controller() {
+            log_worker_command(controller.set_speed(f64::from(clamped)));
+        }
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_preview_drawer_video_speed(clamped);
+        }
     }
 
     /// Seeks relative to current position with 150ms debounce.
@@ -532,7 +585,6 @@ impl PreviewPlayer {
             }
             state.loading = false;
             state.has_frame = true;
-            state.playing = true;
             state.position = frame.position;
             state.duration = frame.duration;
             (frame.position, frame.duration)
@@ -562,9 +614,13 @@ impl PreviewPlayer {
             let Some(staged) = latest_frame.lock().unwrap().take() else {
                 return;
             };
-            if lock_state(&state).generation != staged.generation {
-                return;
-            }
+            let is_playing = {
+                let s = lock_state(&state);
+                if s.generation != staged.generation {
+                    return;
+                }
+                s.playing
+            };
             let Some(ui) = ui.upgrade() else {
                 return;
             };
@@ -577,7 +633,7 @@ impl PreviewPlayer {
             ui.set_preview_drawer_video_frame(image);
             ui.set_preview_drawer_has_video_frame(true);
             ui.set_preview_drawer_video_loading(false);
-            ui.set_preview_drawer_video_playing(true);
+            ui.set_preview_drawer_video_playing(is_playing);
             let progress = if staged.dur > 0.0 {
                 (staged.pos / staged.dur) as f32
             } else {
@@ -657,6 +713,8 @@ struct PreviewState {
     active_id: Option<String>,
     stream_url: Option<String>,
     muted: bool,
+    volume: f32,
+    speed: f32,
     loading: bool,
     has_frame: bool,
     playing: bool,
@@ -677,6 +735,8 @@ impl PreviewState {
             active_id: None,
             stream_url: None,
             muted: true,
+            volume: 0.75,
+            speed: 1.0,
             loading: false,
             has_frame: false,
             playing: false,
@@ -694,6 +754,8 @@ impl PreviewState {
             has_frame: self.has_frame,
             playing: self.playing,
             muted: self.muted,
+            volume: self.volume,
+            speed: self.speed,
             autoplay: self.autoplay,
             position: self.position,
             duration: self.duration,
@@ -709,6 +771,8 @@ struct UiProjection {
     has_frame: bool,
     playing: bool,
     muted: bool,
+    volume: f32,
+    speed: f32,
     autoplay: bool,
     position: f64,
     duration: f64,

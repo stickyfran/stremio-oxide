@@ -82,6 +82,8 @@ export component DetailsPage inherits Rectangle {
     in property <bool> trailer-has-video-frame: false;    in property <bool> trailer-video-loading: false;
     in property <bool> trailer-video-playing: false;
     in property <bool> trailer-video-muted: true;
+    in property <float> trailer-video-volume: 0.75;
+    in property <float> trailer-video-speed: 1.0;
     in property <float> trailer-video-progress: 0.0;
     in property <string> trailer-video-time-label: "";
     callback toggle-library;
@@ -89,6 +91,8 @@ export component DetailsPage inherits Rectangle {
     callback play-trailer(string);
     callback trailer-toggle-playback;
     callback trailer-toggle-muted;
+    callback trailer-change-volume(float);
+    callback trailer-change-speed(float);
     callback trailer-maximize;
     callback trailer-seek-relative(float);
     callback trailer-seek-progress(float);
@@ -259,10 +263,14 @@ export component DetailsPage inherits Rectangle {
             trailer-video-loading: root.trailer-video-loading;
             trailer-video-playing: root.trailer-video-playing;
             trailer-video-muted: root.trailer-video-muted;
+            trailer-video-volume: root.trailer-video-volume;
+            trailer-video-speed: root.trailer-video-speed;
             trailer-video-progress: root.trailer-video-progress;
             trailer-video-time-label: root.trailer-video-time-label;
             trailer-toggle-playback => { root.trailer-toggle-playback(); }
             trailer-toggle-muted => { root.trailer-toggle-muted(); }
+            trailer-change-volume(val) => { root.trailer-change-volume(val); }
+            trailer-change-speed(val) => { root.trailer-change-speed(val); }
             trailer-maximize => { root.trailer-maximize(); }
             trailer-seek-relative(offset) => { root.trailer-seek-relative(offset); }
             trailer-seek-progress(progress) => { root.trailer-seek-progress(progress); }

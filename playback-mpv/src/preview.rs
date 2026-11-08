@@ -45,9 +45,9 @@ pub struct PreviewConfig {
 impl Default for PreviewConfig {
     fn default() -> Self {
         Self {
-            max_width: 640,
-            max_height: 360,
-            frame_interval: Duration::from_millis(66),
+            max_width: 1280,
+            max_height: 720,
+            frame_interval: Duration::from_millis(16),
             load_timeout: Duration::from_secs(20),
             hardware_decoding: true,
             loop_playback: true,
@@ -59,11 +59,9 @@ impl Default for PreviewConfig {
 
 /// Trailers arrive as YouTube links, so the popup needs `ytdl_hook` too. Frames
 /// are delivered no larger than [`PreviewConfig::max_width`] by
-/// [`PreviewConfig::max_height`], so anything above 360p would be decoded only
-/// to be scaled away — and a smaller rendition starts noticeably sooner, which
-/// matters far more for a popup that opens on hover.
+/// [`PreviewConfig::max_height`], defaulting to 720p for crisp, fluid playback.
 const PREVIEW_YTDL_FORMAT: &str =
-    "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo[height<=480]+bestaudio/best";
+    "bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]/bestvideo+bestaudio/best";
 
 /// A trailer assigned to the preview worker.
 #[derive(Clone, Debug)]
@@ -214,6 +212,30 @@ impl PreviewController {
         Ok(())
     }
 
+    /// Sets playback volume (0.0 to 100.0).
+    pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
+        let mut mailbox = lock_mailbox(&self.shared);
+        ensure_open(&mailbox)?;
+        mailbox
+            .controls
+            .push_back(Control::SetVolume(volume.clamp(0.0, 100.0)));
+        drop(mailbox);
+        self.shared.condvar.notify_one();
+        Ok(())
+    }
+
+    /// Sets playback speed (0.25 to 2.0).
+    pub fn set_speed(&self, speed: f64) -> Result<(), MpvError> {
+        let mut mailbox = lock_mailbox(&self.shared);
+        ensure_open(&mailbox)?;
+        mailbox
+            .controls
+            .push_back(Control::SetSpeed(speed.clamp(0.25, 2.0)));
+        drop(mailbox);
+        self.shared.condvar.notify_one();
+        Ok(())
+    }
+
     fn shutdown(&self) {
         let mut mailbox = lock_mailbox(&self.shared);
         if mailbox.closed {
@@ -315,6 +337,8 @@ struct Mailbox {
 enum Control {
     Play(u64, PreviewSource),
     Mute(bool),
+    SetVolume(f64),
+    SetSpeed(f64),
     Seek(f64),
     SeekAbsolute(f64),
     Pause(bool),
@@ -435,6 +459,7 @@ struct PlayingSource {
     next_frame_due: Instant,
     capture_failures: u8,
     last_captured_pts: Option<f64>,
+    paused: bool,
 }
 
 fn worker_main(
@@ -464,6 +489,12 @@ fn worker_main(
             wait_for_activity(&shared);
             continue;
         };
+
+        if playing.paused {
+            drain_unhandled_events(&client);
+            wait_for_activity(&shared);
+            continue;
+        }
 
         let remaining = playing
             .next_frame_due
@@ -584,21 +615,37 @@ fn handle_control(
             }
             true
         }
+        Control::SetVolume(volume) => {
+            let _ = client.set_string("volume", &format!("{volume:.1}"));
+            true
+        }
+        Control::SetSpeed(speed) => {
+            let _ = client.set_string("speed", &format!("{speed:.2}"));
+            true
+        }
         Control::Seek(offset_seconds) => {
-            if source.is_some() {
+            if let Some(playing) = source.as_mut() {
                 let _ = client.command(&["seek", &format!("{offset_seconds:.2}"), "relative"]);
+                playing.last_captured_pts = None;
+                playing.next_frame_due = Instant::now();
             }
             true
         }
         Control::SeekAbsolute(seconds) => {
-            if source.is_some() {
+            if let Some(playing) = source.as_mut() {
                 let _ = client.command(&["seek", &format!("{seconds:.2}"), "absolute"]);
+                playing.last_captured_pts = None;
+                playing.next_frame_due = Instant::now();
             }
             true
         }
         Control::Pause(paused) => {
-            if source.is_some() {
+            if let Some(playing) = source.as_mut() {
                 let _ = client.set_flag("pause", paused);
+                playing.paused = paused;
+                if !paused {
+                    playing.next_frame_due = Instant::now();
+                }
             }
             true
         }
@@ -696,6 +743,7 @@ fn load_source(
         next_frame_due: Instant::now(),
         capture_failures: 0,
         last_captured_pts: None,
+        paused: false,
     }))
 }
 
@@ -709,6 +757,12 @@ fn apply_scale_filter(
     } else {
         (config.max_width, config.max_height)
     };
+    let src_w = client.get_i64("width").unwrap_or(0);
+    let src_h = client.get_i64("height").unwrap_or(0);
+    if rotation == 0 && src_w > 0 && src_h > 0 && src_w <= i64::from(width) && src_h <= i64::from(height) {
+        let _ = client.set_string("vf", "");
+        return Ok(());
+    }
     client
         .set_string(
             "vf",

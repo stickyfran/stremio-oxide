@@ -55,6 +55,8 @@ export component MediaPreviewDrawer inherits Rectangle {
     in property <bool> video-loading: false;
     in property <bool> video-playing: false;
     in property <bool> video-muted: true;
+    in property <float> video-volume: 0.75;
+    in property <float> video-speed: 1.0;
     in property <bool> has-trailer: false;
     in property <bool> autoplay-enabled: false;
     in-out property <float> video-progress: 0.0; // 0.0 a 1.0
@@ -71,6 +73,8 @@ export component MediaPreviewDrawer inherits Rectangle {
     callback close-drawer();
     callback toggle-trailer-playback();
     callback toggle-video-muted();
+    callback change-video-volume(float);
+    callback change-video-speed(float);
     callback toggle-autoplay();
     callback maximize-trailer();
     callback seek-video-relative(float);
@@ -99,12 +103,37 @@ export component MediaPreviewDrawer inherits Rectangle {
         animate opacity { duration: 120ms; easing: ease-out; }
 
         // =====================================================================
-        // 1. ZONA SUPERIOR: REPRODUCTOR DE TRAILER (16:9 FIJO)
+        // 1. ZONA SUPERIOR: REPRODUCTOR DE TRAILER (16:9 FIJO - ESTILO TUBE OXIDE)
         // =====================================================================
         video-container := Rectangle {
             height: root.video-height;
-            background: Theme.background;
+            background: #000000;
             clip: true;
+
+            private property <float> effective-vol: root.video-muted ? 0.0 : Math.max(0.0, Math.min(1.0, root.video-volume));
+            private property <string> speed-label:
+                Math.abs(root.video-speed - 0.5) < 0.05 ? "0.5x" :
+                Math.abs(root.video-speed - 0.75) < 0.05 ? "0.75x" :
+                Math.abs(root.video-speed - 1.25) < 0.05 ? "1.25x" :
+                Math.abs(root.video-speed - 1.5) < 0.05 ? "1.5x" :
+                Math.abs(root.video-speed - 2.0) < 0.05 ? "2x" : "1x";
+
+            private property <bool> pointer-inside:
+                drawer-video-touch.has-hover
+                || drawer-center-play.has-hover
+                || drawer-corner-fs-btn.has-hover
+                || close-drawer-btn.has-hover
+                || drawer-scrubber-touch.has-hover
+                || drawer-scrubber-touch.pressed
+                || drawer-play-btn.has-hover
+                || drawer-mute-btn.has-hover
+                || drawer-vol-touch.has-hover
+                || drawer-vol-touch.pressed
+                || drawer-speed-btn.has-hover
+                || drawer-auto-btn.has-hover
+                || drawer-fs-btn.has-hover;
+            private property <bool> show-chrome:
+                !root.video-playing || self.pointer-inside;
 
             // Backdrop / Póster base
             if (root.poster.width > 0) : Image {
@@ -112,7 +141,7 @@ export component MediaPreviewDrawer inherits Rectangle {
                 height: parent.height;
                 source: root.poster;
                 image-fit: cover;
-                opacity: root.has-video-frame ? 0 : 0.45;
+                opacity: root.has-video-frame ? 0 : 0.50;
                 animate opacity { duration: 150ms; }
             }
 
@@ -124,10 +153,11 @@ export component MediaPreviewDrawer inherits Rectangle {
                 image-fit: contain;
             }
 
-            // Área interactiva de control: Click = Toggle Play/Pause, Scroll = Seek
-            TouchArea {
+            // Área interactiva de control: Click = Toggle Play/Pause, Double-click = Fullscreen, Scroll = Seek
+            drawer-video-touch := TouchArea {
                 width: parent.width;
                 height: parent.height;
+                mouse-cursor: root.has-trailer ? MouseCursor.pointer : MouseCursor.default;
                 clicked => {
                     if (root.has-trailer) {
                         root.toggle-trailer-playback();
@@ -148,25 +178,28 @@ export component MediaPreviewDrawer inherits Rectangle {
                 }
             }
 
-            // Botón central de Play cuando está detenido o pausado
-            if (!root.video-playing && root.has-trailer) : ButtonSurface {
-                width: 4.5 * root.unit;
-                height: 4.5 * root.unit;
+            // Botón central de Play estilo Tube Oxide cuando está detenido o pausado
+            drawer-center-play := ButtonSurface {
+                width: 50px;
+                height: 50px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                border-radius: self.width / 2;
-                background: self.has-hover ? Theme.accent.with-alpha(0.85) : Theme.background.with-alpha(0.7);
+                border-radius: 25px;
+                visible: !root.video-playing && root.has-trailer && !root.video-loading;
+                background: self.has-hover ? #ff0000e6 : #000000a6;
                 border-width: 1px;
-                border-color: Theme.accent;
+                border-color: self.has-hover ? #ff4444 : #ffffff30;
+                accessible-name: @tr("Watch Trailer");
                 clicked => { root.toggle-trailer-playback(); }
 
                 Image {
-                    width: 2 * root.unit;
-                    height: 2 * root.unit;
-                    x: (parent.width - self.width) / 2 + 0.15 * root.unit;
+                    width: 22px;
+                    height: 22px;
+                    x: (parent.width - self.width) / 2 + 2px;
                     y: (parent.height - self.height) / 2;
                     source: @image-url("../assets/images/icons/play.svg");
-                    colorize: Theme.primary-foreground;
+                    colorize: #ffffff;
+                    image-fit: contain;
                 }
             }
 
@@ -174,138 +207,334 @@ export component MediaPreviewDrawer inherits Rectangle {
             if (root.video-loading && !root.has-video-frame) : Rectangle {
                 width: parent.width;
                 height: parent.height;
-                background: Theme.background.with-alpha(0.5);
+                background: #00000078;
 
-                Text {
-                    text: @tr("Loading trailer...");
-                    color: Theme.text-primary;
-                    font-size: 0.9 * root.unit;
+                Rectangle {
+                    width: 44px;
+                    height: 44px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                }
-            }
+                    border-radius: 22px;
+                    background: #000000a6;
+                    border-width: 2px;
+                    border-color: #ff0000;
 
-            // Barra superior de controles sobre el video
-            HorizontalLayout {
-                y: 0.75 * root.unit;
-                x: 0.75 * root.unit;
-                width: parent.width - 1.5 * root.unit;
-                height: 2.5 * root.unit;
-                alignment: space-between;
-
-                // Toggle Autoplay
-                ButtonSurface {
-                    height: 2.4 * root.unit;
-                    border-radius: 1.2 * root.unit;
-                    background: root.autoplay-enabled ? Theme.accent : Theme.background.with-alpha(0.65);
-                    clicked => { root.toggle-autoplay(); }
-
-                    HorizontalLayout {
-                        padding-left: 0.75 * root.unit;
-                        padding-right: 0.75 * root.unit;
-                        alignment: center;
-                        Text {
-                            text: root.autoplay-enabled ? "Auto: ON" : "Auto: OFF";
-                            color: Theme.primary-foreground;
-                            font-size: 0.75 * root.unit;
-                            font-weight: 600;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 0.5 * root.unit;
-                    alignment: center;
-
-                    // Mute / Unmute
-                    if (root.video-playing) : DrawerIconButton {
-                        unit: root.unit;
-                        icon-source: root.video-muted
-                            ? @image-url("../assets/images/icons/volume-off.svg")
-                            : @image-url("../assets/images/icons/volume-high.svg");
-                        accessible-name: root.video-muted ? @tr("Unmute trailer") : @tr("Mute trailer");
-                        clicked => { root.toggle-video-muted(); }
-                    }
-
-                    // Maximizar / Ver trailer en reproductor completo
-                    if (root.has-trailer) : DrawerIconButton {
-                        unit: root.unit;
-                        icon-source: @image-url("../assets/images/icons/maximize.svg");
-                        accessible-name: @tr("Watch trailer in full player");
-                        clicked => { root.maximize-trailer(); }
-                    }
-
-                    // Cerrar Drawer
-                    DrawerIconButton {
-                        unit: root.unit;
-                        icon-source: @image-url("../assets/images/icons/close.svg");
-                        accessible-name: @tr("Close preview");
-                        clicked => { root.close-drawer(); }
+                    Text {
+                        text: "…";
+                        color: #ffffff;
+                        font-size: 20px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
                 }
             }
 
-            // Barra inferior con Scrubber interactivo y tiempo
-            if (root.video-playing || root.video-progress > 0.0) : Rectangle {
-                y: parent.height - 2.2 * root.unit;
+            // Botón en esquina superior derecha para maximizar trailer
+            drawer-corner-fs-btn := ButtonSurface {
+                x: parent.width - self.width - 46px;
+                y: 10px;
+                width: 30px;
+                height: 30px;
+                border-radius: 15px;
+                visible: root.has-trailer;
+                background: self.has-hover ? #ffffff35 : #0000008c;
+                accessible-name: @tr("Watch trailer in full player");
+                clicked => { root.maximize-trailer(); }
+
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 14px;
+                    height: 14px;
+                    source: @image-url("../assets/images/icons/maximize.svg");
+                    colorize: #ffffff;
+                    image-fit: contain;
+                }
+            }
+
+            // Botón superior derecho exclusivo para cerrar el Drawer
+            close-drawer-btn := ButtonSurface {
+                x: parent.width - self.width - 10px;
+                y: 10px;
+                width: 30px;
+                height: 30px;
+                border-radius: 15px;
+                background: self.has-hover ? #ffffff2b : #0000008c;
+                accessible-name: @tr("Close preview");
+                clicked => { root.close-drawer(); }
+
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 14px;
+                    height: 14px;
+                    source: @image-url("../assets/images/icons/close.svg");
+                    colorize: #ffffff;
+                    image-fit: contain;
+                }
+            }
+
+            // Barra inferior exacta de Tube Oxide (`view_control_bar`: #000000a6, padding [8, 12], spacing 6)
+            // Siempre montada para evitar titileo con el mouse.
+            Rectangle {
                 x: 0px;
+                y: parent.height - self.height;
                 width: parent.width;
-                height: 2.2 * root.unit;
-                background: @linear-gradient(180deg, Theme.background.with-alpha(0) 0%, Theme.background.with-alpha(0.85) 100%);
+                height: 52px;
+                visible: root.has-trailer;
+                opacity: video-container.show-chrome ? 1.0 : 0.0;
+                animate opacity { duration: 140ms; easing: ease-out; }
+                background: #000000a6;
 
-                HorizontalLayout {
-                    padding-left: 0.75 * root.unit;
-                    padding-right: 0.75 * root.unit;
-                    spacing: 0.75 * root.unit;
-                    alignment: center;
+                // 1. Scrubber rojo de ancho completo arriba de los botones
+                scrubber-box := Rectangle {
+                    x: 12px;
+                    y: 6px;
+                    width: parent.width - 24px;
+                    height: 12px;
+                    background: transparent;
 
-                    // Scrubber Bar
-                    scrubber-box := Rectangle {
-                        horizontal-stretch: 1;
-                        height: 0.4 * root.unit;
-                        y: (parent.height - self.height) / 2; // Centrado vertical respecto al texto de tiempo
-                        background: Theme.divider;
+                    property <length> rail-h: drawer-scrubber-touch.has-hover || drawer-scrubber-touch.pressed ? 6px : 4px;
+
+                    Rectangle {
+                        x: 0px;
+                        y: (parent.height - parent.rail-h) / 2;
+                        width: parent.width;
+                        height: parent.rail-h;
                         border-radius: self.height / 2;
+                        background: #ffffff38;
+                    }
 
-                        Rectangle {
-                            x: 0px;
-                            y: 0px;
-                            width: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress));
-                            height: parent.height;
-                            background: Theme.accent;
-                            border-radius: self.height / 2;
-                        }
+                    Rectangle {
+                        x: 0px;
+                        y: (parent.height - parent.rail-h) / 2;
+                        width: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress));
+                        height: parent.rail-h;
+                        border-radius: self.height / 2;
+                        background: #ff0000;
+                    }
 
-                        // Manija circular del scrubber
-                        Rectangle {
-                            x: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress)) - self.width / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 0.9 * root.unit;
-                            height: 0.9 * root.unit;
-                            border-radius: self.width / 2;
-                            background: Theme.primary-foreground;
-                        }
+                    Rectangle {
+                        property <length> d: drawer-scrubber-touch.has-hover || drawer-scrubber-touch.pressed ? 13px : 10px;
+                        x: max(0px, min(parent.width - self.d, parent.width * Math.max(0.0, Math.min(1.0, root.video-progress)) - self.d / 2));
+                        y: (parent.height - self.d) / 2;
+                        width: self.d;
+                        height: self.d;
+                        border-radius: self.d / 2;
+                        background: #ff0000;
+                    }
 
-                        TouchArea {
-                            width: parent.width;
-                            height: 1.5 * root.unit;
-                            y: (parent.height - self.height) / 2;
-                            clicked => {
+                    drawer-scrubber-touch := TouchArea {
+                        width: parent.width;
+                        height: 16px;
+                        y: -2px;
+                        mouse-cursor: MouseCursor.pointer;
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                                 if (scrubber-box.width > 0px) {
                                     root.seek-video-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
                                 }
                             }
                         }
+                        moved => {
+                            if (self.pressed && scrubber-box.width > 0px) {
+                                root.seek-video-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
+                            }
+                        }
+                    }
+                }
+
+                // 2. Fila inferior de controles estilo Tube Oxide:
+                // Izquierda: [Play/Pause] [Mute/Vol] [Vol Slider] [Tiempo] | Centro: Spacer | Derecha: [Speed "1x"] [Auto] [Fullscreen]
+                HorizontalLayout {
+                    x: 10px;
+                    y: 20px;
+                    width: parent.width - 20px;
+                    height: 28px;
+                    spacing: 4px;
+                    alignment: start;
+
+                    drawer-play-btn := ButtonSurface {
+                        width: 30px;
+                        height: 28px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                        accessible-name: root.video-playing ? @tr("Pause") : @tr("Play");
+                        clicked => { root.toggle-trailer-playback(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 16px;
+                            height: 16px;
+                            source: root.video-playing
+                                ? @image-url("../assets/images/icons/pause.svg")
+                                : @image-url("../assets/images/icons/play.svg");
+                            colorize: #f1f1f1;
+                            image-fit: contain;
+                        }
                     }
 
-                    // Etiqueta de tiempo (ej. "0:34 / 2:15")
-                    if (root.video-time-label != "") : Text {
-                        text: root.video-time-label;
-                        color: Theme.primary-foreground;
-                        font-size: 0.75 * root.unit;
+                    drawer-mute-btn := ButtonSurface {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                        accessible-name: root.video-muted ? @tr("Unmute trailer") : @tr("Mute trailer");
+                        clicked => { root.toggle-video-muted(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 16px;
+                            height: 16px;
+                            source: (root.video-muted || root.video-volume <= 0.01)
+                                ? @image-url("../assets/images/icons/volume-mute.svg")
+                                : (root.video-volume < 0.5
+                                    ? @image-url("../assets/images/icons/volume-low.svg")
+                                    : @image-url("../assets/images/icons/volume-high.svg"));
+                            colorize: #f1f1f1;
+                            image-fit: contain;
+                        }
+                    }
+
+                    // Slider de volumen en línea Tube Oxide (0.0..=1.0, rojo #ff0000)
+                    drawer-vol-box := Rectangle {
+                        width: 52px;
+                        height: 28px;
+                        background: transparent;
+
+                        Rectangle {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width;
+                            height: 4px;
+                            border-radius: 2px;
+                            background: #ffffff40;
+                        }
+
+                        Rectangle {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width * video-container.effective-vol;
+                            height: 4px;
+                            border-radius: 2px;
+                            background: #ff0000;
+                        }
+
+                        Rectangle {
+                            property <length> d: drawer-vol-touch.has-hover || drawer-vol-touch.pressed ? 11px : 9px;
+                            x: max(0px, min(parent.width - self.d, parent.width * video-container.effective-vol - self.d / 2));
+                            y: (parent.height - self.d) / 2;
+                            width: self.d;
+                            height: self.d;
+                            border-radius: self.d / 2;
+                            background: #ff0000;
+                        }
+
+                        drawer-vol-touch := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            mouse-cursor: MouseCursor.pointer;
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                    if (drawer-vol-box.width > 0px) {
+                                        root.change-video-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / drawer-vol-box.width)));
+                                    }
+                                }
+                            }
+                            moved => {
+                                if (self.pressed && drawer-vol-box.width > 0px) {
+                                    root.change-video-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / drawer-vol-box.width)));
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        height: 28px;
+                        text: root.video-time-label != "" ? root.video-time-label : "0:00 / 0:00";
+                        color: #f1f1f1;
+                        font-size: 12px;
                         font-weight: 500;
                         vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    drawer-speed-btn := ButtonSurface {
+                        width: 34px;
+                        height: 28px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                        accessible-name: "Velocidad " + video-container.speed-label;
+                        clicked => {
+                            if (Math.abs(root.video-speed - 1.0) < 0.05) {
+                                root.change-video-speed(1.25);
+                            } else if (Math.abs(root.video-speed - 1.25) < 0.05) {
+                                root.change-video-speed(1.5);
+                            } else if (Math.abs(root.video-speed - 1.5) < 0.05) {
+                                root.change-video-speed(2.0);
+                            } else if (Math.abs(root.video-speed - 2.0) < 0.05) {
+                                root.change-video-speed(0.5);
+                            } else {
+                                root.change-video-speed(1.0);
+                            }
+                        }
+
+                        Text {
+                            width: parent.width;
+                            height: parent.height;
+                            text: video-container.speed-label;
+                            color: #f1f1f1;
+                            font-size: 12px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    drawer-auto-btn := ButtonSurface {
+                        height: 28px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                        accessible-name: "Autoplay";
+                        clicked => { root.toggle-autoplay(); }
+
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            alignment: center;
+                            Text {
+                                text: root.autoplay-enabled ? "Auto: ON" : "Auto";
+                                color: root.autoplay-enabled ? #ff4d4d : #f1f1f1;
+                                font-size: 11.5px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    drawer-fs-btn := ButtonSurface {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                        accessible-name: @tr("Watch trailer in full player");
+                        clicked => { root.maximize-trailer(); }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 16px;
+                            height: 16px;
+                            source: @image-url("../assets/images/icons/maximize.svg");
+                            colorize: #f1f1f1;
+                            image-fit: contain;
+                        }
                     }
                 }
             }

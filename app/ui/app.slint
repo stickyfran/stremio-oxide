@@ -523,6 +523,8 @@ export component MainWindow inherits Window {
     in-out property <bool> preview-drawer-video-loading: false;
     in-out property <bool> preview-drawer-video-playing: false;
     in-out property <bool> preview-drawer-video-muted: true;
+    in-out property <float> preview-drawer-video-volume: 0.75;
+    in-out property <float> preview-drawer-video-speed: 1.0;
     in-out property <bool> preview-drawer-autoplay-enabled: false;
     in-out property <float> preview-drawer-video-progress: 0.0;
     in-out property <string> preview-drawer-video-time-label: "";
@@ -530,6 +532,8 @@ export component MainWindow inherits Window {
 
     callback preview-drawer-toggle-playback();
     callback preview-drawer-toggle-muted();
+    callback preview-drawer-change-volume(float);
+    callback preview-drawer-change-speed(float);
     callback preview-drawer-toggle-autoplay();
     callback preview-drawer-maximize();
     callback preview-drawer-seek-relative(float);
@@ -1886,12 +1890,16 @@ export component MainWindow inherits Window {
                         preview-video-loading: root.preview-drawer-video-loading;
                         preview-video-playing: root.preview-drawer-video-playing;
                         preview-video-muted: root.preview-drawer-video-muted;
+                        preview-video-volume: root.preview-drawer-video-volume;
+                        preview-video-speed: root.preview-drawer-video-speed;
                         preview-autoplay-enabled: root.preview-drawer-autoplay-enabled;
                         preview-video-progress <=> root.preview-drawer-video-progress;
                         preview-video-time-label: root.preview-drawer-video-time-label;
 
                         toggle-trailer-playback => { root.preview-drawer-toggle-playback(); }
                         toggle-video-muted => { root.preview-drawer-toggle-muted(); }
+                        change-video-volume(val) => { root.preview-drawer-change-volume(val); }
+                        change-video-speed(val) => { root.preview-drawer-change-speed(val); }
                         toggle-autoplay => { root.preview-drawer-toggle-autoplay(); }
                         maximize-trailer => { root.preview-drawer-maximize(); }
                         seek-video-relative(offset) => { root.preview-drawer-seek-relative(offset); }
@@ -2009,6 +2017,8 @@ export component MainWindow inherits Window {
                         preview-video-loading: root.preview-drawer-video-loading;
                         preview-video-playing: root.preview-drawer-video-playing;
                         preview-video-muted: root.preview-drawer-video-muted;
+                        preview-video-volume: root.preview-drawer-video-volume;
+                        preview-video-speed: root.preview-drawer-video-speed;
                         preview-autoplay-enabled: root.preview-drawer-autoplay-enabled;
                         preview-video-progress <=> root.preview-drawer-video-progress;
                         preview-video-time-label: root.preview-drawer-video-time-label;
@@ -2020,6 +2030,8 @@ export component MainWindow inherits Window {
                         play-trailer-preview(selection-id) => { play-stream(selection-id); }
                         toggle-trailer-playback => { root.preview-drawer-toggle-playback(); }
                         toggle-video-muted => { root.preview-drawer-toggle-muted(); }
+                        change-video-volume(val) => { root.preview-drawer-change-volume(val); }
+                        change-video-speed(val) => { root.preview-drawer-change-speed(val); }
                         toggle-autoplay => { root.preview-drawer-toggle-autoplay(); }
                         maximize-trailer => { root.preview-drawer-maximize(); }
                         seek-video-relative(offset) => { root.preview-drawer-seek-relative(offset); }
@@ -2382,7 +2394,12 @@ export component MainWindow inherits Window {
             frame: root.hover-preview-frame;
             has-frame: root.hover-preview-has-frame;
             loading: root.hover-preview-loading;
+            playing: root.preview-drawer-video-playing;
             muted: root.hover-preview-muted;
+            volume: root.preview-drawer-video-volume;
+            speed: root.preview-drawer-video-speed;
+            progress: root.preview-drawer-video-progress;
+            time-label: root.preview-drawer-video-time-label;
             status: root.hover-preview-status;
             poster: root.hover-preview-poster;
             title: root.hover-preview-title;
@@ -2396,8 +2413,13 @@ export component MainWindow inherits Window {
             anchor-y: root.hover-preview-anchor-y;
             anchor-width: root.hover-preview-anchor-width;
             anchor-height: root.hover-preview-anchor-height;
+            toggle-playback => { root.preview-drawer-toggle-playback(); }
             toggle-muted => { root.hover-preview-toggle-muted(); }
+            change-volume(val) => { root.preview-drawer-change-volume(val); }
+            change-speed(val) => { root.preview-drawer-change-speed(val); }
+            maximize-requested => { root.preview-drawer-maximize(); }
             seek-relative(offset) => { root.hover-preview-seek(offset); }
+            seek-progress(val) => { root.preview-drawer-seek-progress(val); }
             toggle-library-requested => { root.hover-preview-toggle-library(); }
             play-requested => {
                 root.hover-preview-play();
@@ -2508,10 +2530,14 @@ export component MainWindow inherits Window {
             trailer-video-loading: root.preview-drawer-video-loading;
             trailer-video-playing: root.preview-drawer-video-playing;
             trailer-video-muted: root.preview-drawer-video-muted;
+            trailer-video-volume: root.preview-drawer-video-volume;
+            trailer-video-speed: root.preview-drawer-video-speed;
             trailer-video-progress: root.preview-drawer-video-progress;
             trailer-video-time-label: root.preview-drawer-video-time-label;
             trailer-toggle-playback => { root.preview-drawer-toggle-playback(); }
             trailer-toggle-muted => { root.preview-drawer-toggle-muted(); }
+            trailer-change-volume(val) => { root.preview-drawer-change-volume(val); }
+            trailer-change-speed(val) => { root.preview-drawer-change-speed(val); }
             trailer-maximize => { root.preview-drawer-maximize(); }
             trailer-seek-relative(offset) => { root.preview-drawer-seek-relative(offset); }
             trailer-seek-progress(progress) => { root.preview-drawer-seek-progress(progress); }
@@ -2801,13 +2827,49 @@ export component MainWindow inherits Window {
             }
         }
 
-        if (root.preview-drawer-video-fullscreen) : Rectangle {
+        if (root.preview-drawer-video-fullscreen) : fs-overlay := Rectangle {
             width: 100%;
             height: 100%;
             background: #000000;
             z: 2500;
 
-            property <bool> fs-controls-visible: !root.preview-drawer-video-playing || fs-touch.has-hover;
+            property <float> fs-effective-vol: root.preview-drawer-video-muted
+                ? 0.0
+                : Math.max(0.0, Math.min(1.0, root.preview-drawer-video-volume));
+            property <string> fs-speed-label:
+                Math.abs(root.preview-drawer-video-speed - 0.5) < 0.05 ? "0.5x" :
+                Math.abs(root.preview-drawer-video-speed - 0.75) < 0.05 ? "0.75x" :
+                Math.abs(root.preview-drawer-video-speed - 1.25) < 0.05 ? "1.25x" :
+                Math.abs(root.preview-drawer-video-speed - 1.5) < 0.05 ? "1.5x" :
+                Math.abs(root.preview-drawer-video-speed - 2.0) < 0.05 ? "2x" : "1x";
+
+            property <int> fs-idle-ticks: 0;
+            property <bool> fs-hovering-controls:
+                fs-scrubber-touch.has-hover
+                || fs-scrubber-touch.pressed
+                || fs-play-btn.has-hover
+                || fs-mute-btn.has-hover
+                || fs-vol-touch.has-hover
+                || fs-vol-touch.pressed
+                || fs-speed-btn.has-hover
+                || fs-auto-btn.has-hover
+                || fs-exit-btn.has-hover;
+            property <bool> fs-controls-visible:
+                !root.preview-drawer-video-playing
+                || self.fs-hovering-controls
+                || self.fs-idle-ticks < 5;
+
+            Timer {
+                interval: 500ms;
+                running: root.preview-drawer-video-fullscreen;
+                triggered => {
+                    if (fs-overlay.fs-hovering-controls || !root.preview-drawer-video-playing) {
+                        fs-overlay.fs-idle-ticks = 0;
+                    } else if (fs-overlay.fs-idle-ticks < 10) {
+                        fs-overlay.fs-idle-ticks += 1;
+                    }
+                }
+            }
 
             if (root.preview-drawer-has-video-frame) : Image {
                 width: parent.width;
@@ -2819,24 +2881,44 @@ export component MainWindow inherits Window {
             fs-touch := TouchArea {
                 width: parent.width;
                 height: parent.height;
+                mouse-cursor: fs-overlay.fs-controls-visible ? MouseCursor.pointer : MouseCursor.none;
+                moved => {
+                    fs-overlay.fs-idle-ticks = 0;
+                }
+                pointer-event(event) => {
+                    fs-overlay.fs-idle-ticks = 0;
+                }
                 clicked => {
+                    fs-overlay.fs-idle-ticks = 0;
                     root.preview-drawer-toggle-playback();
                 }
                 double-clicked => {
                     root.preview-drawer-exit-fullscreen();
                 }
+                scroll-event(event) => {
+                    fs-overlay.fs-idle-ticks = 0;
+                    if (event.delta-y != 0px) {
+                        root.preview-drawer-seek-relative(event.delta-y > 0px ? 5.0 : -5.0);
+                    }
+                    accept
+                }
             }
 
             if (root.preview-drawer-video-loading && !root.preview-drawer-has-video-frame) : Rectangle {
-                width: 100px;
-                height: 100px;
+                width: 68px;
+                height: 68px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
+                border-radius: 34px;
+                background: #000000a6;
+                border-width: 3px;
+                border-color: #ff0000;
 
                 Text {
                     text: "…";
-                    color: #ff0000;
-                    font-size: 48px;
+                    color: #ffffff;
+                    font-size: 30px;
+                    font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -2848,11 +2930,11 @@ export component MainWindow inherits Window {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 border-radius: 36px;
-                background: #000000a0;
+                background: #000000a6;
 
                 Image {
-                    width: 34px;
-                    height: 34px;
+                    width: 32px;
+                    height: 32px;
                     x: (parent.width - self.width) / 2 + 3px;
                     y: (parent.height - self.height) / 2;
                     source: @image-url("assets/images/icons/play.svg");
@@ -2861,200 +2943,198 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if (self.fs-controls-visible) : Rectangle {
+            // Barra inferior idéntica a `view_control_bar` de Tube Oxide (`osd_controls.rs`):
+            // - Sin barra superior
+            // - Contenedor `#000000a6` (`rgba(0,0,0,0.65)`), padding [8, 12], spacing 6
+            // - Arriba: Scrubber rojo `#ff0000` de ancho completo (`height: 4px -> 6px`, handle `radius: 5.5 -> 7.0`)
+            // - Abajo: [Play/Pause] [Mute/Vol] [Vol Slider 72px] [Time 13px] <spacer> [Speed "1x"] [Autoplay] [Exit Fullscreen]
+            Rectangle {
                 x: 0px;
-                y: 0px;
+                y: parent.height - self.height;
                 width: parent.width;
-                height: 80px;
-                background: @linear-gradient(180deg, #000000e6 0%, #00000080 60%, #00000000 100%);
+                height: 62px;
+                opacity: fs-overlay.fs-controls-visible ? 1.0 : 0.0;
+                animate opacity { duration: 150ms; easing: ease-out; }
+                background: #000000a6;
 
-                HorizontalLayout {
-                    x: 24px;
-                    y: 18px;
-                    width: parent.width - 48px;
-                    height: 44px;
-                    spacing: 16px;
-                    alignment: start;
+                fs-scrubber-box := Rectangle {
+                    x: 12px;
+                    y: 8px;
+                    width: parent.width - 24px;
+                    height: 16px;
+                    background: transparent;
 
-                    ButtonSurface {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 20px;
-                        background: self.has-hover ? #ffffff25 : transparent;
-                        accessible-name: "Cerrar pantalla completa (Esc)";
-                        clicked => { root.preview-drawer-exit-fullscreen(); }
+                    property <length> rail-h: fs-scrubber-touch.has-hover || fs-scrubber-touch.pressed ? 6px : 4px;
 
-                        Image {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 22px;
-                            height: 22px;
-                            source: @image-url("assets/images/icons/chevron-back.svg");
-                            colorize: #ffffff;
-                            image-fit: contain;
+                    Rectangle {
+                        x: 0px;
+                        y: (parent.height - parent.rail-h) / 2;
+                        width: parent.width;
+                        height: parent.rail-h;
+                        border-radius: self.height / 2;
+                        background: #ffffff38;
+                    }
+
+                    Rectangle {
+                        x: 0px;
+                        y: (parent.height - parent.rail-h) / 2;
+                        width: parent.width * Math.max(0.0, Math.min(1.0, root.preview-drawer-video-progress));
+                        height: parent.rail-h;
+                        border-radius: self.height / 2;
+                        background: #ff0000;
+                    }
+
+                    Rectangle {
+                        property <length> d: fs-scrubber-touch.has-hover || fs-scrubber-touch.pressed ? 14px : 11px;
+                        x: max(0px, min(parent.width - self.d, parent.width * Math.max(0.0, Math.min(1.0, root.preview-drawer-video-progress)) - self.d / 2));
+                        y: (parent.height - self.d) / 2;
+                        width: self.d;
+                        height: self.d;
+                        border-radius: self.d / 2;
+                        background: #ff0000;
+                    }
+
+                    fs-scrubber-touch := TouchArea {
+                        width: parent.width;
+                        height: 18px;
+                        y: -1px;
+                        mouse-cursor: MouseCursor.pointer;
+                        pointer-event(event) => {
+                            fs-overlay.fs-idle-ticks = 0;
+                            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                if (fs-scrubber-box.width > 0px) {
+                                    root.preview-drawer-seek-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / fs-scrubber-box.width)));
+                                }
+                            }
+                        }
+                        moved => {
+                            fs-overlay.fs-idle-ticks = 0;
+                            if (self.pressed && fs-scrubber-box.width > 0px) {
+                                root.preview-drawer-seek-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / fs-scrubber-box.width)));
+                            }
                         }
                     }
+                }
 
-                    Text {
-                        horizontal-stretch: 1;
-                        height: 40px;
-                        text: root.detail-title != ""
-                            ? (root.detail-title + " - Trailer")
-                            : (root.discover-preview-title != ""
-                                ? (root.discover-preview-title + " - Trailer")
-                                : "Trailer Oficial");
-                        color: #ffffff;
-                        font-size: 16px;
-                        font-weight: 600;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
+                HorizontalLayout {
+                    x: 12px;
+                    y: 26px;
+                    width: parent.width - 24px;
+                    height: 30px;
+                    spacing: 4px;
+                    alignment: start;
 
-                    ButtonSurface {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 20px;
-                        background: self.has-hover ? #ffffff25 : transparent;
-                        accessible-name: "Cerrar pantalla completa";
-                        clicked => { root.preview-drawer-exit-fullscreen(); }
+                    fs-play-btn := ButtonSurface {
+                        width: 38px;
+                        height: 30px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                        accessible-name: root.preview-drawer-video-playing ? "Pausar" : "Reproducir";
+                        clicked => {
+                            fs-overlay.fs-idle-ticks = 0;
+                            root.preview-drawer-toggle-playback();
+                        }
 
                         Image {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             width: 18px;
                             height: 18px;
-                            source: @image-url("assets/images/icons/close.svg");
-                            colorize: #ffffff;
-                            image-fit: contain;
-                        }
-                    }
-                }
-            }
-
-            if (self.fs-controls-visible) : Rectangle {
-                x: 0px;
-                y: parent.height - 110px;
-                width: parent.width;
-                height: 110px;
-                background: @linear-gradient(0deg, #000000fa 0%, #000000b0 50%, #00000000 100%);
-
-                Slider {
-                    x: 24px;
-                    y: 12px;
-                    width: parent.width - 48px;
-                    height: 32px;
-                    unit: 16px;
-                    minimum: 0.0;
-                    maximum: 1.0;
-                    step: 0.001;
-                    value: root.preview-drawer-video-progress;
-                    track-inset: 10px;
-                    track-size: 5px;
-                    thumb-size: 15px;
-                    hover-thumb-size: 19px;
-                    track-color: #ffffff33;
-                    track-opacity: 1.0;
-                    buffered-color: #ffffff70;
-                    progress-color: #ff0000;
-                    thumb-color: #ff0000;
-                    thumb-border-width: 2px;
-                    thumb-border-color: #ff4444;
-                    completed(val) => { root.preview-drawer-seek-progress(val); }
-                    changed(val) => { root.preview-drawer-seek-progress(val); }
-                }
-
-                HorizontalLayout {
-                    x: 24px;
-                    y: 50px;
-                    width: parent.width - 48px;
-                    height: 44px;
-                    spacing: 8px;
-                    alignment: start;
-
-                    ButtonSurface {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 20px;
-                        background: self.has-hover ? #ffffff20 : transparent;
-                        accessible-name: root.preview-drawer-video-playing ? "Pausar" : "Reproducir";
-                        clicked => { root.preview-drawer-toggle-playback(); }
-
-                        Image {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 22px;
-                            height: 22px;
                             source: root.preview-drawer-video-playing
                                 ? @image-url("assets/images/icons/pause.svg")
                                 : @image-url("assets/images/icons/play.svg");
-                            colorize: #ffffff;
+                            colorize: #f1f1f1;
                             image-fit: contain;
                         }
                     }
 
-                    ButtonSurface {
-                        width: 36px;
-                        height: 40px;
-                        border-radius: 18px;
-                        background: self.has-hover ? #ffffff20 : transparent;
-                        accessible-name: "Retroceder 10 segundos";
-                        clicked => { root.preview-drawer-seek-relative(-10.0); }
-
-                        Image {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 20px;
-                            height: 20px;
-                            source: @image-url("assets/images/icons/skip-15-back.svg");
-                            colorize: #ffffff;
-                            image-fit: contain;
-                        }
-                    }
-
-                    ButtonSurface {
-                        width: 36px;
-                        height: 40px;
-                        border-radius: 18px;
-                        background: self.has-hover ? #ffffff20 : transparent;
-                        accessible-name: "Avanzar 10 segundos";
-                        clicked => { root.preview-drawer-seek-relative(10.0); }
-
-                        Image {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: 20px;
-                            height: 20px;
-                            source: @image-url("assets/images/icons/skip-15-forward.svg");
-                            colorize: #ffffff;
-                            image-fit: contain;
-                        }
-                    }
-
-                    ButtonSurface {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 20px;
-                        background: self.has-hover ? #ffffff20 : transparent;
+                    fs-mute-btn := ButtonSurface {
+                        width: 34px;
+                        height: 30px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
                         accessible-name: root.preview-drawer-video-muted ? "Activar sonido" : "Silenciar";
-                        clicked => { root.preview-drawer-toggle-muted(); }
+                        clicked => {
+                            fs-overlay.fs-idle-ticks = 0;
+                            root.preview-drawer-toggle-muted();
+                        }
 
                         Image {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            width: 22px;
-                            height: 22px;
-                            source: root.preview-drawer-video-muted
+                            width: 18px;
+                            height: 18px;
+                            source: (root.preview-drawer-video-muted || root.preview-drawer-video-volume <= 0.01)
                                 ? @image-url("assets/images/icons/volume-mute.svg")
-                                : @image-url("assets/images/icons/volume-high.svg");
-                            colorize: #ffffff;
+                                : (root.preview-drawer-video-volume < 0.5
+                                    ? @image-url("assets/images/icons/volume-low.svg")
+                                    : @image-url("assets/images/icons/volume-high.svg"));
+                            colorize: #f1f1f1;
                             image-fit: contain;
+                        }
+                    }
+
+                    // Slider de volumen en línea de Tube Oxide (72px de ancho, 0.0..=1.0, rojo #ff0000)
+                    fs-vol-box := Rectangle {
+                        width: 72px;
+                        height: 30px;
+                        background: transparent;
+
+                        Rectangle {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width;
+                            height: 4px;
+                            border-radius: 2px;
+                            background: #ffffff40;
+                        }
+
+                        Rectangle {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width * fs-overlay.fs-effective-vol;
+                            height: 4px;
+                            border-radius: 2px;
+                            background: #ff0000;
+                        }
+
+                        Rectangle {
+                            property <length> d: fs-vol-touch.has-hover || fs-vol-touch.pressed ? 12px : 10px;
+                            x: max(0px, min(parent.width - self.d, parent.width * fs-overlay.fs-effective-vol - self.d / 2));
+                            y: (parent.height - self.d) / 2;
+                            width: self.d;
+                            height: self.d;
+                            border-radius: self.d / 2;
+                            background: #ff0000;
+                        }
+
+                        fs-vol-touch := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            mouse-cursor: MouseCursor.pointer;
+                            pointer-event(event) => {
+                                fs-overlay.fs-idle-ticks = 0;
+                                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                    if (fs-vol-box.width > 0px) {
+                                        root.preview-drawer-change-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / fs-vol-box.width)));
+                                    }
+                                }
+                            }
+                            moved => {
+                                fs-overlay.fs-idle-ticks = 0;
+                                if (self.pressed && fs-vol-box.width > 0px) {
+                                    root.preview-drawer-change-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / fs-vol-box.width)));
+                                }
+                            }
                         }
                     }
 
                     Text {
-                        height: 40px;
-                        text: root.preview-drawer-video-time-label;
-                        color: #eeeeee;
+                        height: 30px;
+                        text: root.preview-drawer-video-time-label != ""
+                            ? root.preview-drawer-video-time-label
+                            : "0:00 / 0:00";
+                        color: #f1f1f1;
                         font-size: 13px;
                         font-weight: 500;
                         vertical-alignment: center;
@@ -3064,46 +3144,79 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                     }
 
-                    ButtonSurface {
-                        height: 32px;
-                        border-radius: 16px;
-                        background: root.preview-drawer-autoplay-enabled ? #ff000030 : #ffffff18;
-                        border-width: 1px;
-                        border-color: root.preview-drawer-autoplay-enabled ? #ff0000 : #ffffff30;
+                    fs-speed-btn := ButtonSurface {
+                        width: 42px;
+                        height: 30px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                        accessible-name: "Velocidad " + fs-overlay.fs-speed-label;
+                        clicked => {
+                            fs-overlay.fs-idle-ticks = 0;
+                            if (Math.abs(root.preview-drawer-video-speed - 1.0) < 0.05) {
+                                root.preview-drawer-change-speed(1.25);
+                            } else if (Math.abs(root.preview-drawer-video-speed - 1.25) < 0.05) {
+                                root.preview-drawer-change-speed(1.5);
+                            } else if (Math.abs(root.preview-drawer-video-speed - 1.5) < 0.05) {
+                                root.preview-drawer-change-speed(2.0);
+                            } else if (Math.abs(root.preview-drawer-video-speed - 2.0) < 0.05) {
+                                root.preview-drawer-change-speed(0.5);
+                            } else {
+                                root.preview-drawer-change-speed(1.0);
+                            }
+                        }
+
+                        Text {
+                            width: parent.width;
+                            height: parent.height;
+                            text: fs-overlay.fs-speed-label;
+                            color: #f1f1f1;
+                            font-size: 13px;
+                            font-weight: 600;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    fs-auto-btn := ButtonSurface {
+                        height: 30px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
                         accessible-name: "Autoplay";
-                        clicked => { root.preview-drawer-toggle-autoplay(); }
+                        clicked => {
+                            fs-overlay.fs-idle-ticks = 0;
+                            root.preview-drawer-toggle-autoplay();
+                        }
 
                         HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-                            spacing: 6px;
+                            padding-left: 8px;
+                            padding-right: 8px;
                             alignment: center;
 
                             Text {
-                                text: "Autoplay: " + (root.preview-drawer-autoplay-enabled ? "ON" : "OFF");
-                                color: root.preview-drawer-autoplay-enabled ? #ff4444 : #cccccc;
-                                font-size: 11px;
+                                text: root.preview-drawer-autoplay-enabled ? "Auto: ON" : "Auto";
+                                color: root.preview-drawer-autoplay-enabled ? #ff4d4d : #f1f1f1;
+                                font-size: 12.5px;
                                 font-weight: 600;
                                 vertical-alignment: center;
                             }
                         }
                     }
 
-                    ButtonSurface {
-                        width: 40px;
-                        height: 40px;
-                        border-radius: 20px;
-                        background: self.has-hover ? #ffffff20 : transparent;
+                    fs-exit-btn := ButtonSurface {
+                        width: 34px;
+                        height: 30px;
+                        border-radius: 4px;
+                        background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
                         accessible-name: "Salir de pantalla completa (Esc)";
                         clicked => { root.preview-drawer-exit-fullscreen(); }
 
                         Image {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            width: 22px;
-                            height: 22px;
+                            width: 18px;
+                            height: 18px;
                             source: @image-url("assets/images/icons/minimize.svg");
-                            colorize: #ffffff;
+                            colorize: #f1f1f1;
                             image-fit: contain;
                         }
                     }

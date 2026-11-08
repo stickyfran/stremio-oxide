@@ -57,6 +57,8 @@ export component LibraryPage inherits Rectangle {
     in property <bool> preview-video-loading: false;
     in property <bool> preview-video-playing: false;
     in property <bool> preview-video-muted: true;
+    in property <float> preview-video-volume: 0.75;
+    in property <float> preview-video-speed: 1.0;
     in property <bool> preview-autoplay-enabled: false;
     in-out property <float> preview-video-progress: 0.0;
     in property <string> preview-video-time-label: "";
@@ -68,6 +70,8 @@ export component LibraryPage inherits Rectangle {
     callback play-trailer-preview(string);
     callback toggle-trailer-playback;
     callback toggle-video-muted;
+    callback change-video-volume(float);
+    callback change-video-speed(float);
     callback toggle-autoplay;
     callback maximize-trailer;
     callback seek-video-relative(float);
@@ -502,6 +506,8 @@ export component LibraryPage inherits Rectangle {
         video-loading: root.preview-video-loading;
         video-playing: root.preview-video-playing;
         video-muted: root.preview-video-muted;
+        video-volume: root.preview-video-volume;
+        video-speed: root.preview-video-speed;
         has-trailer: root.preview-has-trailer;
         autoplay-enabled: root.preview-autoplay-enabled;
         video-progress <=> root.preview-video-progress;
@@ -518,6 +524,8 @@ export component LibraryPage inherits Rectangle {
         }
         toggle-trailer-playback => { root.toggle-trailer-playback(); }
         toggle-video-muted => { root.toggle-video-muted(); }
+        change-video-volume(val) => { root.change-video-volume(val); }
+        change-video-speed(val) => { root.change-video-speed(val); }
         toggle-autoplay => { root.toggle-autoplay(); }
         maximize-trailer => { root.maximize-trailer(); }
         seek-video-relative(offset) => { root.seek-video-relative(offset); }

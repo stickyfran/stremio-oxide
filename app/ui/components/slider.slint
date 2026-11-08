@@ -12,6 +12,11 @@ export component Slider inherits Rectangle {
     in property <float> step: 1;
     in property <bool> enabled: true;
     in property <bool> audio-boost: false;
+    in property <[float]> tick-values: [];
+    in property <[string]> tick-labels: [];
+    in property <bool> show-tick-labels: false;
+    in property <bool> snap-to-ticks: false;
+    in property <float> snap-threshold: 0.025;
     in property <length> track-size: 0.4 * root.unit;
     in property <length> thumb-size: 1.2 * root.unit;
     in property <length> hover-thumb-size: root.thumb-size;
@@ -79,11 +84,38 @@ export component Slider inherits Rectangle {
             * (root.maximum - root.minimum)
     }
 
+    pure function snap-value(candidate: float) -> float {
+        if (!root.snap-to-ticks || root.tick-values.length == 0 || root.maximum <= root.minimum) {
+            return candidate;
+        }
+        let threshold = (root.maximum - root.minimum) * root.snap-threshold;
+        if (root.tick-values.length > 0 && Math.abs(candidate - root.tick-values[0]) <= threshold) {
+            return root.tick-values[0];
+        }
+        if (root.tick-values.length > 1 && Math.abs(candidate - root.tick-values[1]) <= threshold) {
+            return root.tick-values[1];
+        }
+        if (root.tick-values.length > 2 && Math.abs(candidate - root.tick-values[2]) <= threshold) {
+            return root.tick-values[2];
+        }
+        if (root.tick-values.length > 3 && Math.abs(candidate - root.tick-values[3]) <= threshold) {
+            return root.tick-values[3];
+        }
+        if (root.tick-values.length > 4 && Math.abs(candidate - root.tick-values[4]) <= threshold) {
+            return root.tick-values[4];
+        }
+        if (root.tick-values.length > 5 && Math.abs(candidate - root.tick-values[5]) <= threshold) {
+            return root.tick-values[5];
+        }
+        candidate
+    }
+
     public function set-value(candidate: float) {
         if (!root.enabled) {
             return;
         }
-        let next = max(root.minimum, min(root.maximum, candidate));
+        let snapped = root.snap-value(candidate);
+        let next = max(root.minimum, min(root.maximum, snapped));
         if (next != root.value) {
             root.value = next;
             root.changed(next);
@@ -158,6 +190,33 @@ export component Slider inherits Rectangle {
                 Theme.warning 75%,
                 Theme.danger 100%);
             accessible-role: none;
+        }
+    }
+
+    // Optional reference tick marks and percentage labels (e.g. 25%, 50%, 100%, 150%, 200%).
+    for tick-val[idx] in root.tick-values : Rectangle {
+        property <float> pos: root.normalize(tick-val);
+        property <bool> is-unity: Math.abs(tick-val - 1.0) < 0.01;
+        x: root.track-inset + root.track-width * self.pos - self.width / 2;
+        y: (parent.height - self.height) / 2;
+        width: self.is-unity ? 2px : 1.5px;
+        height: self.is-unity ? root.track-size + 8px : root.track-size + 5px;
+        border-radius: 1px;
+        background: self.is-unity
+            ? Theme.primary-foreground.with-alpha(0.85)
+            : Theme.primary-foreground.with-alpha(0.45);
+        accessible-role: none;
+
+        if (root.show-tick-labels && idx < root.tick-labels.length) : Text {
+            x: (parent.width - self.width) / 2;
+            y: parent.height + 2px;
+            text: root.tick-labels[idx];
+            font-size: 8px;
+            font-weight: parent.is-unity ? 700 : 500;
+            color: parent.is-unity
+                ? Theme.primary-foreground.with-alpha(0.95)
+                : Theme.primary-foreground.with-alpha(0.65);
+            horizontal-alignment: center;
         }
     }
 

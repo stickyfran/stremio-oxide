@@ -2,6 +2,18 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.93 - 2026-11-08
+
+### Volume Slider & Snapping
+- Enlarged volume sliders in the main playback bar and volume OSD to prevent label collision.
+- Added magnetic snapping to 25%, 50%, 100%, 150%, and 200% reference tick marks.
+
+### Trailer Playback & Layout
+- Rebuilt trailer player chrome across mini-player, drawer, hover popup, and fullscreen overlay to match Tube Oxide's exact control bar layout.
+- Upgraded default trailer resolution to 720p HD with smooth 60fps frame timing.
+- Added dedicated trailer maximize button in the top-right corner of the player.
+- Increased Details page trailer mini-player size by >30% for improved presentation.
+
 ## 0.99.92.1 - 2026-11-08
 
 ### Discover

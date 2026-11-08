@@ -215,9 +215,11 @@ export component MetaLinks inherits Rectangle {
     }
 }
 
-// Inline trailer player embedded in the full details page. Mirrors the video
-// zone of the preview drawer so the trailer is a real mini-player instead of a
-// button that jumps straight to the full player.
+// Inline trailer player embedded in the full details page. Uses Tube Oxide's
+// exact `view_control_bar` layout (`#000000a6` bar, padding [8, 12], spacing 6:
+// full-width red #ff0000 seek bar on top, and below:
+// [Play/Pause] [Mute/Vol] [Vol Slider] [Time] ... [Speed "1x"] [Fullscreen]),
+// kept mounted at all times so hover transitions never flicker.
 export component TrailerMiniPlayer inherits Rectangle {
     in property <length> unit: Theme.root-font-size;
     in property <image> poster;
@@ -227,21 +229,48 @@ export component TrailerMiniPlayer inherits Rectangle {
     in property <bool> video-loading: false;
     in property <bool> video-playing: false;
     in property <bool> video-muted: true;
+    in property <float> video-volume: 0.75;
+    in property <float> video-speed: 1.0;
     in property <float> video-progress: 0.0;
     in property <string> video-time-label: "";
 
     callback toggle-playback;
     callback toggle-muted;
+    callback change-volume(float);
+    callback change-speed(float);
     callback maximize;
     callback seek-relative(float);
     callback seek-progress(float);
 
-    height: min(self.width * 9 / 16, 24 * root.unit);
-    background: Theme.background;
-    border-radius: Theme.border-radius;
+    height: self.width * 9 / 16;
+    background: #000000;
+    border-radius: 8px;
     border-width: 1px;
     border-color: Theme.card-border;
     clip: true;
+
+    private property <float> effective-vol: root.video-muted ? 0.0 : Math.max(0.0, Math.min(1.0, root.video-volume));
+    private property <string> speed-label:
+        Math.abs(root.video-speed - 0.5) < 0.05 ? "0.5x" :
+        Math.abs(root.video-speed - 0.75) < 0.05 ? "0.75x" :
+        Math.abs(root.video-speed - 1.25) < 0.05 ? "1.25x" :
+        Math.abs(root.video-speed - 1.5) < 0.05 ? "1.5x" :
+        Math.abs(root.video-speed - 2.0) < 0.05 ? "2x" : "1x";
+
+    private property <bool> pointer-inside:
+        surface-touch.has-hover
+        || center-play-btn.has-hover
+        || corner-fs-btn.has-hover
+        || scrubber-touch.has-hover
+        || scrubber-touch.pressed
+        || play-btn.has-hover
+        || mute-btn.has-hover
+        || vol-touch.has-hover
+        || vol-touch.pressed
+        || speed-btn.has-hover
+        || fs-btn.has-hover;
+    private property <bool> show-chrome:
+        !root.video-playing || root.pointer-inside;
 
     // Backdrop: item poster while the decoder produces the first frame.
     if (root.poster.width > 0) : Image {
@@ -249,7 +278,7 @@ export component TrailerMiniPlayer inherits Rectangle {
         height: parent.height;
         source: root.poster;
         image-fit: cover;
-        opacity: root.has-video-frame ? 0 : 0.45;
+        opacity: root.has-video-frame ? 0 : 0.55;
         animate opacity { duration: 150ms; }
     }
 
@@ -260,10 +289,11 @@ export component TrailerMiniPlayer inherits Rectangle {
         image-fit: contain;
     }
 
-    // Click = play/pause, double-click = full player, scroll = seek.
-    TouchArea {
+    // Click = play/pause, double-click = fullscreen trailer, scroll = seek.
+    surface-touch := TouchArea {
         width: parent.width;
         height: parent.height;
+        mouse-cursor: root.has-trailer ? MouseCursor.pointer : MouseCursor.default;
         clicked => {
             if (root.has-trailer) {
                 root.toggle-playback();
@@ -282,147 +312,322 @@ export component TrailerMiniPlayer inherits Rectangle {
         }
     }
 
-    if (!root.video-playing && root.has-trailer) : ButtonSurface {
-        width: 4.5 * root.unit;
-        height: 4.5 * root.unit;
+    // Corner maximize button in the top-right corner of the player
+    corner-fs-btn := ButtonSurface {
+        x: parent.width - self.width - 10px;
+        y: 10px;
+        width: 32px;
+        height: 32px;
+        border-radius: 16px;
+        background: self.has-hover ? #ffffff35 : #0000008c;
+        visible: root.has-trailer;
+        opacity: root.show-chrome ? 1.0 : 0.0;
+        animate opacity { duration: 140ms; easing: ease-out; }
+        accessible-name: @tr("Watch trailer in full player");
+        clicked => { root.maximize(); }
+
+        Image {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            source: @image-url("../assets/images/icons/maximize.svg");
+            colorize: #ffffff;
+            image-fit: contain;
+        }
+    }
+
+    // Center Tube Oxide dark translucent play badge when paused/stopped.
+    center-play-btn := ButtonSurface {
+        width: 48px;
+        height: 48px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        border-radius: self.width / 2;
-        background: self.has-hover
-            ? Theme.accent.with-alpha(0.85)
-            : Theme.background.with-alpha(0.7);
+        border-radius: 24px;
+        visible: !root.video-playing && root.has-trailer && !root.video-loading;
+        background: self.has-hover ? #ff0000e6 : #000000a6;
         border-width: 1px;
-        border-color: Theme.accent;
+        border-color: self.has-hover ? #ff4444 : #ffffff30;
         accessible-name: @tr("Watch Trailer");
         clicked => { root.toggle-playback(); }
 
         Image {
-            width: 2 * root.unit;
-            height: 2 * root.unit;
-            x: (parent.width - self.width) / 2 + 0.15 * root.unit;
+            width: 20px;
+            height: 20px;
+            x: (parent.width - self.width) / 2 + 2px;
             y: (parent.height - self.height) / 2;
             source: @image-url("../assets/images/icons/play.svg");
-            colorize: Theme.primary-foreground;
+            colorize: #ffffff;
+            image-fit: contain;
         }
     }
 
     if (root.video-loading && !root.has-video-frame) : Rectangle {
         width: parent.width;
         height: parent.height;
-        background: Theme.background.with-alpha(0.5);
+        background: #00000078;
 
-        Text {
-            text: @tr("Loading trailer...");
-            color: Theme.text-primary;
-            font-size: 0.9 * root.unit;
+        Rectangle {
+            width: 44px;
+            height: 44px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-        }
-    }
+            border-radius: 22px;
+            background: #000000a6;
+            border-width: 2px;
+            border-color: #ff0000;
 
-    // Surface controls (mute / open in the full player).
-    if (root.has-trailer) : HorizontalLayout {
-        x: parent.width - self.width - 0.75 * root.unit;
-        y: 0.75 * root.unit;
-        height: 2.4 * root.unit;
-        spacing: 0.5 * root.unit;
-        alignment: center;
-
-        if (root.video-playing) : ButtonSurface {
-            width: 2.4 * root.unit;
-            height: 2.4 * root.unit;
-            border-radius: self.width / 2;
-            background: self.has-hover ? Theme.overlay-hover : Theme.background.with-alpha(0.65);
-            accessible-name: root.video-muted ? @tr("Unmute trailer") : @tr("Mute trailer");
-            clicked => { root.toggle-muted(); }
-
-            Image {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 1.25 * root.unit;
-                height: 1.25 * root.unit;
-                source: root.video-muted
-                    ? @image-url("../assets/images/icons/volume-off.svg")
-                    : @image-url("../assets/images/icons/volume-high.svg");
-                colorize: Theme.primary-foreground;
-                image-fit: contain;
-            }
-        }
-
-        ButtonSurface {
-            width: 2.4 * root.unit;
-            height: 2.4 * root.unit;
-            border-radius: self.width / 2;
-            background: self.has-hover ? Theme.overlay-hover : Theme.background.with-alpha(0.65);
-            accessible-name: @tr("Watch trailer in full player");
-            clicked => { root.maximize(); }
-
-            Image {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 1.25 * root.unit;
-                height: 1.25 * root.unit;
-                source: @image-url("../assets/images/icons/maximize.svg");
-                colorize: Theme.primary-foreground;
-                image-fit: contain;
+            Text {
+                text: "…";
+                color: #ffffff;
+                font-size: 20px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
             }
         }
     }
 
-    // Progress bar / time, identical to the drawer scrubber.
-    if (root.video-playing || root.video-progress > 0.0) : Rectangle {
-        y: parent.height - 2.2 * root.unit;
+    // Tube Oxide `view_control_bar` (always mounted to prevent hover flicker).
+    // Background: rgba(0, 0, 0, 0.65) = #000000a6, padding: [8, 12], spacing: 6
+    Rectangle {
+        x: 0px;
+        y: parent.height - self.height;
         width: parent.width;
-        height: 2.2 * root.unit;
-        background: @linear-gradient(180deg, Theme.background.with-alpha(0) 0%, Theme.background.with-alpha(0.85) 100%);
+        height: 52px;
+        visible: root.has-trailer;
+        opacity: root.show-chrome ? 1.0 : 0.0;
+        animate opacity { duration: 140ms; easing: ease-out; }
+        background: #000000a6;
 
-        HorizontalLayout {
-            padding-left: 0.75 * root.unit;
-            padding-right: 0.75 * root.unit;
-            spacing: 0.75 * root.unit;
-            alignment: center;
+        // 1. Full-width Tube Oxide red seek bar along the top of the bottom bar
+        scrubber-box := Rectangle {
+            x: 12px;
+            y: 6px;
+            width: parent.width - 24px;
+            height: 12px;
+            background: transparent;
 
-            scrubber-box := Rectangle {
-                horizontal-stretch: 1;
-                height: 0.4 * root.unit;
-                y: (parent.height - self.height) / 2;
-                background: Theme.divider;
+            property <length> rail-h: scrubber-touch.has-hover || scrubber-touch.pressed ? 6px : 4px;
+
+            Rectangle {
+                x: 0px;
+                y: (parent.height - parent.rail-h) / 2;
+                width: parent.width;
+                height: parent.rail-h;
                 border-radius: self.height / 2;
+                background: #ffffff38;
+            }
 
-                Rectangle {
-                    width: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress));
-                    height: parent.height;
-                    background: Theme.accent;
-                    border-radius: self.height / 2;
-                }
+            Rectangle {
+                x: 0px;
+                y: (parent.height - parent.rail-h) / 2;
+                width: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress));
+                height: parent.rail-h;
+                border-radius: self.height / 2;
+                background: #ff0000;
+            }
 
-                Rectangle {
-                    x: parent.width * Math.max(0.0, Math.min(1.0, root.video-progress)) - self.width / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 0.9 * root.unit;
-                    height: 0.9 * root.unit;
-                    border-radius: self.width / 2;
-                    background: Theme.primary-foreground;
-                }
+            Rectangle {
+                property <length> d: scrubber-touch.has-hover || scrubber-touch.pressed ? 13px : 10px;
+                x: max(0px, min(parent.width - self.d, parent.width * Math.max(0.0, Math.min(1.0, root.video-progress)) - self.d / 2));
+                y: (parent.height - self.d) / 2;
+                width: self.d;
+                height: self.d;
+                border-radius: self.d / 2;
+                background: #ff0000;
+            }
 
-                TouchArea {
-                    width: parent.width;
-                    height: 1.5 * root.unit;
-                    y: (parent.height - self.height) / 2;
-                    clicked => {
+            scrubber-touch := TouchArea {
+                width: parent.width;
+                height: 16px;
+                y: -2px;
+                mouse-cursor: MouseCursor.pointer;
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                         if (scrubber-box.width > 0px) {
                             root.seek-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
                         }
                     }
                 }
+                moved => {
+                    if (self.pressed && scrubber-box.width > 0px) {
+                        root.seek-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
+                    }
+                }
+            }
+        }
+
+        // 2. Tube Oxide controls row:
+        // Left: [Play/Pause] [Mute/Vol] [Vol Slider] [Time] | Center: Spacer | Right: [Speed] [Fullscreen]
+        HorizontalLayout {
+            x: 10px;
+            y: 20px;
+            width: parent.width - 20px;
+            height: 28px;
+            spacing: 4px;
+            alignment: start;
+
+            play-btn := ButtonSurface {
+                width: 30px;
+                height: 28px;
+                border-radius: 4px;
+                background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                accessible-name: root.video-playing ? @tr("Pause") : @tr("Play");
+                clicked => { root.toggle-playback(); }
+
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    source: root.video-playing
+                        ? @image-url("../assets/images/icons/pause.svg")
+                        : @image-url("../assets/images/icons/play.svg");
+                    colorize: #f1f1f1;
+                    image-fit: contain;
+                }
             }
 
-            if (root.video-time-label != "") : Text {
-                text: root.video-time-label;
-                color: Theme.primary-foreground;
-                font-size: 0.75 * root.unit;
+            mute-btn := ButtonSurface {
+                width: 28px;
+                height: 28px;
+                border-radius: 4px;
+                background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                accessible-name: root.video-muted ? @tr("Unmute trailer") : @tr("Mute trailer");
+                clicked => { root.toggle-muted(); }
+
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    source: (root.video-muted || root.video-volume <= 0.01)
+                        ? @image-url("../assets/images/icons/volume-mute.svg")
+                        : (root.video-volume < 0.5
+                            ? @image-url("../assets/images/icons/volume-low.svg")
+                            : @image-url("../assets/images/icons/volume-high.svg"));
+                    colorize: #f1f1f1;
+                    image-fit: contain;
+                }
+            }
+
+            // Tube Oxide inline volume slider (0.0..=1.0, red active rail & handle)
+            vol-box := Rectangle {
+                width: 52px;
+                height: 28px;
+                background: transparent;
+
+                Rectangle {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: #ffffff40;
+                }
+
+                Rectangle {
+                    x: 0px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width * root.effective-vol;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: #ff0000;
+                }
+
+                Rectangle {
+                    property <length> d: vol-touch.has-hover || vol-touch.pressed ? 11px : 9px;
+                    x: max(0px, min(parent.width - self.d, parent.width * root.effective-vol - self.d / 2));
+                    y: (parent.height - self.d) / 2;
+                    width: self.d;
+                    height: self.d;
+                    border-radius: self.d / 2;
+                    background: #ff0000;
+                }
+
+                vol-touch := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    mouse-cursor: MouseCursor.pointer;
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                            if (vol-box.width > 0px) {
+                                root.change-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / vol-box.width)));
+                            }
+                        }
+                    }
+                    moved => {
+                        if (self.pressed && vol-box.width > 0px) {
+                            root.change-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / vol-box.width)));
+                        }
+                    }
+                }
+            }
+
+            Text {
+                height: 28px;
+                text: root.video-time-label != "" ? root.video-time-label : "0:00 / 0:00";
+                color: #f1f1f1;
+                font-size: 12px;
                 font-weight: 500;
                 vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            // Tube Oxide Speed button ("1x")
+            speed-btn := ButtonSurface {
+                width: 34px;
+                height: 28px;
+                border-radius: 4px;
+                background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                accessible-name: "Velocidad " + root.speed-label;
+                clicked => {
+                    if (Math.abs(root.video-speed - 1.0) < 0.05) {
+                        root.change-speed(1.25);
+                    } else if (Math.abs(root.video-speed - 1.25) < 0.05) {
+                        root.change-speed(1.5);
+                    } else if (Math.abs(root.video-speed - 1.5) < 0.05) {
+                        root.change-speed(2.0);
+                    } else if (Math.abs(root.video-speed - 2.0) < 0.05) {
+                        root.change-speed(0.5);
+                    } else {
+                        root.change-speed(1.0);
+                    }
+                }
+
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.speed-label;
+                    color: #f1f1f1;
+                    font-size: 12px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            fs-btn := ButtonSurface {
+                width: 28px;
+                height: 28px;
+                border-radius: 4px;
+                background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
+                accessible-name: @tr("Watch trailer in full player");
+                clicked => { root.maximize(); }
+
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    source: @image-url("../assets/images/icons/maximize.svg");
+                    colorize: #f1f1f1;
+                    image-fit: contain;
+                }
             }
         }
     }
@@ -458,6 +663,8 @@ export component MetaPreview inherits Rectangle {
     in property <bool> trailer-video-loading: false;
     in property <bool> trailer-video-playing: false;
     in property <bool> trailer-video-muted: true;
+    in property <float> trailer-video-volume: 0.75;
+    in property <float> trailer-video-speed: 1.0;
     in property <float> trailer-video-progress: 0.0;
     in property <string> trailer-video-time-label: "";
     in property <bool> show-library-actions: false;
@@ -472,6 +679,8 @@ export component MetaPreview inherits Rectangle {
     callback trailer-requested;
     callback trailer-toggle-playback;
     callback trailer-toggle-muted;
+    callback trailer-change-volume(float);
+    callback trailer-change-speed(float);
     callback trailer-maximize;
     callback trailer-seek-relative(float);
     callback trailer-seek-progress(float);
@@ -827,23 +1036,32 @@ export component MetaPreview inherits Rectangle {
                 }
             }
 
-            if (!root.compact && root.show-trailer) : TrailerMiniPlayer {
+            if (!root.compact && root.show-trailer) : HorizontalLayout {
                 width: parent.width;
-                unit: root.unit;
-                poster: root.trailer-poster;
-                has-trailer: root.show-trailer;
-                video-frame: root.trailer-video-frame;
-                has-video-frame: root.trailer-has-video-frame;
-                video-loading: root.trailer-video-loading;
-                video-playing: root.trailer-video-playing;
-                video-muted: root.trailer-video-muted;
-                video-progress: root.trailer-video-progress;
-                video-time-label: root.trailer-video-time-label;
-                toggle-playback => { root.trailer-toggle-playback(); }
-                toggle-muted => { root.trailer-toggle-muted(); }
-                maximize => { root.trailer-maximize(); }
-                seek-relative(offset) => { root.trailer-seek-relative(offset); }
-                seek-progress(progress) => { root.trailer-seek-progress(progress); }
+                alignment: start;
+
+                TrailerMiniPlayer {
+                    width: min(parent.width, 30 * root.unit);
+                    unit: root.unit;
+                    poster: root.trailer-poster;
+                    has-trailer: root.show-trailer;
+                    video-frame: root.trailer-video-frame;
+                    has-video-frame: root.trailer-has-video-frame;
+                    video-loading: root.trailer-video-loading;
+                    video-playing: root.trailer-video-playing;
+                    video-muted: root.trailer-video-muted;
+                    video-volume: root.trailer-video-volume;
+                    video-speed: root.trailer-video-speed;
+                    video-progress: root.trailer-video-progress;
+                    video-time-label: root.trailer-video-time-label;
+                    toggle-playback => { root.trailer-toggle-playback(); }
+                    toggle-muted => { root.trailer-toggle-muted(); }
+                    change-volume(val) => { root.trailer-change-volume(val); }
+                    change-speed(val) => { root.trailer-change-speed(val); }
+                    maximize => { root.trailer-maximize(); }
+                    seek-relative(offset) => { root.trailer-seek-relative(offset); }
+                    seek-progress(progress) => { root.trailer-seek-progress(progress); }
+                }
             }
         }
     }

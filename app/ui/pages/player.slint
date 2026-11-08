@@ -1579,7 +1579,7 @@ export component PlayerPage inherits Rectangle {
         HorizontalLayout {
             x: 32px;
             y: 88px;
-            width: (is-series ? 200px : 132px) + (root.width > 900px ? 164px : 0px);
+            width: (is-series ? 200px : 132px) + (root.width > 900px ? 280px : 0px);
             height: 64px;
             spacing: 4px;
             alignment: start;
@@ -1618,16 +1618,22 @@ export component PlayerPage inherits Rectangle {
             }
 
             if (root.width > 900px || root.main-volume-open) : Slider {
-                width: root.width > 900px ? 160px : 100px;
+                width: root.width > 900px ? 268px : 148px;
                 height: 64px;
                 unit: 16px;
                 minimum: 0;
                 maximum: 2;
                 step: 0.01;
                 value: muted ? 0.0 : volume;
-                track-inset: 8px;
+                audio-boost: true;
+                snap-to-ticks: true;
+                tick-values: [0.25, 0.5, 1.0, 1.5, 2.0];
+                tick-labels: ["25%", "50%", "100%", "150%", "200%"];
+                show-tick-labels: root.width > 900px;
+                track-inset: 12px;
                 track-size: 6px;
-                thumb-size: 16px;
+                thumb-size: 14px;
+                hover-thumb-size: 16px;
                 track-color: Theme.primary-foreground;
                 track-opacity: 0.2;
                 buffered-color: transparent;
@@ -2316,7 +2322,9 @@ export component PlayerPage inherits Rectangle {
                             maximum: 2.0;
                             step: 0.02;
                             value: muted ? 0.0 : volume;
-                            track-inset: 0px;
+                            audio-boost: true;
+                            tick-values: [0.25, 0.5, 1.0, 1.5, 2.0];
+                            track-inset: 2px;
                             track-size: 3px;
                             thumb-size: 8px;
                             hover-thumb-size: 10px;
@@ -2370,8 +2378,8 @@ export component PlayerPage inherits Rectangle {
     if (root.volume-osd-visible) : Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 176px;
-        height: 176px;
+        width: 320px;
+        height: 180px;
         border-radius: Theme.border-radius;
         background: Theme.overlay-color;
         z: 300;
@@ -2379,7 +2387,10 @@ export component PlayerPage inherits Rectangle {
         VerticalLayout {
             alignment: center;
             spacing: 16px;
-            padding: 32px;
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-top: 20px;
+            padding-bottom: 20px;
 
             HorizontalLayout {
                 height: 72px;
@@ -2402,15 +2413,20 @@ export component PlayerPage inherits Rectangle {
 
             Slider {
                 width: 100%;
-                height: 24px;
+                height: 38px;
                 unit: 16px;
                 minimum: 0;
                 maximum: 2;
                 step: 0.01;
                 value: muted ? 0.0 : root.volume-osd-value;
-                track-inset: 0px;
+                audio-boost: true;
+                snap-to-ticks: true;
+                tick-values: [0.25, 0.5, 1.0, 1.5, 2.0];
+                tick-labels: ["25%", "50%", "100%", "150%", "200%"];
+                show-tick-labels: true;
+                track-inset: 10px;
                 track-size: 6px;
-                thumb-size: 16px;
+                thumb-size: 14px;
                 hover-thumb-size: 16px;
                 track-color: Theme.primary-foreground;
                 track-opacity: 0.2;

@@ -22,17 +22,17 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-/// Matches the preview decoder: 360p is plenty for a card-sized surface and
-/// smaller renditions start sooner.
+/// Matches the preview decoder: 720p provides high-definition trailer playback
+/// while keeping startup and decoding fast.
 const PREVIEW_FORMAT: &str =
-    "bestvideo[height<=360]+bestaudio/best[height<=360]";
+    "bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]";
 
 /// Google Video URLs carry an `expire` timestamp, normally ~6 hours out. Keep a
 /// conservative margin so we never hand MPV an almost-expired signature.
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60 * 60);
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(20);
 
-const CACHE_FILE: &str = "trailer-urls-v1.tsv";
+const CACHE_FILE: &str = "trailer-urls-v3.tsv";
 
 struct Entry {
     url: String,
