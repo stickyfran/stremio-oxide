@@ -322,8 +322,17 @@ pub enum EndReason {
 #[derive(Clone, Debug)]
 pub enum PlaybackEvent {
     State(Arc<PlaybackState>),
-    FileLoaded,
+    FileLoaded {
+        /// Generation of the `Load` request that produced this file. Lets the
+        /// application discard events that belong to an already replaced load.
+        generation: u64,
+    },
     Ended {
+        /// Generation of the load this end-of-file belongs to. `Stopped`/`Eof`
+        /// events carry the generation of the file that was actually playing,
+        /// while hard errors carry the generation of the latest requested load
+        /// (the one that failed before a file could be loaded).
+        generation: u64,
         reason: EndReason,
         error: Option<String>,
     },
@@ -366,6 +375,9 @@ pub enum PlaybackCommand {
     Load {
         url: String,
         start_at: Option<f64>,
+        /// Monotonic generation chosen by the application. Echoed back on the
+        /// resulting `FileLoaded`/`Ended` events.
+        generation: u64,
     },
     Stop,
     SetPaused(bool),
@@ -1239,12 +1251,20 @@ fn actor_loop(
     let mut state = PlaybackState::default();
     let mut running = true;
     let mut last_emitted_state: Option<PlaybackState> = None;
+    // Generation of the most recently requested load and of the file that is
+    // actually playing. Keeping both lets us tag stale end-of-file events with
+    // the source they really belong to.
+    let mut requested_generation = 0u64;
+    let mut playing_generation = 0u64;
 
     while running {
         wake.wait(Duration::from_secs(1));
         loop {
             match receiver.try_recv() {
                 Ok(command) => {
+                    if let PlaybackCommand::Load { generation, .. } = &command {
+                        requested_generation = *generation;
+                    }
                     running =
                         handle_command(&client, command, &mut state, &sink, &mut spatial_audio);
                     if !running {
@@ -1269,6 +1289,8 @@ fn actor_loop(
             &mut running,
             &spatial_audio,
             &mut last_emitted_state,
+            requested_generation,
+            &mut playing_generation,
         );
     }
 
@@ -1329,7 +1351,7 @@ fn handle_command(
 ) -> bool {
     let fatal_error = matches!(&command, PlaybackCommand::Load { .. });
     let result = match command {
-        PlaybackCommand::Load { url, start_at } => {
+        PlaybackCommand::Load { url, start_at, .. } => {
             let hdr_mode = state.hdr_mode;
             let hdr_passthrough_available = state.hdr_passthrough_available;
             let spatial_audio_requested = state.spatial_audio_requested;
@@ -1637,6 +1659,8 @@ fn drain_events(
     running: &mut bool,
     spatial_audio: &SpatialAudioRuntime,
     last_emitted_state: &mut Option<PlaybackState>,
+    requested_generation: u64,
+    playing_generation: &mut u64,
 ) {
     let mut state_dirty = false;
     loop {
@@ -1672,7 +1696,10 @@ fn drain_events(
                 if state.spatial_audio_applied == SpatialAudioMode::OmniphonySpatial {
                     spatial_audio.send_live_controls();
                 }
-                sink(PlaybackEvent::FileLoaded);
+                *playing_generation = requested_generation;
+                sink(PlaybackEvent::FileLoaded {
+                    generation: *playing_generation,
+                });
                 state_dirty = true;
             }
             EVENT_PLAYBACK_RESTART => {
@@ -1713,7 +1740,14 @@ fn drain_events(
                 sink(PlaybackEvent::ClientMessage(args));
             }
             EVENT_END_FILE => {
-                handle_end_file(client, event, state, sink);
+                handle_end_file(
+                    client,
+                    event,
+                    state,
+                    sink,
+                    requested_generation,
+                    *playing_generation,
+                );
                 state_dirty = false;
             }
             EVENT_QUEUE_OVERFLOW => sink(PlaybackEvent::Warning(
@@ -1739,6 +1773,8 @@ fn handle_end_file(
     event: &MpvEvent,
     state: &mut PlaybackState,
     sink: &Arc<dyn Fn(PlaybackEvent) + Send + Sync>,
+    requested_generation: u64,
+    playing_generation: u64,
 ) {
     if event.data.is_null() {
         return;
@@ -1753,12 +1789,23 @@ fn handle_end_file(
         END_FILE_REDIRECT => EndReason::Redirect,
         _ => EndReason::Unknown,
     };
+    // A hard failure while opening a new source happens before any file is
+    // loaded, so the event belongs to the latest requested generation rather
+    // than to the file that was still playing.
+    let generation = match reason {
+        EndReason::Error | EndReason::Redirect | EndReason::Unknown => requested_generation,
+        EndReason::Eof | EndReason::Stopped | EndReason::Quit => playing_generation,
+    };
     let error =
         (data.reason == END_FILE_ERROR).then(|| client.api.operation_error(data.error).to_string());
     state.loading = false;
     state.loaded = false;
     sink(PlaybackEvent::State(Arc::new(state.clone())));
-    sink(PlaybackEvent::Ended { reason, error });
+    sink(PlaybackEvent::Ended {
+        generation,
+        reason,
+        error,
+    });
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -117,7 +117,7 @@ mod tests {
         let inbox = PlaybackEventInbox::default();
         inbox.push(state_at(1.0));
         inbox.push(state_at(2.0));
-        inbox.push(PlaybackEvent::FileLoaded);
+        inbox.push(PlaybackEvent::FileLoaded { generation: 0 });
         inbox.push(state_at(3.0));
 
         match inbox.recv().await {
@@ -126,7 +126,7 @@ mod tests {
         }
         assert!(matches!(
             inbox.recv().await,
-            Some(PlaybackEvent::FileLoaded)
+            Some(PlaybackEvent::FileLoaded { generation: 0 })
         ));
         match inbox.recv().await {
             Some(PlaybackEvent::State(state)) => assert_eq!(state.time, 3.0),
@@ -1331,7 +1331,7 @@ impl NativePlaybackBridge {
             ui.set_error_message("The downloaded media file is no longer available.".into());
             return;
         }
-        {
+        let generation = {
             let mut session = lock_session(&self.session);
             if let Some(task) = session.recovery_task.take() {
                 task.abort();
@@ -1350,7 +1350,8 @@ impl NativePlaybackBridge {
             session.episode_selector_meta_id = None;
             session.episode_selector_video_id = None;
             session.episode_selector_fingerprint = None;
-        }
+            session.playback_generation
+        };
         navigation.dispatch_and_project(ui, NavigationIntent::OpenPlayer);
         ui.set_player_title(title.into());
         ui.set_player_stream_name("Local media".into());
@@ -1368,6 +1369,7 @@ impl NativePlaybackBridge {
         log_command(self.controller.send(PlaybackCommand::Load {
             url,
             start_at: None,
+            generation,
         }));
     }
 
@@ -1640,7 +1642,11 @@ impl NativePlaybackBridge {
             self.thumbnails.begin_load(generation);
             send_or_show(
                 &self.controller,
-                PlaybackCommand::Load { url, start_at },
+                PlaybackCommand::Load {
+                    url,
+                    start_at,
+                    generation,
+                },
                 ui,
             );
             let ui_for_update = ui.clone();
@@ -2399,9 +2405,13 @@ impl NativePlaybackBridge {
             let weak = ui.as_weak();
             move || {
                 let snapshot = read_state(&state).clone();
-                let (url, last_time) = {
+                let (url, last_time, generation) = {
                     let current = lock_session(&session);
-                    (current.url.clone(), current.last_time)
+                    (
+                        current.url.clone(),
+                        current.last_time,
+                        current.playback_generation,
+                    )
                 };
                 let Some(url) = url else {
                     return;
@@ -2413,7 +2423,11 @@ impl NativePlaybackBridge {
                     ui.set_player_loading(true);
                     ui.set_player_status_message("Retrying the same source…".into());
                 }
-                log_command(controller.send(PlaybackCommand::Load { url, start_at }));
+                log_command(controller.send(PlaybackCommand::Load {
+                    url,
+                    start_at,
+                    generation,
+                }));
             }
         });
 
@@ -3373,7 +3387,11 @@ fn schedule_automatic_recovery(
                 ui.set_player_status_message("Retrying the same source (1/1)…".into());
             }
         });
-        log_command(controller.send(PlaybackCommand::Load { url, start_at }));
+        log_command(controller.send(PlaybackCommand::Load {
+            url,
+            start_at,
+            generation,
+        }));
     });
     lock_session(session).recovery_task = Some(task);
     RecoveryDisposition::Scheduled
@@ -3474,7 +3492,16 @@ fn handle_event(
                 runtime_handle,
             );
         }
-        PlaybackEvent::FileLoaded => {
+        PlaybackEvent::FileLoaded { generation } => {
+            let current_generation = lock_session(session).playback_generation;
+            if generation != current_generation {
+                tracing::debug!(
+                    generation,
+                    current_generation,
+                    "discarded stale MPV file-loaded event"
+                );
+                return;
+            }
             let (load_elapsed_ms, thumbnail_source, pause_restore, pending_subtitles) = {
                 let mut session = lock_session(session);
                 if let Some(task) = session.load_watchdog_task.take() {
@@ -3511,6 +3538,10 @@ fn handle_event(
                 let ui = ui.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui.upgrade() {
+                        // A recovered/reloaded source may have shown a transient
+                        // error while the previous file was being replaced; a
+                        // successful load means there is nothing left to report.
+                        ui.set_player_error("".into());
                         ui.set_player_loading_stage_title("Decodificando video…".into());
                         ui.set_player_loading_stage_detail("Iniciando superficie gráfica…".into());
                         ui.invoke_focus_app_shortcuts();
@@ -3518,7 +3549,24 @@ fn handle_event(
                 });
             }
         }
-        PlaybackEvent::Ended { reason, error } => {
+        PlaybackEvent::Ended {
+            generation,
+            reason,
+            error,
+        } => {
+            let current_generation = lock_session(session).playback_generation;
+            if generation != current_generation {
+                // `loadfile replace`/`stop` from a previous source produces an
+                // end-of-file event *after* the new generation was requested.
+                // It must not be mistaken for a failure of the current source.
+                tracing::debug!(
+                    generation,
+                    current_generation,
+                    ?reason,
+                    "discarded stale MPV end-of-file event"
+                );
+                return;
+            }
             tracing::info!(?reason, error = error.as_deref(), "MPV playback ended");
             if reason == EndReason::Eof {
                 dispatch_player(core, ActionPlayer::Ended);
@@ -3554,7 +3602,7 @@ fn handle_event(
                         }
                     });
                 }
-            } else {
+            } else if matches!(reason, EndReason::Error | EndReason::Unknown) {
                 match schedule_automatic_recovery(
                     &read_state(state_slot),
                     session,
@@ -3588,6 +3636,11 @@ fn handle_event(
                         }
                     }
                 }
+            } else {
+                // `Stopped`, `Quit` and `Redirect` are produced by our own
+                // `loadfile replace`/`stop` calls or by network redirects; they
+                // are not playback failures and must not trigger recovery.
+                tracing::debug!(?reason, "ignoring non-fatal MPV end-of-file event");
             }
         }
         PlaybackEvent::FrameCaptured { request_id, path } => {

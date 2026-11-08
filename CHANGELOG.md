@@ -2,6 +2,15 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.92 - 2026-11-07
+
+### End of an episode no longer shows a spurious playback error
+
+- `loadfile replace`/`stop` makes mpv emit an `end-file` event with reason `Stopped`. The player treated every reason other than `Eof` as a failure, so finishing or skipping credits to the next episode scheduled a bogus recovery: the retry replaced the freshly started load, generated a second `Stopped`, exhausted the single retry and left "Playback failed after retrying this source" on screen while the episode actually played.
+- `Ended` and `FileLoaded` events now carry the load generation. Events from a replaced source are discarded, `Stopped`/`Quit`/`Redirect` are no longer considered failures, and only `Error`/`Unknown` schedule recovery.
+- A successful `FileLoaded` clears any transient player error, so no message stays on top of a playing video.
+- Real failures still retry the same source once and then leave the error panel with the "choose another stream" action visible.
+
 ## 0.99.91 - 2026-11-07
 
 ### Tray icon on KDE
