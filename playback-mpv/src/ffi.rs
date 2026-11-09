@@ -43,6 +43,11 @@ pub const RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const RENDER_PARAM_FLIP_Y: c_int = 4;
 pub const RENDER_PARAM_ADVANCED_CONTROL: c_int = 10;
 pub const RENDER_PARAM_SKIP_RENDERING: c_int = 13;
+pub const RENDER_PARAM_WL_DISPLAY: c_int = 15;
+pub const RENDER_PARAM_SW_SIZE: c_int = 17;
+pub const RENDER_PARAM_SW_FORMAT: c_int = 18;
+pub const RENDER_PARAM_SW_STRIDE: c_int = 19;
+pub const RENDER_PARAM_SW_POINTER: c_int = 20;
 pub const RENDER_UPDATE_FRAME: u64 = 1 << 0;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -208,6 +213,7 @@ pub struct MpvByteArray {
     pub size: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct MpvRenderParam {
     pub param_type: c_int,

@@ -5,7 +5,9 @@ edition = "2024"
 links = "mpv"
 
 [dependencies]
+crossbeam-channel = "0.5"
 glow.workspace = true
+libc = "0.2"
 libloading = "0.8.9"
 thiserror.workspace = true
 tracing.workspace = true

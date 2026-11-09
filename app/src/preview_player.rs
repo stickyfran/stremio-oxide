@@ -43,7 +43,7 @@ struct StagedPreviewFrame {
     generation: u64,
     pos: f64,
     dur: f64,
-    buffer: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    frame: PreviewFrame,
 }
 
 #[derive(Clone)]
@@ -221,6 +221,7 @@ impl PreviewPlayer {
         ui.set_preview_drawer_video_time_label("0:00 / 0:00".into());
 
         if let Some(controller) = self.controller() {
+            let _ = controller.set_viewport(480, 270);
             let result = match source {
                 Some(source) => controller.play(source),
                 None => controller.stop(),
@@ -295,6 +296,7 @@ impl PreviewPlayer {
             ui.set_preview_drawer_video_time_label("0:00 / 0:00".into());
 
             if let Some(controller) = self.controller() {
+                let _ = controller.set_viewport(640, 360);
                 if should_play {
                     if let Some(source) = source {
                         log_worker_command(controller.play(source));
@@ -343,6 +345,9 @@ impl PreviewPlayer {
     /// Opens the current trailer in YouTube-style full screen.
     pub fn open_fullscreen(&self, ui: &MainWindow) {
         self.ensure_started();
+        if let Some(controller) = self.controller() {
+            let _ = controller.set_viewport(1280, 720);
+        }
         let should_start = {
             let mut state = lock_state(&self.state);
             if state.active_id.is_none() && let Some(last) = state.last_trailer.clone() {
@@ -363,6 +368,9 @@ impl PreviewPlayer {
 
     /// Closes the fullscreen trailer overlay back to the mini-player.
     pub fn close_fullscreen(&self, ui: &MainWindow) {
+        if let Some(controller) = self.controller() {
+            let _ = controller.set_viewport(640, 360);
+        }
         ui.set_preview_drawer_video_fullscreen(false);
     }
 
@@ -589,17 +597,11 @@ impl PreviewPlayer {
             state.duration = frame.duration;
             (frame.position, frame.duration)
         };
-        // Decode and clone the pixel buffer in the background worker thread, not on Slint's UI loop!
-        let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-            frame.rgba.as_ref(),
-            frame.width,
-            frame.height,
-        );
         let staged = StagedPreviewFrame {
             generation: frame.generation,
             pos,
             dur,
-            buffer,
+            frame,
         };
         *self.latest_frame.lock().unwrap() = Some(staged);
         if self.pending_frame.swap(true, Ordering::AcqRel) {
@@ -624,7 +626,12 @@ impl PreviewPlayer {
             let Some(ui) = ui.upgrade() else {
                 return;
             };
-            let image = slint::Image::from_rgba8(staged.buffer);
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                staged.frame.rgba.as_ref(),
+                staged.frame.width,
+                staged.frame.height,
+            );
+            let image = slint::Image::from_rgba8(buffer);
             ui.set_hover_preview_frame(image.clone());
             ui.set_hover_preview_loading(false);
             ui.set_hover_preview_has_frame(true);
