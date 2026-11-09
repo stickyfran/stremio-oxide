@@ -16,7 +16,7 @@ export component Slider inherits Rectangle {
     in property <[string]> tick-labels: [];
     in property <bool> show-tick-labels: false;
     in property <bool> snap-to-ticks: false;
-    in property <float> snap-threshold: 0.025;
+    in property <float> snap-threshold: 0.035;
     in property <length> track-size: 0.4 * root.unit;
     in property <length> thumb-size: 1.2 * root.unit;
     in property <length> hover-thumb-size: root.thumb-size;
@@ -208,10 +208,11 @@ export component Slider inherits Rectangle {
         accessible-role: none;
 
         if (root.show-tick-labels && idx < root.tick-labels.length) : Text {
-            x: (parent.width - self.width) / 2;
-            y: parent.height + 2px;
+            width: 38px;
+            x: (parent.width - 38px) / 2;
+            y: parent.height + 3px;
             text: root.tick-labels[idx];
-            font-size: 8px;
+            font-size: 9px;
             font-weight: parent.is-unity ? 700 : 500;
             color: parent.is-unity
                 ? Theme.primary-foreground.with-alpha(0.95)

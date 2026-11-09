@@ -259,6 +259,7 @@ export component TrailerMiniPlayer inherits Rectangle {
 
     private property <bool> pointer-inside:
         surface-touch.has-hover
+        || bottom-bar-touch.has-hover
         || center-play-btn.has-hover
         || corner-fs-btn.has-hover
         || scrubber-touch.has-hover
@@ -390,6 +391,13 @@ export component TrailerMiniPlayer inherits Rectangle {
 
     // Tube Oxide `view_control_bar` (always mounted to prevent hover flicker).
     // Background: rgba(0, 0, 0, 0.65) = #000000a6, padding: [8, 12], spacing: 6
+    bottom-bar-touch := TouchArea {
+        x: 0px;
+        y: parent.height - 52px;
+        width: parent.width;
+        height: 52px;
+    }
+
     Rectangle {
         x: 0px;
         y: parent.height - self.height;
@@ -1041,7 +1049,7 @@ export component MetaPreview inherits Rectangle {
                 alignment: start;
 
                 TrailerMiniPlayer {
-                    width: min(parent.width, 30 * root.unit);
+                    width: min(parent.width, 42 * root.unit);
                     unit: root.unit;
                     poster: root.trailer-poster;
                     has-trailer: root.show-trailer;

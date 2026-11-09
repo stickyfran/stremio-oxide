@@ -2845,7 +2845,8 @@ export component MainWindow inherits Window {
 
             property <int> fs-idle-ticks: 0;
             property <bool> fs-hovering-controls:
-                fs-scrubber-touch.has-hover
+                fs-bottom-touch.has-hover
+                || fs-scrubber-touch.has-hover
                 || fs-scrubber-touch.pressed
                 || fs-play-btn.has-hover
                 || fs-mute-btn.has-hover
@@ -2857,7 +2858,7 @@ export component MainWindow inherits Window {
             property <bool> fs-controls-visible:
                 !root.preview-drawer-video-playing
                 || self.fs-hovering-controls
-                || self.fs-idle-ticks < 5;
+                || self.fs-idle-ticks < 6;
 
             Timer {
                 interval: 500ms;
@@ -2865,7 +2866,7 @@ export component MainWindow inherits Window {
                 triggered => {
                     if (fs-overlay.fs-hovering-controls || !root.preview-drawer-video-playing) {
                         fs-overlay.fs-idle-ticks = 0;
-                    } else if (fs-overlay.fs-idle-ticks < 10) {
+                    } else if (fs-overlay.fs-idle-ticks < 12) {
                         fs-overlay.fs-idle-ticks += 1;
                     }
                 }
@@ -2881,7 +2882,7 @@ export component MainWindow inherits Window {
             fs-touch := TouchArea {
                 width: parent.width;
                 height: parent.height;
-                mouse-cursor: fs-overlay.fs-controls-visible ? MouseCursor.pointer : MouseCursor.none;
+                mouse-cursor: MouseCursor.default;
                 moved => {
                     fs-overlay.fs-idle-ticks = 0;
                 }
@@ -2948,11 +2949,17 @@ export component MainWindow inherits Window {
             // - Contenedor `#000000a6` (`rgba(0,0,0,0.65)`), padding [8, 12], spacing 6
             // - Arriba: Scrubber rojo `#ff0000` de ancho completo (`height: 4px -> 6px`, handle `radius: 5.5 -> 7.0`)
             // - Abajo: [Play/Pause] [Mute/Vol] [Vol Slider 72px] [Time 13px] <spacer> [Speed "1x"] [Autoplay] [Exit Fullscreen]
-            Rectangle {
+            fs-bottom-touch := TouchArea {
                 x: 0px;
-                y: parent.height - self.height;
+                y: parent.height - 62px;
                 width: parent.width;
                 height: 62px;
+                moved => {
+                    fs-overlay.fs-idle-ticks = 0;
+                }
+            }
+
+            Rectangle {
                 opacity: fs-overlay.fs-controls-visible ? 1.0 : 0.0;
                 animate opacity { duration: 150ms; easing: ease-out; }
                 background: #000000a6;
