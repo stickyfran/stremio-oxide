@@ -206,6 +206,7 @@ impl PreviewPlayer {
                 url: trailer.stream_url.clone().unwrap_or_default(),
                 start_seconds: TRAILER_START_SECONDS,
                 muted: state.muted,
+                volume: state.volume,
             });
             (source, state.projection())
         };
@@ -278,6 +279,7 @@ impl PreviewPlayer {
                     url: trailer.stream_url.clone().unwrap_or_default(),
                     start_seconds: TRAILER_START_SECONDS,
                     muted: state.muted,
+                    volume: state.volume,
                 });
                 (source, state.projection(), should_play, false)
             }
@@ -405,6 +407,7 @@ impl PreviewPlayer {
                         url,
                         start_seconds: TRAILER_START_SECONDS,
                         muted: state.muted,
+                        volume: state.volume,
                     };
                     (true, Some(source), None)
                 } else {
@@ -438,7 +441,7 @@ impl PreviewPlayer {
             let mut state = lock_state(&self.state);
             state.muted = !state.muted;
             if !state.muted && state.volume < 0.05 {
-                state.volume = 0.75;
+                state.volume = 0.85;
             }
             (state.muted, state.volume, state.projection())
         };
@@ -742,7 +745,7 @@ impl PreviewState {
             active_id: None,
             stream_url: None,
             muted: true,
-            volume: 0.75,
+            volume: 0.85,
             speed: 1.0,
             loading: false,
             has_frame: false,

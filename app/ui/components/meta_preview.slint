@@ -257,11 +257,9 @@ export component TrailerMiniPlayer inherits Rectangle {
         Math.abs(root.video-speed - 1.5) < 0.05 ? "1.5x" :
         Math.abs(root.video-speed - 2.0) < 0.05 ? "2x" : "1x";
 
-    private property <bool> pointer-inside:
-        surface-touch.has-hover
-        || bottom-bar-touch.has-hover
-        || center-play-btn.has-hover
-        || corner-fs-btn.has-hover
+    property <int> idle-ticks: 0;
+    property <bool> hovering-bar:
+        bottom-bar-touch.has-hover
         || scrubber-touch.has-hover
         || scrubber-touch.pressed
         || play-btn.has-hover
@@ -269,9 +267,24 @@ export component TrailerMiniPlayer inherits Rectangle {
         || vol-touch.has-hover
         || vol-touch.pressed
         || speed-btn.has-hover
-        || fs-btn.has-hover;
-    private property <bool> show-chrome:
-        !root.video-playing || root.pointer-inside;
+        || fs-btn.has-hover
+        || corner-fs-btn.has-hover;
+    property <bool> show-chrome:
+        !root.video-playing
+        || self.hovering-bar
+        || self.idle-ticks < 7;
+
+    Timer {
+        interval: 500ms;
+        running: root.has-trailer;
+        triggered => {
+            if (root.hovering-bar || !root.video-playing) {
+                root.idle-ticks = 0;
+            } else if (root.idle-ticks < 14) {
+                root.idle-ticks += 1;
+            }
+        }
+    }
 
     // Backdrop: item poster while the decoder produces the first frame.
     if (root.poster.width > 0) : Image {
@@ -295,17 +308,26 @@ export component TrailerMiniPlayer inherits Rectangle {
         width: parent.width;
         height: parent.height;
         mouse-cursor: root.has-trailer ? MouseCursor.pointer : MouseCursor.default;
+        moved => {
+            root.idle-ticks = 0;
+        }
+        pointer-event(event) => {
+            root.idle-ticks = 0;
+        }
         clicked => {
+            root.idle-ticks = 0;
             if (root.has-trailer) {
                 root.toggle-playback();
             }
         }
         double-clicked => {
+            root.idle-ticks = 0;
             if (root.has-trailer) {
                 root.maximize();
             }
         }
         scroll-event(event) => {
+            root.idle-ticks = 0;
             if (root.has-trailer && event.delta-y != 0px) {
                 root.seek-relative(event.delta-y > 0px ? 5.0 : -5.0);
             }
@@ -319,13 +341,17 @@ export component TrailerMiniPlayer inherits Rectangle {
         y: 10px;
         width: 32px;
         height: 32px;
+        z: 12;
         border-radius: 16px;
         background: self.has-hover ? #ffffff35 : #0000008c;
         visible: root.has-trailer;
         opacity: root.show-chrome ? 1.0 : 0.0;
         animate opacity { duration: 140ms; easing: ease-out; }
         accessible-name: @tr("Watch trailer in full player");
-        clicked => { root.maximize(); }
+        clicked => {
+            root.idle-ticks = 0;
+            root.maximize();
+        }
 
         Image {
             x: (parent.width - self.width) / 2;
@@ -396,6 +422,13 @@ export component TrailerMiniPlayer inherits Rectangle {
         y: parent.height - 52px;
         width: parent.width;
         height: 52px;
+        z: 10;
+        moved => {
+            root.idle-ticks = 0;
+        }
+        pointer-event(event) => {
+            root.idle-ticks = 0;
+        }
     }
 
     Rectangle {
@@ -403,6 +436,7 @@ export component TrailerMiniPlayer inherits Rectangle {
         y: parent.height - self.height;
         width: parent.width;
         height: 52px;
+        z: 11;
         visible: root.has-trailer;
         opacity: root.show-chrome ? 1.0 : 0.0;
         animate opacity { duration: 140ms; easing: ease-out; }
@@ -452,6 +486,7 @@ export component TrailerMiniPlayer inherits Rectangle {
                 y: -2px;
                 mouse-cursor: MouseCursor.pointer;
                 pointer-event(event) => {
+                    root.idle-ticks = 0;
                     if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                         if (scrubber-box.width > 0px) {
                             root.seek-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
@@ -459,6 +494,7 @@ export component TrailerMiniPlayer inherits Rectangle {
                     }
                 }
                 moved => {
+                    root.idle-ticks = 0;
                     if (self.pressed && scrubber-box.width > 0px) {
                         root.seek-progress(Math.max(0.0, Math.min(1.0, self.mouse-x / scrubber-box.width)));
                     }
@@ -482,7 +518,10 @@ export component TrailerMiniPlayer inherits Rectangle {
                 border-radius: 4px;
                 background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
                 accessible-name: root.video-playing ? @tr("Pause") : @tr("Play");
-                clicked => { root.toggle-playback(); }
+                clicked => {
+                    root.idle-ticks = 0;
+                    root.toggle-playback();
+                }
 
                 Image {
                     x: (parent.width - self.width) / 2;
@@ -503,7 +542,10 @@ export component TrailerMiniPlayer inherits Rectangle {
                 border-radius: 4px;
                 background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
                 accessible-name: root.video-muted ? @tr("Unmute trailer") : @tr("Mute trailer");
-                clicked => { root.toggle-muted(); }
+                clicked => {
+                    root.idle-ticks = 0;
+                    root.toggle-muted();
+                }
 
                 Image {
                     x: (parent.width - self.width) / 2;
@@ -559,6 +601,7 @@ export component TrailerMiniPlayer inherits Rectangle {
                     height: parent.height;
                     mouse-cursor: MouseCursor.pointer;
                     pointer-event(event) => {
+                        root.idle-ticks = 0;
                         if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                             if (vol-box.width > 0px) {
                                 root.change-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / vol-box.width)));
@@ -566,6 +609,7 @@ export component TrailerMiniPlayer inherits Rectangle {
                         }
                     }
                     moved => {
+                        root.idle-ticks = 0;
                         if (self.pressed && vol-box.width > 0px) {
                             root.change-volume(Math.max(0.0, Math.min(1.0, self.mouse-x / vol-box.width)));
                         }
@@ -594,6 +638,7 @@ export component TrailerMiniPlayer inherits Rectangle {
                 background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
                 accessible-name: "Velocidad " + root.speed-label;
                 clicked => {
+                    root.idle-ticks = 0;
                     if (Math.abs(root.video-speed - 1.0) < 0.05) {
                         root.change-speed(1.25);
                     } else if (Math.abs(root.video-speed - 1.25) < 0.05) {
@@ -625,7 +670,10 @@ export component TrailerMiniPlayer inherits Rectangle {
                 border-radius: 4px;
                 background: self.pressed ? #ffffff40 : (self.has-hover ? #ffffff29 : transparent);
                 accessible-name: @tr("Watch trailer in full player");
-                clicked => { root.maximize(); }
+                clicked => {
+                    root.idle-ticks = 0;
+                    root.maximize();
+                }
 
                 Image {
                     x: (parent.width - self.width) / 2;

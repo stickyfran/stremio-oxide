@@ -182,6 +182,7 @@ pub struct PreviewSource {
     pub url: String,
     pub start_seconds: f64,
     pub muted: bool,
+    pub volume: f32,
 }
 
 /// A tightly packed, top-down RGBA preview frame.
@@ -324,13 +325,13 @@ impl PreviewController {
         Ok(())
     }
 
-    /// Sets playback volume (0.0 to 100.0).
+    /// Sets playback volume (0.0 to 200.0).
     pub fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
         let mut mailbox = lock_mailbox(&self.shared);
         ensure_open(&mailbox)?;
         mailbox
             .controls
-            .push_back(Control::SetVolume(volume.clamp(0.0, 100.0)));
+            .push_back(Control::SetVolume(volume.clamp(0.0, 200.0)));
         drop(mailbox);
         self.shared.signal();
         Ok(())
@@ -569,7 +570,10 @@ fn configure_client(client: &MpvClient, config: &PreviewConfig) -> Result<(), Mp
         ("hwdec", if config.hardware_decoding { hwdec_val } else { "no" }),
         ("hwdec-codecs", "all"),
         ("mute", "yes"),
-        ("volume", "60"),
+        ("volume", "100"),
+        ("volume-max", "200"),
+        ("audio-client-name", "Stremio"),
+        ("audio-fallback-to-null", "yes"),
         ("sid", "no"),
         ("sub-auto", "no"),
         ("audio-file-auto", "no"),
@@ -1185,7 +1189,12 @@ fn handle_control(
             true
         }
         Control::SetVolume(volume) => {
-            let _ = client.set_string("volume", &format!("{volume:.1}"));
+            let target_vol = if volume <= 1.05 {
+                (volume * 135.0).clamp(0.0, 200.0)
+            } else {
+                (volume * 1.35).clamp(0.0, 200.0)
+            };
+            let _ = client.set_string("volume", &format!("{target_vol:.1}"));
             true
         }
         Control::SetSpeed(speed) => {
@@ -1271,6 +1280,12 @@ fn load_source(
         return Err(PreviewUnavailableReason::NoVideo);
     }
 
+    let target_vol = if source.volume > 0.0 {
+        (f64::from(source.volume) * 135.0).clamp(0.0, 200.0)
+    } else {
+        0.0
+    };
+    let _ = client.set_string("volume", &format!("{target_vol:.1}"));
     if let Err(error) = client.set_flag("mute", source.muted) {
         tracing::debug!(%error, "hover preview could not apply initial mute state");
     }
@@ -1436,6 +1451,7 @@ mod tests {
             url: "https://example.invalid/trailer.mp4".to_owned(),
             start_seconds: 0.0,
             muted: true,
+            volume: 1.0,
         };
         controller.play(source.clone()).expect("first play queued");
         let first = lock_mailbox(&controller.shared).source_revision;

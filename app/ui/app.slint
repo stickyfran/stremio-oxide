@@ -2957,9 +2957,16 @@ export component MainWindow inherits Window {
                 moved => {
                     fs-overlay.fs-idle-ticks = 0;
                 }
+                pointer-event(event) => {
+                    fs-overlay.fs-idle-ticks = 0;
+                }
             }
 
             Rectangle {
+                x: 0px;
+                y: parent.height - 62px;
+                width: parent.width;
+                height: 62px;
                 opacity: fs-overlay.fs-controls-visible ? 1.0 : 0.0;
                 animate opacity { duration: 150ms; easing: ease-out; }
                 background: #000000a6;

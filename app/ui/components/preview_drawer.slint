@@ -118,11 +118,9 @@ export component MediaPreviewDrawer inherits Rectangle {
                 Math.abs(root.video-speed - 1.5) < 0.05 ? "1.5x" :
                 Math.abs(root.video-speed - 2.0) < 0.05 ? "2x" : "1x";
 
-            private property <bool> pointer-inside:
-                drawer-video-touch.has-hover
-                || drawer-center-play.has-hover
-                || drawer-corner-fs-btn.has-hover
-                || close-drawer-btn.has-hover
+            property <int> idle-ticks: 0;
+            property <bool> hovering-bar:
+                drawer-bottom-touch.has-hover
                 || drawer-scrubber-touch.has-hover
                 || drawer-scrubber-touch.pressed
                 || drawer-play-btn.has-hover
@@ -131,9 +129,25 @@ export component MediaPreviewDrawer inherits Rectangle {
                 || drawer-vol-touch.pressed
                 || drawer-speed-btn.has-hover
                 || drawer-auto-btn.has-hover
-                || drawer-fs-btn.has-hover;
-            private property <bool> show-chrome:
-                !root.video-playing || self.pointer-inside;
+                || drawer-fs-btn.has-hover
+                || drawer-corner-fs-btn.has-hover
+                || close-drawer-btn.has-hover;
+            property <bool> show-chrome:
+                !root.video-playing
+                || self.hovering-bar
+                || self.idle-ticks < 7;
+
+            Timer {
+                interval: 500ms;
+                running: root.has-trailer;
+                triggered => {
+                    if (video-container.hovering-bar || !root.video-playing) {
+                        video-container.idle-ticks = 0;
+                    } else if (video-container.idle-ticks < 14) {
+                        video-container.idle-ticks += 1;
+                    }
+                }
+            }
 
             // Backdrop / Póster base
             if (root.poster.width > 0) : Image {
@@ -158,17 +172,26 @@ export component MediaPreviewDrawer inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
                 mouse-cursor: root.has-trailer ? MouseCursor.pointer : MouseCursor.default;
+                moved => {
+                    video-container.idle-ticks = 0;
+                }
+                pointer-event(event) => {
+                    video-container.idle-ticks = 0;
+                }
                 clicked => {
+                    video-container.idle-ticks = 0;
                     if (root.has-trailer) {
                         root.toggle-trailer-playback();
                     }
                 }
                 double-clicked => {
+                    video-container.idle-ticks = 0;
                     if (root.has-trailer) {
                         root.maximize-trailer();
                     }
                 }
                 scroll-event(event) => {
+                    video-container.idle-ticks = 0;
                     if (event.delta-y > 0px) {
                         root.seek-video-relative(5.0);
                     } else if (event.delta-y < 0px) {
@@ -275,13 +298,26 @@ export component MediaPreviewDrawer inherits Rectangle {
                 }
             }
 
-            // Barra inferior exacta de Tube Oxide (`view_control_bar`: #000000a6, padding [8, 12], spacing 6)
-            // Siempre montada para evitar titileo con el mouse.
+            drawer-bottom-touch := TouchArea {
+                x: 0px;
+                y: parent.height - 52px;
+                width: parent.width;
+                height: 52px;
+                z: 10;
+                moved => {
+                    video-container.idle-ticks = 0;
+                }
+                pointer-event(event) => {
+                    video-container.idle-ticks = 0;
+                }
+            }
+
             Rectangle {
                 x: 0px;
                 y: parent.height - self.height;
                 width: parent.width;
                 height: 52px;
+                z: 11;
                 visible: root.has-trailer;
                 opacity: video-container.show-chrome ? 1.0 : 0.0;
                 animate opacity { duration: 140ms; easing: ease-out; }
