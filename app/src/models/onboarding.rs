@@ -11,6 +11,7 @@ pub fn fetch_github_changelog(ui: &MainWindow) {
     tokio::spawn(async move {
         let client = match reqwest::Client::builder()
             .user_agent("stremio-native")
+            .dns_resolver(core_env::shared_dns_resolver())
             .build()
         {
             Ok(c) => c,

@@ -386,6 +386,7 @@ pub fn setup_ui_callbacks(
                 let profile_id = crate::profiles::active_profile_id().await.map(|p| p.as_str().to_string()).unwrap_or_else(|_| "default".to_string());
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(10))
+                    .dns_resolver(core_env::shared_dns_resolver())
                     .build()
                     .unwrap_or_default();
 

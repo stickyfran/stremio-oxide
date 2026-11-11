@@ -903,6 +903,32 @@ pub fn setup(
         .unwrap_or_else(|| config.server_url.clone());
     let connector = Arc::new(AppServerConnector::new(server_url));
 
+    let initial_dns_provider =
+        core_env::DnsProvider::from_config(&config.dns_provider, &config.custom_dns_server);
+    ui.set_settings_dns_provider(initial_dns_provider.display_label().into());
+    ui.set_settings_custom_dns_server(config.custom_dns_server.as_str().into());
+    core_env::configure_dns(&config.dns_provider, &config.custom_dns_server);
+
+    ui.on_settings_change_dns_provider({
+        move |val| {
+            let mut cfg = crate::config::load_config();
+            let parsed = core_env::DnsProvider::from_config(val.as_str(), &cfg.custom_dns_server);
+            cfg.dns_provider = parsed.id().to_owned();
+            core_env::configure_dns(&cfg.dns_provider, &cfg.custom_dns_server);
+            crate::config::save_config(&cfg);
+        }
+    });
+
+    ui.on_settings_change_custom_dns_server({
+        move |val| {
+            let trimmed = val.trim().to_owned();
+            let mut cfg = crate::config::load_config();
+            cfg.custom_dns_server = trimmed;
+            core_env::configure_dns(&cfg.dns_provider, &cfg.custom_dns_server);
+            crate::config::save_config(&cfg);
+        }
+    });
+
     // Fetch initial streaming server settings and coordinate with Turso DB
     let conn_init = connector.clone();
     let ui_weak = ui.as_weak();

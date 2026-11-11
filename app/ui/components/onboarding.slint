@@ -34,6 +34,8 @@ export component OnboardingModal inherits Rectangle {
     in-out property <bool> background-playback-enabled: true;
     in-out property <bool> seeding-enabled: false;
     in-out property <bool> pause-on-minimize-enabled: false;
+    in-out property <string> dns-provider: "Cloudflare (1.1.1.1)";
+    in-out property <string> custom-dns-server: "1.1.1.1";
     in-out property <styled-text> changelog-text;
 
     callback completed();
@@ -48,6 +50,8 @@ export component OnboardingModal inherits Rectangle {
     callback toggle-background-playback(bool);
     callback toggle-seeding(bool);
     callback toggle-pause-on-minimize(bool);
+    callback change-dns-provider(string);
+    callback change-custom-dns-server(string);
 
     visible: root.open;
     background: Theme.scrim;
@@ -516,20 +520,20 @@ export component OnboardingModal inherits Rectangle {
         // ================= SLIDE 2: Stay Connected & Integrations =================
         if (root.active-step == 2) : VerticalLayout {
             x: 24px;
-            y: 36px;
+            y: 32px;
             width: parent.width - 48px;
-            height: 420px;
-            spacing: 14px;
+            height: 430px;
+            spacing: 10px;
             alignment: start;
 
             // Centered Top Icon
             HorizontalLayout {
                 alignment: center;
-                height: 32px;
+                height: 28px;
 
                 Image {
-                    width: 32px;
-                    height: 32px;
+                    width: 28px;
+                    height: 28px;
                     source: @image-url("../assets/images/icons/network.svg");
                     colorize: Theme.text-secondary;
                     image-fit: contain;
@@ -539,22 +543,87 @@ export component OnboardingModal inherits Rectangle {
             Text {
                 text: @tr("Stay connected");
                 color: Theme.primary-foreground;
-                font-size: 24px;
+                font-size: 22px;
                 font-weight: 700;
                 horizontal-alignment: center;
             }
 
             Text {
-                text: @tr("Link Stremio Oxide with your other apps and services.");
+                text: @tr("Link Stremio Oxide with your services and choose a fast, private DNS.");
                 color: Theme.text-secondary;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 500;
                 horizontal-alignment: center;
             }
 
+            // DNS Resolver Selector Card (Default: Cloudflare 1.1.1.1)
+            Rectangle {
+                width: parent.width;
+                height: 76px;
+                border-radius: 10px;
+                background: Theme.card-background;
+                border-width: 1px;
+                border-color: Theme.card-border;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 6px;
+                    alignment: center;
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text {
+                            text: @tr("DNS Resolver (Anti-ISP Blocking & Privacy)");
+                            color: Theme.primary-foreground;
+                            font-size: 12px;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: root.dns-provider;
+                            color: Theme.primary-accent;
+                            font-size: 11px;
+                            font-weight: 700;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        for opt in [
+                            { label: "Cloudflare (1.1.1.1)", short: "Cloudflare 1.1.1.1" },
+                            { label: "Google (8.8.8.8)", short: "Google 8.8.8.8" },
+                            { label: "Quad9 (9.9.9.9)", short: "Quad9 9.9.9.9" },
+                            { label: "AdGuard (94.140.14.14)", short: "AdGuard" },
+                            { label: "Sistema (Por defecto)", short: "Sistema" },
+                        ] : ButtonSurface {
+                            horizontal-stretch: 1;
+                            height: 30px;
+                            border-radius: 8px;
+                            background: root.dns-provider == opt.label
+                                ? Theme.primary-accent
+                                : (self.has-hover ? Theme.overlay-hover : Theme.overlay);
+                            border-width: 1px;
+                            border-color: root.dns-provider == opt.label ? Theme.primary-accent : Theme.card-border;
+                            clicked => {
+                                root.dns-provider = opt.label;
+                                root.change-dns-provider(opt.label);
+                            }
+
+                            Text {
+                                text: opt.short;
+                                color: Theme.primary-foreground;
+                                font-size: 11px;
+                                font-weight: root.dns-provider == opt.label ? 700 : 500;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
             // 2x2 Grid of Integration Cards
             VerticalLayout {
-                spacing: 12px;
+                spacing: 10px;
 
                 // Row 1
                 HorizontalLayout {
@@ -562,7 +631,7 @@ export component OnboardingModal inherits Rectangle {
 
                     Rectangle {
                         width: (parent.width - 12px) / 2;
-                        height: 68px;
+                        height: 60px;
                         border-radius: 10px;
                         background: Theme.card-background;
                         border-width: 1px;
@@ -589,7 +658,7 @@ export component OnboardingModal inherits Rectangle {
 
                     Rectangle {
                         width: (parent.width - 12px) / 2;
-                        height: 68px;
+                        height: 60px;
                         border-radius: 10px;
                         background: Theme.card-background;
                         border-width: 1px;
@@ -621,7 +690,7 @@ export component OnboardingModal inherits Rectangle {
 
                     Rectangle {
                         width: (parent.width - 12px) / 2;
-                        height: 68px;
+                        height: 60px;
                         border-radius: 10px;
                         background: Theme.card-background;
                         border-width: 1px;
@@ -648,7 +717,7 @@ export component OnboardingModal inherits Rectangle {
 
                     Rectangle {
                         width: (parent.width - 12px) / 2;
-                        height: 68px;
+                        height: 60px;
                         border-radius: 10px;
                         background: Theme.card-background;
                         border-width: 1px;
@@ -676,7 +745,7 @@ export component OnboardingModal inherits Rectangle {
             }
 
             Text {
-                text: @tr("More integrations and options live in Settings → Interface & Player.");
+                text: @tr("Custom DNS servers and more options live in Settings → Streaming.");
                 color: Theme.text-muted;
                 font-size: 11px;
                 horizontal-alignment: center;

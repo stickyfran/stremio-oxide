@@ -9117,7 +9117,7 @@ dependencies = [
 
 [[package]]
 name = "stremio-native"
-version = "0.99.95"
+version = "0.99.96"
 dependencies = [
  "anyhow",
  "arboard",

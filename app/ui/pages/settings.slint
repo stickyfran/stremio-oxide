@@ -251,6 +251,9 @@ export component SettingsPage inherits Rectangle {
     in-out property <string> streaming-transcode-profile: "Disabled";
     in-out property <string> downloads-folder-path: "";
     in-out property <string> downloads-disk-limit: "Sin límite";
+    in-out property <string> dns-provider: "Cloudflare (1.1.1.1)";
+    in-out property <string> custom-dns-server: "1.1.1.1";
+    private property <bool> dns-provider-open: false;
     private property <bool> downloads-disk-limit-open: false;
     private property <bool> color-dialog-open: false;
     private property <int> color-dialog-kind: 0;
@@ -329,6 +332,8 @@ export component SettingsPage inherits Rectangle {
     callback change-streaming-transcode-profile(string);
     callback change-downloads-disk-limit(string);
     callback open-downloads-folder();
+    callback change-dns-provider(string);
+    callback change-custom-dns-server(string);
 
     // Profiles
     in-out property <[ProfileItem]> local-profiles: [];
@@ -1481,6 +1486,44 @@ export component SettingsPage inherits Rectangle {
                 streaming-sec := SettingsSection {
                     unit: root.unit;
                     title: @tr("SETTINGS_NAV_STREAMING" => "Streaming");
+                    SettingsOption {
+                        unit: root.unit;
+                        label: @tr("SETTINGS_DNS_PROVIDER" => "Servidor DNS");
+                        description: @tr("Resolución DNS rápida y privada para catálogos, addons y streaming (evita bloqueos de ISP).");
+                        SelectField {
+                            width: 16 * root.unit;
+                            unit: root.unit;
+                            field-width: 16 * root.unit;
+                            value: root.dns-provider;
+                            options: [
+                                "Cloudflare (1.1.1.1)",
+                                "Google (8.8.8.8)",
+                                "Quad9 (9.9.9.9)",
+                                "AdGuard (94.140.14.14)",
+                                "Sistema (Por defecto)",
+                                "Personalizado"
+                            ];
+                            open <=> root.dns-provider-open;
+                            selected(val) => {
+                                root.dns-provider-open = false;
+                                root.dns-provider = val;
+                                root.change-dns-provider(val);
+                            }
+                        }
+                    }
+                    if (root.dns-provider == "Personalizado") : SettingsOption {
+                        unit: root.unit;
+                        label: @tr("SETTINGS_CUSTOM_DNS" => "DNS personalizado");
+                        description: @tr("Ingresa una dirección IP (ej. 1.1.1.1) o URL DoH (https://...).");
+                        NativeTextField {
+                            width: 16 * root.unit;
+                            unit: root.unit;
+                            text <=> root.custom-dns-server;
+                            placeholder-text: "1.1.1.1 o https://...";
+                            edited => { root.change-custom-dns-server(self.text); }
+                            accepted => { root.change-custom-dns-server(self.text); }
+                        }
+                    }
                     SettingsOption {
                         unit: root.unit;
                         label: @tr("SETTINGS_SERVER_CACHE_SIZE" => "Cache size");

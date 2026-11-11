@@ -42,6 +42,7 @@ pub async fn run_speed_test(
     const MAX_BYTES: u64 = 64 * 1024 * 1024;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
+        .dns_resolver(core_env::shared_dns_resolver())
         .user_agent("Stremio-Native/1")
         .build()
         .map_err(|_| NetworkToolError::Unavailable)?;

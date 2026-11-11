@@ -50,6 +50,18 @@ pub struct AppConfig {
     pub library_preview_enabled: bool,
     #[serde(default)]
     pub trailer_autoplay: bool,
+    #[serde(default = "default_dns_provider")]
+    pub dns_provider: String,
+    #[serde(default = "default_custom_dns")]
+    pub custom_dns_server: String,
+}
+
+fn default_dns_provider() -> String {
+    "cloudflare".to_string()
+}
+
+fn default_custom_dns() -> String {
+    "1.1.1.1".to_string()
 }
 
 fn default_true() -> bool {
@@ -193,6 +205,8 @@ impl Default for AppConfig {
             pip_size: None,
             library_preview_enabled: true,
             trailer_autoplay: false,
+            dns_provider: default_dns_provider(),
+            custom_dns_server: default_custom_dns(),
         }
     }
 }

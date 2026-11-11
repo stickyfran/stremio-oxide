@@ -21,8 +21,10 @@ use stremio_core::{
     runtime::{Env, EnvError, EnvFuture, TryEnvFuture},
 };
 
+pub mod dns;
 mod http_cache;
 
+pub use dns::{DnsProvider, active_dns_provider, configure_dns, shared_dns_resolver};
 pub use http_cache::{ConnectivitySnapshot, connectivity_snapshot, probe_connectivity};
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -213,6 +215,7 @@ fn get_http_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Stremio/4.4.168 Chrome/110.0.0.0 Safari/537.36")
             .default_headers(headers)
+            .dns_resolver(dns::shared_dns_resolver())
             .timeout(std::time::Duration::from_secs(15))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()

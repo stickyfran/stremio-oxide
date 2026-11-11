@@ -199,6 +199,7 @@ async fn run_app(
     startup_metrics::global().mark_db_init();
     config::init_config().await;
     let initial_config = config::load_config();
+    core_env::configure_dns(&initial_config.dns_provider, &initial_config.custom_dns_server);
     let early_auth = load_early_auth_state().await;
     startup_metrics::global().mark_early_auth();
 

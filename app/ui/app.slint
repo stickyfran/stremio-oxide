@@ -914,10 +914,14 @@ export component MainWindow inherits Window {
     in-out property <string> settings-streaming-logs-text: @tr("No logs loaded. Click Refresh.");
     in-out property <string> settings-downloads-disk-limit: "Sin límite";
     in-out property <string> settings-downloads-folder: "";
+    in-out property <string> settings-dns-provider: "Cloudflare (1.1.1.1)";
+    in-out property <string> settings-custom-dns-server: "1.1.1.1";
     in property <IconData> refresh-icon;
     in property <IconData> folder-icon;
 
     callback settings-change-downloads-disk-limit(string);
+    callback settings-change-dns-provider(string);
+    callback settings-change-custom-dns-server(string);
 
     callback settings-change-seeding-enabled(bool);
     callback settings-change-dht-enabled(bool);
@@ -2204,6 +2208,8 @@ export component MainWindow inherits Window {
                         streaming-transcode-profile: settings-streaming-transcode-profile;
                         downloads-folder-path: settings-downloads-folder;
                         downloads-disk-limit: settings-downloads-disk-limit;
+                        dns-provider <=> root.settings-dns-provider;
+                        custom-dns-server <=> root.settings-custom-dns-server;
                         refresh-icon: refresh-icon;
                         folder-icon: folder-icon;
 
@@ -2294,6 +2300,8 @@ export component MainWindow inherits Window {
                         change-streaming-https-endpoint(val) => { settings-change-streaming-https-endpoint(val); }
                         change-streaming-transcode-profile(val) => { settings-change-streaming-transcode-profile(val); }
                         change-downloads-disk-limit(val) => { settings-change-downloads-disk-limit(val); }
+                        change-dns-provider(val) => { settings-change-dns-provider(val); }
+                        change-custom-dns-server(val) => { settings-change-custom-dns-server(val); }
                         open-downloads-folder => { root.downloads-open-folder(); }
                         change-pause-on-minimize(val) => { settings-change-pause-on-minimize(val); }
                         change-quit-on-close(val) => { settings-change-quit-on-close(val); }
@@ -3527,6 +3535,8 @@ export component MainWindow inherits Window {
             background-playback-enabled: root.settings-play-in-background;
             seeding-enabled: root.settings-streaming-seeding;
             pause-on-minimize-enabled: root.settings-pause-on-minimize;
+            dns-provider <=> root.settings-dns-provider;
+            custom-dns-server <=> root.settings-custom-dns-server;
             completed => {
                 root.onboarding-dialog-open = false;
                 root.onboarding-completed();
@@ -3571,6 +3581,14 @@ export component MainWindow inherits Window {
             toggle-pause-on-minimize(enabled) => {
                 root.settings-pause-on-minimize = enabled;
                 root.settings-change-pause-on-minimize(enabled);
+            }
+            change-dns-provider(val) => {
+                root.settings-dns-provider = val;
+                root.settings-change-dns-provider(val);
+            }
+            change-custom-dns-server(val) => {
+                root.settings-custom-dns-server = val;
+                root.settings-change-custom-dns-server(val);
             }
             open-github-requested => {
                 root.open-external-url("https://github.com/stickyfran/stremio-oxide");

@@ -29,6 +29,7 @@ fn client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
+            .dns_resolver(core_env::shared_dns_resolver())
             .build()
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "could not configure TheIntroDB HTTP client; using defaults");
