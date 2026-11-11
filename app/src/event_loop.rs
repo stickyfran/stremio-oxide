@@ -856,13 +856,18 @@ pub fn start_event_loop(
                                     ui.set_avatar_letter(avatar_letter.into());
 
                                     if let Some(url_str) = avatar_url {
-                                        if let Ok(url) = url::Url::parse(url_str) {
-                                            let img = image_cache::get_avatar_image(
-                                                &Some(url),
-                                                &ui_weak_for_sync,
-                                            );
-                                            ui.set_avatar_image(img);
-                                            ui.set_has_avatar_image(true);
+                                        if !url_str.contains("linvo.com") {
+                                            if let Ok(url) = url::Url::parse(url_str) {
+                                                let img = image_cache::get_avatar_image(
+                                                    &Some(url),
+                                                    &ui_weak_for_sync,
+                                                );
+                                                let has_img = img.size().width > 0;
+                                                ui.set_avatar_image(img);
+                                                ui.set_has_avatar_image(has_img);
+                                            } else {
+                                                ui.set_has_avatar_image(false);
+                                            }
                                         } else {
                                             ui.set_has_avatar_image(false);
                                         }

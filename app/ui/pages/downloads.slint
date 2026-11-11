@@ -105,7 +105,7 @@ export component DownloadsPage inherits Rectangle {
 
             Text {
                 horizontal-stretch: 1;
-                text: @tr("DOWNLOADS_TITLE" => "Downloads");
+                text: @tr("DOWNLOADS_TITLE" => "Descargas");
                 color: Theme.text-primary;
                 font-size: 2 * root.unit;
                 font-weight: 700;
@@ -181,8 +181,8 @@ export component DownloadsPage inherits Rectangle {
             vertical-stretch: 1;
             unit: root.unit;
             icon-source: @image-url("../assets/images/icons/download.svg");
-            title: @tr("DOWNLOADS_EMPTY" => "No downloads yet");
-            message: @tr("DOWNLOADS_EMPTY_HINT" => "Download a movie or series to keep it available offline with subtitles.");
+            title: @tr("DOWNLOADS_EMPTY" => "No hay descargas aún");
+            message: @tr("DOWNLOADS_EMPTY_HINT" => "Descarga una película o serie para tenerla disponible sin conexión con subtítulos.");
         }
 
         if (root.loading) : Text {

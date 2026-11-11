@@ -425,7 +425,7 @@ export component SettingsPage inherits Rectangle {
             MenuButton { unit: root.unit; label: @tr("INTERFACE" => "Interface"); selected: root.active-category == 3; clicked => { scroll.viewport-y = -interface-sec.y; root.active-category = 3; } }
             MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_PLAYER" => "Player"); selected: root.active-category == 4; clicked => { scroll.viewport-y = -player-sec.y; root.active-category = 4; } }
             MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_STREAMING" => "Streaming"); selected: root.active-category == 5; clicked => { scroll.viewport-y = -streaming-sec.y; root.active-category = 5; } }
-            MenuButton { unit: root.unit; label: @tr("DOWNLOADS_TITLE" => "Downloads"); selected: root.active-category == 6; clicked => { scroll.viewport-y = -downloads-sec.y; root.active-category = 6; } }
+            MenuButton { unit: root.unit; label: @tr("DOWNLOADS_TITLE" => "Descargas"); selected: root.active-category == 6; clicked => { scroll.viewport-y = -downloads-sec.y; root.active-category = 6; } }
             MenuButton { unit: root.unit; label: @tr("OPERATIONS_TITLE" => "Backup & Diagnostics"); selected: root.active-category == 7; clicked => { scroll.viewport-y = -operations-sec.y; root.active-category = 7; } }
             MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_SHORTCUTS" => "Shortcuts"); selected: root.active-category == 8; clicked => { scroll.viewport-y = -shortcuts-sec.y; root.active-category = 8; } }
             Rectangle { vertical-stretch: 1; }

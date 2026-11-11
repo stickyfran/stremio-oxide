@@ -237,7 +237,7 @@ export component MainWindow inherits Window {
         { label: @tr("STREMIO_TV_NAV_SEARCH" => "Search"), page: 6 },
         { label: @tr("Details"), page: 7 },
         { label: @tr("SETTINGS_NAV_PLAYER" => "Player"), page: 8 },
-        { label: @tr("DOWNLOADS_TITLE" => "Downloads"), page: 9 },
+        { label: @tr("DOWNLOADS_TITLE" => "Descargas"), page: 9 },
         { label: @tr("Theme Studio"), page: 10 }
     ];
     private property <[DebugStateOption]> debug-auth-states: [
@@ -1529,14 +1529,14 @@ export component MainWindow inherits Window {
                                     image-fit: cover;
                                 }
                             
-                                if (username != "" && username != "Guest" && has-avatar-image) : Image {
+                                if (username != "" && username != "Guest" && has-avatar-image && avatar-image.width > 0) : Image {
                                     source: avatar-image;
                                     width: parent.width;
                                     height: parent.height;
                                     image-fit: cover;
                                 }
                             
-                                if (username != "" && username != "Guest" && !has-avatar-image) : Image {
+                                if (username != "" && username != "Guest" && (!has-avatar-image || avatar-image.width <= 0)) : Image {
                                     source: default-avatar-icon;
                                     width: parent.width;
                                     height: parent.height;
@@ -1605,13 +1605,13 @@ export component MainWindow inherits Window {
                                     height: parent.height;
                                     image-fit: cover;
                                 }
-                                if (username != "" && username != "Guest" && has-avatar-image) : Image {
+                                if (username != "" && username != "Guest" && has-avatar-image && avatar-image.width > 0) : Image {
                                     source: avatar-image;
                                     width: parent.width;
                                     height: parent.height;
                                     image-fit: cover;
                                 }
-                                if (username != "" && username != "Guest" && !has-avatar-image) : Image {
+                                if (username != "" && username != "Guest" && (!has-avatar-image || avatar-image.width <= 0)) : Image {
                                     source: default-avatar-icon;
                                     width: parent.width;
                                     height: parent.height;

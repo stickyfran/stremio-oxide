@@ -545,6 +545,13 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
     let logo_images = cached_role_images(urls, crate::image_cache::ImageRole::Logo);
     let backdrop_images = cached_role_images(urls, crate::image_cache::ImageRole::Backdrop);
     let thumbnail_images = cached_role_images(urls, crate::image_cache::ImageRole::Thumbnail);
+    let avatar_images = cached_role_images(urls, crate::image_cache::ImageRole::Avatar);
+    if let Some(img) = avatar_images.values().next() {
+        if img.size().width > 0 {
+            ui.set_avatar_image(img.clone());
+            ui.set_has_avatar_image(true);
+        }
+    }
     let active_tab = ui.get_active_tab();
     let show_details = ui.get_show_details();
     let show_player = ui.get_show_player();

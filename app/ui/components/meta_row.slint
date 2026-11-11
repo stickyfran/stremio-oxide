@@ -7,43 +7,38 @@ export component SeeAllButton inherits ButtonSurface {
     in property <length> unit: Theme.root-font-size;
     in property <string> label: @tr("BUTTON_SEE_ALL" => "See All");
 
-    width: 7 * root.unit;
+    min-width: 8.5 * root.unit;
     height: 2.5 * root.unit;
     border-radius: self.height / 2;
-    background: root.has-hover || root.has-focus ? Theme.overlay-color : transparent;
-    opacity: root.has-hover || root.has-focus ? 1 : 0.6;
+    background: root.pressed ? Theme.overlay-pressed : (root.has-hover || root.has-focus ? Theme.overlay-hover : transparent);
+    opacity: root.has-hover || root.has-focus ? 1 : 0.7;
     accessible-name: root.label;
 
     animate background, opacity { duration: Theme.motion-fast; }
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: 0px;
-        width: 5.25 * root.unit;
-        height: parent.height;
-        background: transparent;
+    HorizontalLayout {
+        padding-left: 0.9 * root.unit;
+        padding-right: 0.9 * root.unit;
+        spacing: 0.4 * root.unit;
+        alignment: center;
 
         text-label := Text {
-            x: 0px;
-            y: 0px;
-            width: 3.25 * root.unit;
-            height: parent.height;
             text: root.label;
             color: Theme.primary-foreground;
             font-size: root.unit;
             font-weight: 500;
-            horizontal-alignment: center;
             vertical-alignment: center;
-            overflow: elide;
         }
-        Image {
-            x: 3.75 * root.unit;
-            y: (parent.height - self.height) / 2;
-            width: 1.5 * root.unit;
-            height: 1.5 * root.unit;
-            source: @image-url("../assets/images/icons/chevron-forward.svg");
-            colorize: Theme.primary-foreground;
-            image-fit: contain;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 1.25 * root.unit;
+                height: 1.25 * root.unit;
+                source: @image-url("../assets/images/icons/chevron-forward.svg");
+                colorize: Theme.primary-foreground;
+                image-fit: contain;
+            }
         }
     }
 }

@@ -168,19 +168,28 @@ export component DetailsPage inherits Rectangle {
     background: Theme.modal-background;
     clip: true;
 
-    if (root.background-image.width > 0) : Image {
+    private property <image> backdrop-source: root.background-image.width > 0
+        ? root.background-image
+        : root.poster;
+
+    if (root.backdrop-source.width > 0) : Image {
         width: parent.width;
         height: parent.height;
-        source: root.background-image;
+        source: root.backdrop-source;
         image-fit: cover;
-        horizontal-alignment: right;
-        opacity: 0.3;
+        horizontal-alignment: center;
+        opacity: 0.38;
     }
 
     Rectangle {
         width: parent.width;
         height: parent.height;
-        background: Theme.background.with-alpha(0.18);
+        background: @linear-gradient(
+            180deg,
+            Theme.background.with-alpha(0.70) 0%,
+            Theme.background.with-alpha(0.85) 50%,
+            Theme.background.with-alpha(0.95) 100%
+        );
     }
 
     // Navigation must remain available while metadata or streams are loading.
@@ -250,6 +259,7 @@ export component DetailsPage inherits Rectangle {
             unit: root.unit;
             name: root.item-title;
             logo: root.logo;
+            background-image: root.backdrop-source;
             runtime: root.runtime;
             release-info: root.release-year;
             imdb-label: root.rating;
@@ -872,13 +882,13 @@ export component DetailsPage inherits Rectangle {
                     source: root.anonymous-icon;
                     image-fit: cover;
                 }
-                if (root.username != "" && root.username != "Guest" && root.has-avatar-image) : Image {
+                if (root.username != "" && root.username != "Guest" && root.has-avatar-image && root.avatar-image.width > 0) : Image {
                     width: parent.width;
                     height: parent.height;
                     source: root.avatar-image;
                     image-fit: cover;
                 }
-                if (root.username != "" && root.username != "Guest" && !root.has-avatar-image) : Image {
+                if (root.username != "" && root.username != "Guest" && (!root.has-avatar-image || root.avatar-image.width <= 0)) : Image {
                     width: parent.width;
                     height: parent.height;
                     source: root.default-avatar-icon;
@@ -952,53 +962,16 @@ export component DetailsPage inherits Rectangle {
         unit: root.unit;
         open: root.download-modal-open;
         title: root.is-series ? @tr("DOWNLOAD_DIALOG_TITLE" => "Descargar serie") : @tr("DOWNLOAD_MOVIE_TITLE" => "Descargar película");
-        dialog-width: 38 * root.unit;
-        dialog-height: root.is-series ? 29 * root.unit : 20.5 * root.unit;
+        dialog-width: 48 * root.unit;
+        dialog-height: 40 * root.unit;
         close-requested => { root.download-modal-open = false; }
 
         VerticalLayout {
-            padding: 1.8 * root.unit;
-            spacing: 1.2 * root.unit;
-
-            Rectangle {
-                height: 4.8 * root.unit;
-                border-radius: Theme.border-radius;
-                background: Theme.control-background;
-                border-width: 1px;
-                border-color: Theme.divider;
-
-                VerticalLayout {
-                    padding-left: 1.2 * root.unit;
-                    padding-right: 1.2 * root.unit;
-                    alignment: center;
-                    spacing: 0.3 * root.unit;
-
-                    Text {
-                        text: root.download-modal-stream-name;
-                        color: Theme.text-primary;
-                        font-size: 1.05 * root.unit;
-                        font-weight: 650;
-                        overflow: elide;
-                    }
-
-                    Text {
-                        text: root.download-modal-stream-details;
-                        color: Theme.text-secondary;
-                        font-size: 0.85 * root.unit;
-                        overflow: elide;
-                    }
-                }
-            }
-
-            Text {
-                text: root.is-series ? @tr("DOWNLOAD_SCOPE_LABEL" => "¿Qué deseas descargar?") : @tr("DOWNLOAD_CONFIRM_LABEL" => "Opción de descarga");
-                color: Theme.text-primary;
-                font-size: 0.95 * root.unit;
-                font-weight: 600;
-            }
+            padding: 1.2 * root.unit;
+            spacing: 0.8 * root.unit;
 
             if (!root.is-series) : Rectangle {
-                height: 3.4 * root.unit;
+                height: 3.2 * root.unit;
                 border-radius: Theme.border-radius;
                 background: Theme.accent.with-alpha(0.18);
                 border-width: 1px;
@@ -1007,123 +980,203 @@ export component DetailsPage inherits Rectangle {
                 HorizontalLayout {
                     padding-left: 1.2 * root.unit;
                     padding-right: 1.2 * root.unit;
-                    spacing: root.unit;
                     alignment: center;
 
                     Text {
                         horizontal-stretch: 1;
-                        text: "Película completa (" + root.item-title + ")";
+                        text: "Película completa · " + root.item-title;
                         color: Theme.accent;
                         font-size: 0.95 * root.unit;
-                        font-weight: 550;
+                        font-weight: 650;
                         vertical-alignment: center;
                     }
                 }
             }
 
-            if (root.is-series) : Rectangle {
-                height: 3.4 * root.unit;
-                border-radius: Theme.border-radius;
-                background: root.download-modal-scope == "episode" ? Theme.accent.with-alpha(0.18) : Theme.control-background;
-                border-width: 1px;
-                border-color: root.download-modal-scope == "episode" ? Theme.accent : Theme.divider;
+            if (root.is-series) : HorizontalLayout {
+                spacing: 0.8 * root.unit;
+                height: 3.2 * root.unit;
 
-                TouchArea {
-                    clicked => { root.download-modal-scope = "episode"; }
-                }
-
-                HorizontalLayout {
-                    padding-left: 1.2 * root.unit;
-                    padding-right: 1.2 * root.unit;
-                    spacing: root.unit;
-                    alignment: center;
-
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Theme.border-radius;
+                    background: root.download-modal-scope == "episode" ? Theme.accent.with-alpha(0.2) : Theme.control-background;
+                    border-width: 1px;
+                    border-color: root.download-modal-scope == "episode" ? Theme.accent : Theme.divider;
+                    TouchArea { clicked => { root.download-modal-scope = "episode"; } }
                     Text {
-                        horizontal-stretch: 1;
-                        text: "Solo este capítulo (Temporada " + root.active-season + ", Episodio " + (root.active-episode-idx + 1) + ")";
+                        width: parent.width;
+                        height: parent.height;
+                        text: "Solo este capítulo";
                         color: root.download-modal-scope == "episode" ? Theme.accent : Theme.text-primary;
-                        font-size: 0.95 * root.unit;
-                        font-weight: 550;
+                        font-size: 0.88 * root.unit;
+                        font-weight: 600;
+                        horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
-            }
 
-            if (root.is-series) : Rectangle {
-                height: 3.4 * root.unit;
-                border-radius: Theme.border-radius;
-                background: root.download-modal-scope == "season" ? Theme.accent.with-alpha(0.18) : Theme.control-background;
-                border-width: 1px;
-                border-color: root.download-modal-scope == "season" ? Theme.accent : Theme.divider;
-
-                TouchArea {
-                    clicked => { root.download-modal-scope = "season"; }
-                }
-
-                HorizontalLayout {
-                    padding-left: 1.2 * root.unit;
-                    padding-right: 1.2 * root.unit;
-                    spacing: root.unit;
-                    alignment: center;
-
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Theme.border-radius;
+                    background: root.download-modal-scope == "season" ? Theme.accent.with-alpha(0.2) : Theme.control-background;
+                    border-width: 1px;
+                    border-color: root.download-modal-scope == "season" ? Theme.accent : Theme.divider;
+                    TouchArea { clicked => { root.download-modal-scope = "season"; } }
                     Text {
-                        horizontal-stretch: 1;
-                        text: "Temporada " + root.active-season + " completa (" + root.episodes.length + " capítulos)";
+                        width: parent.width;
+                        height: parent.height;
+                        text: "Temporada " + root.active-season;
                         color: root.download-modal-scope == "season" ? Theme.accent : Theme.text-primary;
-                        font-size: 0.95 * root.unit;
-                        font-weight: 550;
+                        font-size: 0.88 * root.unit;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Theme.border-radius;
+                    background: root.download-modal-scope == "series" ? Theme.accent.with-alpha(0.2) : Theme.control-background;
+                    border-width: 1px;
+                    border-color: root.download-modal-scope == "series" ? Theme.accent : Theme.divider;
+                    TouchArea { clicked => { root.download-modal-scope = "series"; } }
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: "Toda la serie";
+                        color: root.download-modal-scope == "series" ? Theme.accent : Theme.text-primary;
+                        font-size: 0.88 * root.unit;
+                        font-weight: 600;
+                        horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
             }
 
-            if (root.is-series) : Rectangle {
-                height: 3.4 * root.unit;
-                border-radius: Theme.border-radius;
-                background: root.download-modal-scope == "series" ? Theme.accent.with-alpha(0.18) : Theme.control-background;
-                border-width: 1px;
-                border-color: root.download-modal-scope == "series" ? Theme.accent : Theme.divider;
+            Text {
+                text: "Selecciona una fuente de descarga (" + root.streams.length + " disponibles):";
+                color: Theme.text-primary;
+                font-size: 0.95 * root.unit;
+                font-weight: 600;
+            }
 
-                TouchArea {
-                    clicked => { root.download-modal-scope = "series"; }
-                }
+            sources-scroll := ScrollView {
+                height: root.is-series ? 19.5 * root.unit : 22.5 * root.unit;
+                viewport-width: self.width;
 
-                HorizontalLayout {
-                    padding-left: 1.2 * root.unit;
-                    padding-right: 1.2 * root.unit;
-                    spacing: root.unit;
-                    alignment: center;
+                VerticalLayout {
+                    spacing: 0.6 * root.unit;
 
-                    Text {
-                        horizontal-stretch: 1;
-                        text: "Toda la serie (todas las temporadas)";
-                        color: root.download-modal-scope == "series" ? Theme.accent : Theme.text-primary;
-                        font-size: 0.95 * root.unit;
-                        font-weight: 550;
-                        vertical-alignment: center;
+                    for stream in root.streams : source-item := Rectangle {
+                        property <bool> is-selected: root.download-modal-selection-id == stream.id
+                            || (root.download-modal-selection-id == "" && stream.id == root.streams[0].id);
+                        height: 4.8 * root.unit;
+                        border-radius: Theme.border-radius;
+                        background: self.is-selected
+                            ? Theme.accent.with-alpha(0.2)
+                            : (source-touch.has-hover ? Theme.overlay-hover : Theme.control-background);
+                        border-width: self.is-selected ? 1.5px : 1px;
+                        border-color: self.is-selected ? Theme.accent : Theme.divider;
+
+                        source-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.download-modal-selection-id = stream.id;
+                                root.download-modal-stream-name = stream.name;
+                                root.download-modal-stream-details = stream.description;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 1 * root.unit;
+                            padding-right: 1 * root.unit;
+                            spacing: 0.8 * root.unit;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 7.5 * root.unit;
+                                height: 3.6 * root.unit;
+                                border-radius: 0.35 * root.unit;
+                                background: Theme.overlay-color;
+                                clip: true;
+
+                                Text {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    text: stream.name;
+                                    color: Theme.text-primary;
+                                    font-size: 0.85 * root.unit;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+
+                                Text {
+                                    text: stream.description;
+                                    color: source-item.is-selected ? Theme.primary-foreground : Theme.text-secondary;
+                                    font-size: 0.88 * root.unit;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 1.8 * root.unit;
+                                    height: 1.8 * root.unit;
+                                    border-radius: self.height / 2;
+                                    border-width: 1.5px;
+                                    border-color: source-item.is-selected ? Theme.accent : Theme.text-muted;
+                                    background: transparent;
+
+                                    if (source-item.is-selected) : Rectangle {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 1 * root.unit;
+                                        height: 1 * root.unit;
+                                        border-radius: self.height / 2;
+                                        background: Theme.accent;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             HorizontalLayout {
-                spacing: root.unit;
+                spacing: 1 * root.unit;
                 alignment: end;
-                padding-top: 0.5 * root.unit;
+                padding-top: 0.4 * root.unit;
 
                 PillButton {
-                    width: 8 * root.unit;
+                    width: 8.5 * root.unit;
                     unit: root.unit;
-                    label: @tr("CANCEL" => "Cancel");
+                    label: @tr("CANCEL" => "Cancelar");
                     outlined: true;
                     clicked => { root.download-modal-open = false; }
                 }
 
                 PillButton {
-                    width: 9 * root.unit;
+                    width: 10 * root.unit;
                     unit: root.unit;
-                    label: @tr("DOWNLOAD" => "Download");
+                    label: @tr("DOWNLOAD" => "Descargar");
+                    primary: true;
                     clicked => {
-                        root.start-download(root.download-modal-selection-id, root.download-modal-scope, root.active-season);
+                        root.start-download(
+                            root.download-modal-selection-id != "" ? root.download-modal-selection-id : root.streams[0].id,
+                            root.download-modal-scope,
+                            root.active-season
+                        );
                         root.download-modal-open = false;
                     }
                 }

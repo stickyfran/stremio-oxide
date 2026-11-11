@@ -788,7 +788,7 @@ export component MetaPreview inherits Rectangle {
                     height: parent.height;
                     source: root.logo;
                     image-fit: contain;
-                    horizontal-alignment: left;
+                    horizontal-alignment: center;
                 }
                 if (!root.has-logo) : Text {
                     width: parent.width;
@@ -798,6 +798,7 @@ export component MetaPreview inherits Rectangle {
                     font-size: 1.7 * root.unit;
                     font-weight: 500;
                     vertical-alignment: center;
+                    horizontal-alignment: center;
                     wrap: word-wrap;
                     overflow: elide;
                 }
@@ -809,7 +810,7 @@ export component MetaPreview inherits Rectangle {
 
                 HorizontalLayout {
                     spacing: root.compact ? 0.8 * root.unit : 1.5 * root.unit;
-                    alignment: root.compact ? space-between : start;
+                    alignment: center;
 
                     if (root.runtime != "") : Text {
                         text: root.runtime;

@@ -125,27 +125,34 @@ export component PillButton inherits ButtonSurface {
     in property <bool> outlined: false;
     in property <brush> accent-color: Theme.primary-accent;
     in property <brush> surface-color: Theme.overlay-color;
-    in property <brush> hover-color: root.primary ? root.accent-color : Theme.overlay-hover;
+    in property <brush> hover-color: root.primary ? Theme.accent-hover : (root.outlined ? Theme.overlay-hover : Theme.overlay-hover);
+    in property <brush> active-color: root.primary ? Theme.accent-pressed : (root.outlined ? Theme.overlay-pressed : Theme.overlay-pressed);
     in property <brush> foreground-color: Theme.primary-foreground;
     in property <brush> hover-foreground-color: root.foreground-color;
-    in property <brush> outline-color: root.primary ? root.accent-color : Theme.surface-light;
-    in property <brush> hover-outline-color: root.outline-color;
+    in property <brush> active-foreground-color: root.foreground-color;
+    in property <brush> outline-color: root.primary ? root.accent-color : (root.outlined ? Theme.surface-light-30 : transparent);
+    in property <brush> hover-outline-color: root.primary ? Theme.accent-hover : (root.outlined ? Theme.surface-light : root.outline-color);
+    in property <brush> active-outline-color: root.primary ? Theme.accent-pressed : (root.outlined ? Theme.surface-light : root.outline-color);
     in property <bool> show-hover-outline: true;
     in property <float> idle-opacity: 1;
 
     height: 3.5 * root.unit;
     border-radius: root.height / 2;
-    border-width: root.has-focus || root.outlined
+    border-width: root.has-focus || root.outlined || root.pressed
         || (root.has-hover && root.show-hover-outline)
         ? Theme.focus-outline-size
         : 0px;
-    border-color: root.has-hover ? root.hover-outline-color : root.outline-color;
-    background: root.has-hover
-        ? root.hover-color
-        : (root.primary ? root.accent-color : root.surface-color);
+    border-color: root.pressed
+        ? root.active-outline-color
+        : (root.has-hover ? root.hover-outline-color : root.outline-color);
+    background: root.pressed
+        ? root.active-color
+        : (root.has-hover
+            ? root.hover-color
+            : (root.primary ? root.accent-color : (root.outlined ? transparent : root.surface-color)));
     accessible-name: root.label;
     opacity: root.enabled
-        ? ((root.has-hover || root.has-focus) ? 1 : root.idle-opacity)
+        ? (root.pressed ? 0.88 : ((root.has-hover || root.has-focus) ? 1.0 : root.idle-opacity))
         : 0.5;
 
     animate background { duration: Theme.motion-fast; }
@@ -163,9 +170,9 @@ export component PillButton inherits ButtonSurface {
                 width: root.icon-size;
                 height: root.icon-size;
                 source: root.icon-source;
-                colorize: root.has-hover
-                    ? root.hover-foreground-color
-                    : root.foreground-color;
+                colorize: root.pressed
+                    ? root.active-foreground-color
+                    : (root.has-hover ? root.hover-foreground-color : root.foreground-color);
                 image-fit: contain;
             }
         }
@@ -176,9 +183,9 @@ export component PillButton inherits ButtonSurface {
                 width: root.icon-size;
                 text: root.icon.glyph;
                 font-family: root.icon.font-family;
-                color: root.has-hover
-                    ? root.hover-foreground-color
-                    : root.foreground-color;
+                color: root.pressed
+                    ? root.active-foreground-color
+                    : (root.has-hover ? root.hover-foreground-color : root.foreground-color);
                 font-size: root.icon-size;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -187,9 +194,9 @@ export component PillButton inherits ButtonSurface {
 
         Text {
             text: root.label;
-            color: root.has-hover
-                ? root.hover-foreground-color
-                : root.foreground-color;
+            color: root.pressed
+                ? root.active-foreground-color
+                : (root.has-hover ? root.hover-foreground-color : root.foreground-color);
             font-size: root.label-font-size;
             font-weight: root.label-font-weight;
             horizontal-alignment: center;

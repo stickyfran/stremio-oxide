@@ -233,11 +233,11 @@ export component LibraryPage inherits Rectangle {
                     height: 3.25 * root.unit;
                     border-radius: self.height / 2;
                     background: root.preview-enabled
-                        ? Theme.primary-accent
-                        : (self.has-hover ? Theme.overlay-hover : Theme.overlay-color);
+                        ? (self.pressed ? Theme.accent-pressed : (self.has-hover ? Theme.accent-hover : Theme.primary-accent))
+                        : (self.pressed ? Theme.overlay-pressed : (self.has-hover ? Theme.overlay-hover : Theme.overlay-color));
                     border-width: self.has-focus ? Theme.focus-outline-size : 0px;
                     border-color: Theme.surface-light;
-                    accessible-name: root.preview-enabled ? @tr("Hide details panel") : @tr("Show details panel");
+                    accessible-name: root.preview-enabled ? @tr("Hide details panel" => "Ocultar panel") : @tr("Show details panel" => "Mostrar panel");
                     clicked => {
                         root.preview-enabled = !root.preview-enabled;
                         root.toggle-preview-enabled();
@@ -249,16 +249,19 @@ export component LibraryPage inherits Rectangle {
                         spacing: 0.6 * root.unit;
                         alignment: center;
 
-                        Image {
-                            width: 1.3 * root.unit;
-                            height: 1.3 * root.unit;
-                            source: @image-url("../assets/images/icons/details.svg");
-                            colorize: Theme.primary-foreground;
-                            vertical-alignment: center;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                width: 1.3 * root.unit;
+                                height: 1.3 * root.unit;
+                                source: @image-url("../assets/images/icons/details.svg");
+                                colorize: Theme.primary-foreground;
+                                image-fit: contain;
+                            }
                         }
 
                         Text {
-                            text: root.preview-enabled ? @tr("Hide Preview") : @tr("Show Preview");
+                            text: root.preview-enabled ? @tr("Hide Preview" => "Ocultar panel") : @tr("Show Preview" => "Mostrar panel");
                             color: Theme.primary-foreground;
                             font-size: 0.85 * root.unit;
                             font-weight: 600;
