@@ -249,6 +249,9 @@ export component SettingsPage inherits Rectangle {
     in-out property <string> new-streaming-server-url: "";
     in-out property <string> streaming-https-endpoint: "Disabled";
     in-out property <string> streaming-transcode-profile: "Disabled";
+    in-out property <string> downloads-folder-path: "";
+    in-out property <string> downloads-disk-limit: "Sin límite";
+    private property <bool> downloads-disk-limit-open: false;
     private property <bool> color-dialog-open: false;
     private property <int> color-dialog-kind: 0;
     private property <color> color-dialog-value: Theme.primary-accent;
@@ -324,6 +327,8 @@ export component SettingsPage inherits Rectangle {
     callback copy-remote-url(string);
     callback change-streaming-https-endpoint(string);
     callback change-streaming-transcode-profile(string);
+    callback change-downloads-disk-limit(string);
+    callback open-downloads-folder();
 
     // Profiles
     in-out property <[ProfileItem]> local-profiles: [];
@@ -385,6 +390,7 @@ export component SettingsPage inherits Rectangle {
     private property <length> interface-pos: interface-sec.y;
     private property <length> player-pos: player-sec.y;
     private property <length> streaming-pos: streaming-sec.y;
+    private property <length> downloads-pos: downloads-sec.y;
     private property <length> operations-pos: operations-sec.y;
     private property <length> shortcuts-pos: shortcuts-sec.y;
 
@@ -397,8 +403,9 @@ export component SettingsPage inherits Rectangle {
             ((offset < root.interface-pos - 10px) ? 2 :
             ((offset < root.player-pos - 10px) ? 3 :
             ((offset < root.streaming-pos - 10px) ? 4 :
-            ((offset < root.operations-pos - 10px) ? 5 :
-            ((offset < root.shortcuts-pos - 10px) ? 6 : 7))))));
+            ((offset < root.downloads-pos - 10px) ? 5 :
+            ((offset < root.operations-pos - 10px) ? 6 :
+            ((offset < root.shortcuts-pos - 10px) ? 7 : 8)))))));
     }
 
     HorizontalLayout {
@@ -418,8 +425,9 @@ export component SettingsPage inherits Rectangle {
             MenuButton { unit: root.unit; label: @tr("INTERFACE" => "Interface"); selected: root.active-category == 3; clicked => { scroll.viewport-y = -interface-sec.y; root.active-category = 3; } }
             MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_PLAYER" => "Player"); selected: root.active-category == 4; clicked => { scroll.viewport-y = -player-sec.y; root.active-category = 4; } }
             MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_STREAMING" => "Streaming"); selected: root.active-category == 5; clicked => { scroll.viewport-y = -streaming-sec.y; root.active-category = 5; } }
-            MenuButton { unit: root.unit; label: @tr("OPERATIONS_TITLE" => "Backup & Diagnostics"); selected: root.active-category == 6; clicked => { scroll.viewport-y = -operations-sec.y; root.active-category = 6; } }
-            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_SHORTCUTS" => "Shortcuts"); selected: root.active-category == 7; clicked => { scroll.viewport-y = -shortcuts-sec.y; root.active-category = 7; } }
+            MenuButton { unit: root.unit; label: @tr("DOWNLOADS_TITLE" => "Downloads"); selected: root.active-category == 6; clicked => { scroll.viewport-y = -downloads-sec.y; root.active-category = 6; } }
+            MenuButton { unit: root.unit; label: @tr("OPERATIONS_TITLE" => "Backup & Diagnostics"); selected: root.active-category == 7; clicked => { scroll.viewport-y = -operations-sec.y; root.active-category = 7; } }
+            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_SHORTCUTS" => "Shortcuts"); selected: root.active-category == 8; clicked => { scroll.viewport-y = -shortcuts-sec.y; root.active-category = 8; } }
             Rectangle { vertical-stretch: 1; }
             VerticalLayout {
                 spacing: 0.5 * root.unit;
@@ -1520,6 +1528,43 @@ export component SettingsPage inherits Rectangle {
                         label: @tr("Enable torrent seeding");
                         description: @tr("Upload downloaded pieces while streaming.");
                         ToggleSwitch { unit: root.unit; checked: root.streaming-seeding; toggled => { root.change-seeding-enabled(self.checked); } }
+                    }
+                }
+
+                downloads-sec := SettingsSection {
+                    unit: root.unit;
+                    title: @tr("SETTINGS_NAV_DOWNLOADS" => "Downloads & Offline");
+                    SettingsOption {
+                        unit: root.unit;
+                        label: @tr("SETTINGS_DOWNLOADS_FOLDER" => "Download directory");
+                        description: root.downloads-folder-path;
+                        PillButton {
+                            unit: root.unit;
+                            width: 12 * root.unit;
+                            label: @tr("SETTINGS_OPEN_FOLDER" => "Open Folder");
+                            clicked => { root.open-downloads-folder(); }
+                        }
+                    }
+                    SettingsOption {
+                        unit: root.unit;
+                        label: @tr("SETTINGS_DOWNLOADS_LIMIT" => "Storage limit");
+                        description: @tr("Maximum disk space for downloaded media. Default: unlimited.");
+                        SelectField {
+                            width: 16 * root.unit;
+                            unit: root.unit;
+                            value: root.downloads-disk-limit;
+                            options: ["Sin límite", "10 GB", "25 GB", "50 GB", "100 GB", "200 GB"];
+                            open <=> root.downloads-disk-limit-open;
+                            selected(val) => {
+                                root.downloads-disk-limit = val;
+                                root.change-downloads-disk-limit(val);
+                            }
+                        }
+                    }
+                    SettingsOption {
+                        unit: root.unit;
+                        label: @tr("SETTINGS_DOWNLOADS_SUBS" => "Offline subtitles");
+                        description: @tr("Automatically downloaded: original audio language + settings language + system language.");
                     }
                 }
 

@@ -97,6 +97,12 @@ export component DetailsPage inherits Rectangle {
     callback trailer-seek-relative(float);
     callback trailer-seek-progress(float);
     callback download-stream(string);
+    callback start-download(string, string, int);
+    in-out property <bool> download-modal-open: false;
+    in-out property <string> download-modal-selection-id: "";
+    in-out property <string> download-modal-stream-name: "";
+    in-out property <string> download-modal-stream-details: "";
+    in-out property <string> download-modal-scope: "episode";
     in property <bool> is-series: false;
     in property <[int]> available-seasons: [];
     in-out property <int> active-season: 1;
@@ -704,7 +710,13 @@ export component DetailsPage inherits Rectangle {
                         thumbnail: stream.thumbnail;
                         progress: stream.progress;
                         play => { root.play-stream(stream.id); }
-                        download => { root.download-stream(stream.id); }
+                        download => {
+                            root.download-modal-selection-id = stream.id;
+                            root.download-modal-stream-name = stream.name;
+                            root.download-modal-stream-details = stream.description;
+                            root.download-modal-scope = root.is-series ? "episode" : "movie";
+                            root.download-modal-open = true;
+                        }
                         context-requested(x, y) => {
                             root.stream-context-x = x;
                             root.stream-context-y = y;
@@ -930,6 +942,192 @@ export component DetailsPage inherits Rectangle {
             url: root.share-url;
             copy-requested(url) => { root.share-copy(url); }
             share-requested(platform, url) => { root.share-social(platform, url); }
+        }
+    }
+
+    ModalDialog {
+        width: 100%;
+        height: 100%;
+        z: 2000;
+        unit: root.unit;
+        open: root.download-modal-open;
+        title: root.is-series ? @tr("DOWNLOAD_DIALOG_TITLE" => "Descargar serie") : @tr("DOWNLOAD_MOVIE_TITLE" => "Descargar película");
+        dialog-width: 38 * root.unit;
+        dialog-height: root.is-series ? 29 * root.unit : 20.5 * root.unit;
+        close-requested => { root.download-modal-open = false; }
+
+        VerticalLayout {
+            padding: 1.8 * root.unit;
+            spacing: 1.2 * root.unit;
+
+            Rectangle {
+                height: 4.8 * root.unit;
+                border-radius: Theme.border-radius;
+                background: Theme.control-background;
+                border-width: 1px;
+                border-color: Theme.divider;
+
+                VerticalLayout {
+                    padding-left: 1.2 * root.unit;
+                    padding-right: 1.2 * root.unit;
+                    alignment: center;
+                    spacing: 0.3 * root.unit;
+
+                    Text {
+                        text: root.download-modal-stream-name;
+                        color: Theme.text-primary;
+                        font-size: 1.05 * root.unit;
+                        font-weight: 650;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: root.download-modal-stream-details;
+                        color: Theme.text-secondary;
+                        font-size: 0.85 * root.unit;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            Text {
+                text: root.is-series ? @tr("DOWNLOAD_SCOPE_LABEL" => "¿Qué deseas descargar?") : @tr("DOWNLOAD_CONFIRM_LABEL" => "Opción de descarga");
+                color: Theme.text-primary;
+                font-size: 0.95 * root.unit;
+                font-weight: 600;
+            }
+
+            if (!root.is-series) : Rectangle {
+                height: 3.4 * root.unit;
+                border-radius: Theme.border-radius;
+                background: Theme.accent.with-alpha(0.18);
+                border-width: 1px;
+                border-color: Theme.accent;
+
+                HorizontalLayout {
+                    padding-left: 1.2 * root.unit;
+                    padding-right: 1.2 * root.unit;
+                    spacing: root.unit;
+                    alignment: center;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Película completa (" + root.item-title + ")";
+                        color: Theme.accent;
+                        font-size: 0.95 * root.unit;
+                        font-weight: 550;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            if (root.is-series) : Rectangle {
+                height: 3.4 * root.unit;
+                border-radius: Theme.border-radius;
+                background: root.download-modal-scope == "episode" ? Theme.accent.with-alpha(0.18) : Theme.control-background;
+                border-width: 1px;
+                border-color: root.download-modal-scope == "episode" ? Theme.accent : Theme.divider;
+
+                TouchArea {
+                    clicked => { root.download-modal-scope = "episode"; }
+                }
+
+                HorizontalLayout {
+                    padding-left: 1.2 * root.unit;
+                    padding-right: 1.2 * root.unit;
+                    spacing: root.unit;
+                    alignment: center;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Solo este capítulo (Temporada " + root.active-season + ", Episodio " + (root.active-episode-idx + 1) + ")";
+                        color: root.download-modal-scope == "episode" ? Theme.accent : Theme.text-primary;
+                        font-size: 0.95 * root.unit;
+                        font-weight: 550;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            if (root.is-series) : Rectangle {
+                height: 3.4 * root.unit;
+                border-radius: Theme.border-radius;
+                background: root.download-modal-scope == "season" ? Theme.accent.with-alpha(0.18) : Theme.control-background;
+                border-width: 1px;
+                border-color: root.download-modal-scope == "season" ? Theme.accent : Theme.divider;
+
+                TouchArea {
+                    clicked => { root.download-modal-scope = "season"; }
+                }
+
+                HorizontalLayout {
+                    padding-left: 1.2 * root.unit;
+                    padding-right: 1.2 * root.unit;
+                    spacing: root.unit;
+                    alignment: center;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Temporada " + root.active-season + " completa (" + root.episodes.length + " capítulos)";
+                        color: root.download-modal-scope == "season" ? Theme.accent : Theme.text-primary;
+                        font-size: 0.95 * root.unit;
+                        font-weight: 550;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            if (root.is-series) : Rectangle {
+                height: 3.4 * root.unit;
+                border-radius: Theme.border-radius;
+                background: root.download-modal-scope == "series" ? Theme.accent.with-alpha(0.18) : Theme.control-background;
+                border-width: 1px;
+                border-color: root.download-modal-scope == "series" ? Theme.accent : Theme.divider;
+
+                TouchArea {
+                    clicked => { root.download-modal-scope = "series"; }
+                }
+
+                HorizontalLayout {
+                    padding-left: 1.2 * root.unit;
+                    padding-right: 1.2 * root.unit;
+                    spacing: root.unit;
+                    alignment: center;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Toda la serie (todas las temporadas)";
+                        color: root.download-modal-scope == "series" ? Theme.accent : Theme.text-primary;
+                        font-size: 0.95 * root.unit;
+                        font-weight: 550;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: root.unit;
+                alignment: end;
+                padding-top: 0.5 * root.unit;
+
+                PillButton {
+                    width: 8 * root.unit;
+                    unit: root.unit;
+                    label: @tr("CANCEL" => "Cancel");
+                    outlined: true;
+                    clicked => { root.download-modal-open = false; }
+                }
+
+                PillButton {
+                    width: 9 * root.unit;
+                    unit: root.unit;
+                    label: @tr("DOWNLOAD" => "Download");
+                    clicked => {
+                        root.start-download(root.download-modal-selection-id, root.download-modal-scope, root.active-season);
+                        root.download-modal-open = false;
+                    }
+                }
+            }
         }
     }
 

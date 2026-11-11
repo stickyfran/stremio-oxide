@@ -798,6 +798,30 @@ pub fn setup(
     let default_omniphony_settings = StoredOmniphonyAudioSettings::default();
     let omniphony_settings = Arc::new(Mutex::new(default_omniphony_settings.clone()));
     ui.set_settings_omniphony_audio((&default_omniphony_settings).into());
+    ui.set_settings_downloads_folder(crate::paths::get().downloads().to_string_lossy().to_string().into());
+    {
+        let ui_weak = ui.as_weak();
+        tokio::spawn(async move {
+            let limit = crate::db::get_setting("download_disk_limit_gb")
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "0".into());
+            let label = match limit.as_str() {
+                "10" => "10 GB",
+                "25" => "25 GB",
+                "50" => "50 GB",
+                "100" => "100 GB",
+                "200" => "200 GB",
+                _ => "Sin límite",
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_settings_downloads_disk_limit(label.into());
+                }
+            });
+        });
+    }
     if let Some(playback) = native_playback {
         playback.configure_omniphony_audio(default_omniphony_settings.clone().into());
     }
@@ -1551,6 +1575,24 @@ pub fn setup(
     ui.on_settings_change_quit_on_close({
         let runtime = runtime.clone();
         move |value| update_profile_settings(&runtime, |settings| settings.quit_on_close = value)
+    });
+    ui.on_settings_change_downloads_disk_limit({
+        let ui_weak = ui.as_weak();
+        move |val| {
+            let limit_str = match val.as_str() {
+                "10 GB" => "10",
+                "25 GB" => "25",
+                "50 GB" => "50",
+                "100 GB" => "100",
+                "200 GB" => "200",
+                _ => "0",
+            };
+            let weak = ui_weak.clone();
+            tokio::spawn(async move {
+                let _ = crate::db::set_setting("download_disk_limit_gb", limit_str).await;
+                crate::downloads::project_active_profile(weak).await;
+            });
+        }
     });
 
     // Custom Client Settings Callbacks

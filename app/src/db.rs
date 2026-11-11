@@ -20,7 +20,7 @@ const DB_BUSY_TIMEOUT_MS: u64 = 1_000;
 const SHUTDOWN_CHECKPOINT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const MAX_LOG_ROWS: i64 = 10_000;
 const LOG_CLEANUP_INTERVAL: usize = 64;
-const LATEST_SCHEMA_VERSION: i64 = 2;
+const LATEST_SCHEMA_VERSION: i64 = 4;
 
 #[tracing::instrument(skip(database_path))]
 #[cfg_attr(feature = "profiling", hotpath::measure)]
@@ -196,6 +196,8 @@ async fn run_migrations(conn: &mut Connection) -> anyhow::Result<()> {
         match version {
             1 => migrate_profiles(&transaction).await?,
             2 => migrate_downloads_and_local_media(&transaction).await?,
+            3 => migrate_downloads_metadata(&transaction).await?,
+            4 => migrate_series_episodes_cache(&transaction).await?,
             unsupported => {
                 return Err(anyhow::anyhow!(
                     "no database migration is registered for version {unsupported}"
@@ -260,6 +262,50 @@ async fn migrate_downloads_and_local_media(
             );
             CREATE INDEX IF NOT EXISTS local_media_fingerprint
                 ON local_media_items(fingerprint);",
+        )
+        .await?;
+    Ok(())
+}
+
+async fn migrate_downloads_metadata(
+    transaction: &turso::transaction::Transaction<'_>,
+) -> anyhow::Result<()> {
+    let alter_stmts = [
+        "ALTER TABLE download_jobs ADD COLUMN meta_id TEXT",
+        "ALTER TABLE download_jobs ADD COLUMN meta_type TEXT",
+        "ALTER TABLE download_jobs ADD COLUMN series_name TEXT",
+        "ALTER TABLE download_jobs ADD COLUMN season INTEGER",
+        "ALTER TABLE download_jobs ADD COLUMN episode INTEGER",
+        "ALTER TABLE download_jobs ADD COLUMN video_id TEXT",
+        "ALTER TABLE download_jobs ADD COLUMN poster_url TEXT",
+        "ALTER TABLE download_jobs ADD COLUMN kind TEXT DEFAULT 'video'",
+        "ALTER TABLE download_jobs ADD COLUMN parent_job_id TEXT",
+        "ALTER TABLE download_jobs ADD COLUMN lang TEXT",
+    ];
+    for stmt in alter_stmts {
+        let _ = transaction.execute(stmt, ()).await;
+    }
+    let _ = transaction
+        .execute(
+            "CREATE INDEX IF NOT EXISTS download_jobs_meta
+                ON download_jobs(profile_id, meta_id, season, episode)",
+            (),
+        )
+        .await;
+    Ok(())
+}
+
+async fn migrate_series_episodes_cache(
+    transaction: &turso::transaction::Transaction<'_>,
+) -> anyhow::Result<()> {
+    transaction
+        .execute(
+            "CREATE TABLE IF NOT EXISTS series_episodes_cache (
+                meta_id TEXT PRIMARY KEY,
+                episodes_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            (),
         )
         .await?;
     Ok(())
@@ -468,6 +514,34 @@ pub async fn set_settings(values: &[(&str, &str)]) -> anyhow::Result<()> {
             .await?;
     }
     transaction.commit().await?;
+    Ok(())
+}
+
+pub async fn get_series_episodes_cache(meta_id: &str) -> anyhow::Result<Option<String>> {
+    let conn = get_conn().await?;
+    let mut rows = conn
+        .query(
+            "SELECT episodes_json FROM series_episodes_cache WHERE meta_id = ?",
+            [meta_id],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        let json: String = row.get(0)?;
+        Ok(Some(json))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn set_series_episodes_cache(meta_id: &str, json: &str) -> anyhow::Result<()> {
+    let conn = get_conn().await?;
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO series_episodes_cache(meta_id, episodes_json, updated_at)
+         VALUES(?, ?, ?)
+         ON CONFLICT(meta_id) DO UPDATE SET episodes_json = excluded.episodes_json, updated_at = excluded.updated_at",
+        turso::params![meta_id, json, now],
+    ).await?;
     Ok(())
 }
 

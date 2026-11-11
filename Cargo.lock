@@ -9117,7 +9117,7 @@ dependencies = [
 
 [[package]]
 name = "stremio-native"
-version = "0.99.93"
+version = "0.99.94"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9140,6 +9140,7 @@ dependencies = [
  "http",
  "image",
  "keepawake",
+ "libc",
  "libmimalloc-sys",
  "media-integrations",
  "mimalloc",

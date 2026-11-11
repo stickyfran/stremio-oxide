@@ -29,8 +29,16 @@ static ACTIVE_EPISODE_IDX: OnceLock<Mutex<usize>> = OnceLock::new();
 static EPISODE_SEARCH_QUERY: OnceLock<Mutex<String>> = OnceLock::new();
 static LAST_LOADED_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static PENDING_SEASON_SELECTION_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static PENDING_TARGET_EPISODE: OnceLock<Mutex<Option<(String, i32, i32)>>> = OnceLock::new();
 thread_local! {
     static LAST_SYNCED_EPISODES: std::cell::Cell<Option<SyncFingerprint>> = const { std::cell::Cell::new(None) };
+}
+
+pub fn set_pending_target_episode(meta_id: String, season: i32, episode: i32) {
+    *PENDING_TARGET_EPISODE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((meta_id, season, episode));
 }
 
 fn get_active_season() -> &'static Mutex<i32> {
@@ -1337,33 +1345,67 @@ pub fn sync(
         }
 
         if id_changed || route_opened {
-            let resumed_season = meta_details
-                .library_item
-                .as_ref()
-                .and_then(|item| item.state.video_id.as_deref())
-                .and_then(|video_id| meta_item.videos.iter().find(|video| video.id == video_id))
-                .and_then(|video| video.series_info.as_ref())
-                .map(|info| info.season as i32);
-            let preferred_season = is_series
-                .then(|| {
-                    preferred_series_season(&ordered_series_seasons(meta_item), resumed_season)
-                })
-                .flatten()
-                .unwrap_or(1);
-            *get_active_season()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = preferred_season;
-            *get_active_episode_idx()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = 0;
-            if let Ok(mut query) = get_search_query().lock() {
-                query.clear();
+            let pending_ep = {
+                let mut guard = PENDING_TARGET_EPISODE
+                    .get_or_init(|| Mutex::new(None))
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if guard.as_ref().is_some_and(|(m_id, _, _)| m_id == selected_id) {
+                    guard.take()
+                } else {
+                    None
+                }
+            };
+
+            if let Some((_, target_s, target_e)) = pending_ep {
+                *get_active_season()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = target_s;
+                let eps_in_season = series_videos(meta_item, target_s);
+                let ep_idx = eps_in_season
+                    .iter()
+                    .position(|v| v.series_info.as_ref().is_some_and(|info| info.episode as i32 == target_e))
+                    .unwrap_or_else(|| (target_e.saturating_sub(1)).max(0) as usize);
+                *get_active_episode_idx()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = ep_idx;
+                if let Ok(mut query) = get_search_query().lock() {
+                    query.clear();
+                }
+                LAST_SYNCED_EPISODES.with(|cache| {
+                    cache.set(None);
+                });
+                ui.set_detail_episode_search_query("".into());
+                ui.set_detail_in_stream_view(true);
+            } else {
+                let resumed_season = meta_details
+                    .library_item
+                    .as_ref()
+                    .and_then(|item| item.state.video_id.as_deref())
+                    .and_then(|video_id| meta_item.videos.iter().find(|video| video.id == video_id))
+                    .and_then(|video| video.series_info.as_ref())
+                    .map(|info| info.season as i32);
+                let preferred_season = is_series
+                    .then(|| {
+                        preferred_series_season(&ordered_series_seasons(meta_item), resumed_season)
+                    })
+                    .flatten()
+                    .unwrap_or(1);
+                *get_active_season()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = preferred_season;
+                *get_active_episode_idx()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = 0;
+                if let Ok(mut query) = get_search_query().lock() {
+                    query.clear();
+                }
+                LAST_SYNCED_EPISODES.with(|cache| {
+                    cache.set(None);
+                });
+                ui.set_detail_episode_search_query("".into());
+                ui.set_detail_in_stream_view(false);
             }
-            LAST_SYNCED_EPISODES.with(|cache| {
-                cache.set(None);
-            });
-            ui.set_detail_episode_search_query("".into());
-            ui.set_detail_in_stream_view(false);
         }
 
         // Map EpisodeItem list
@@ -1373,6 +1415,29 @@ pub fn sync(
         let mut episode_fingerprint = Fingerprint::new();
         let mut videos_for_active_season = Vec::new();
         if is_series {
+            let meta_id_val = meta_item.preview.id.clone();
+            let eps: Vec<crate::downloads::CachedEpisode> = meta_item
+                .videos
+                .iter()
+                .filter_map(|v| {
+                    let info = v.series_info.as_ref()?;
+                    Some(crate::downloads::CachedEpisode {
+                        id: v.id.clone(),
+                        title: v.title.clone(),
+                        season: info.season as i32,
+                        episode: info.episode as i32,
+                        released: v.released.map(|dt| dt.format("%Y-%m-%d").to_string()),
+                    })
+                })
+                .collect();
+            if !eps.is_empty() {
+                tokio::spawn(async move {
+                    if let Ok(json) = serde_json::to_string(&eps) {
+                        let _ = crate::db::set_series_episodes_cache(&meta_id_val, &json).await;
+                    }
+                });
+            }
+
             let seasons = ordered_series_seasons(meta_item);
             let active_season = {
                 let mut season = get_active_season()

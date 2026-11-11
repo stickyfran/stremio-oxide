@@ -609,7 +609,19 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
                     }
                 }
             }
+            7 => {
+                // Downloads
+                updated += patch_download_items(&ui.get_download_items(), &images);
+            }
             _ => {}
+        }
+    }
+
+    // Also patch downloads even if not active tab so when user switches to tab 7 it's already populated
+    if ui.get_active_tab() != 7 {
+        let dl_items = ui.get_download_items();
+        if dl_items.row_count() > 0 {
+            updated += patch_download_items(&dl_items, &images);
         }
     }
 
@@ -772,6 +784,25 @@ fn patch_episode_items(
         };
         episode.thumbnail = thumbnail.clone();
         model.set_row_data(index, episode);
+        updated += 1;
+    }
+    updated
+}
+
+fn patch_download_items(
+    model: &ModelRc<crate::DownloadItem>,
+    images: &HashMap<&str, slint::Image>,
+) -> usize {
+    let mut updated = 0;
+    for index in 0..model.row_count() {
+        let Some(mut item) = model.row_data(index) else {
+            continue;
+        };
+        let Some(poster) = lookup_image(images, item.poster_url.as_str()) else {
+            continue;
+        };
+        item.poster = poster.clone();
+        model.set_row_data(index, item);
         updated += 1;
     }
     updated

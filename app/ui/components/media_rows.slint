@@ -121,76 +121,80 @@ export component StreamRow inherits Rectangle {
             }
         }
 
-        if (root.score-label != "") : Rectangle {
-            width: 3.75 * root.unit;
-            height: 1.8 * root.unit;
-            border-radius: self.height / 2;
-            background: root.filtered
-                ? Theme.danger.with-alpha(0.22)
-                : Theme.accent.with-alpha(0.2);
+        if (root.score-label != "") : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 3.75 * root.unit;
+                height: 1.8 * root.unit;
+                border-radius: self.height / 2;
+                background: root.filtered
+                    ? Theme.danger.with-alpha(0.22)
+                    : Theme.accent.with-alpha(0.2);
 
-            Text {
-                width: parent.width;
-                height: parent.height;
-                text: root.score-label;
-                color: root.filtered ? Theme.danger : Theme.accent;
-                font-size: 0.78 * root.unit;
-                font-weight: 650;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.score-label;
+                    color: root.filtered ? Theme.danger : Theme.accent;
+                    font-size: 0.78 * root.unit;
+                    font-weight: 650;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
 
-            TouchArea {
-                mouse-cursor: help;
-                accessible-role: text;
-                accessible-label: root.score-details;
+                TouchArea {
+                    mouse-cursor: help;
+                    accessible-role: text;
+                    accessible-label: root.score-details;
+                }
             }
         }
 
-        actions-container := HorizontalLayout {
-            width: 6.2 * root.unit;
-            spacing: 0.5 * root.unit;
+        VerticalLayout {
             alignment: center;
-            height: parent.height;
-            opacity: (root.selected || root.row-hovered) ? 1.0 : 0.0;
-            visible: self.opacity > 0.01;
-            animate opacity { duration: 150ms; easing: ease-out; }
+            actions-container := HorizontalLayout {
+                spacing: 0.5 * root.unit;
+                alignment: center;
+                opacity: (root.selected || root.row-hovered) ? 1.0 : 0.0;
+                visible: self.opacity > 0.01;
+                animate opacity { duration: 150ms; easing: ease-out; }
 
-            download-button := ButtonSurface {
-                width: 2.8 * root.unit;
-                height: 2.8 * root.unit;
-                border-radius: self.width / 2;
-                background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
-                accessible-name: @tr("DOWNLOAD" => "Download");
-                clicked => { root.download(); }
+                download-button := ButtonSurface {
+                    width: 2.8 * root.unit;
+                    height: 2.8 * root.unit;
+                    border-radius: self.height / 2;
+                    background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
+                    accessible-name: @tr("DOWNLOAD" => "Download");
+                    clicked => { root.download(); }
 
-                Image {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 1.3 * root.unit;
-                    height: 1.3 * root.unit;
-                    source: @image-url("../assets/images/icons/download.svg");
-                    colorize: Theme.text-primary;
-                    image-fit: contain;
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 1.3 * root.unit;
+                        height: 1.3 * root.unit;
+                        source: @image-url("../assets/images/icons/download.svg");
+                        colorize: Theme.text-primary;
+                        image-fit: contain;
+                    }
                 }
-            }
 
-            play-button := ButtonSurface {
-                width: 2.8 * root.unit;
-                height: 2.8 * root.unit;
-                border-radius: self.width / 2;
-                background: Theme.success;
-                accessible-name: @tr("PLAY" => "Play");
-                clicked => { root.play(); }
+                play-button := ButtonSurface {
+                    width: 2.8 * root.unit;
+                    height: 2.8 * root.unit;
+                    border-radius: self.height / 2;
+                    background: Theme.success;
+                    accessible-name: @tr("PLAY" => "Play");
+                    clicked => { root.play(); }
 
-                Image {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 1.3 * root.unit;
-                    height: 1.3 * root.unit;
-                    source: @image-url("../assets/images/icons/play.svg");
-                    colorize: Theme.text-primary;
-                    image-fit: contain;
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 1.3 * root.unit;
+                        height: 1.3 * root.unit;
+                        source: @image-url("../assets/images/icons/play.svg");
+                        colorize: Theme.text-primary;
+                        image-fit: contain;
+                    }
                 }
             }
         }

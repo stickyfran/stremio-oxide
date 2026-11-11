@@ -5632,7 +5632,10 @@ static PLAYER_CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 /// winit's `set_cursor_visible` is not free — on Windows it hops to the window
 /// thread and blocks on the reply — so skip it whenever the state already
 /// matches, and only remember the new state once the window actually applied it.
-fn set_player_cursor_hidden(ui: &MainWindow, hidden: bool) {
+pub(crate) fn set_player_cursor_hidden(ui: &MainWindow, hidden: bool) {
+    if hidden && !ui.get_show_player() {
+        return;
+    }
     if ui.get_player_pip_active() {
         // Never hide cursor in Picture-in-Picture mode so resizing and controls remain accessible
         if PLAYER_CURSOR_HIDDEN.load(Ordering::Relaxed) {

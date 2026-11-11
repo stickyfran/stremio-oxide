@@ -41,7 +41,7 @@ import { OperationsManager } from "components/operations_manager.slint";
 import { HotkeyEditor, HotkeyItem } from "components/hotkey_editor.slint";
 import { CalendarPage, CalendarRow, CalendarCell, CalendarMediaItem } from "pages/calendar.slint";
 import { SearchPage } from "pages/search.slint";
-import { DownloadsPage, DownloadItem } from "pages/downloads.slint";
+import { DownloadsPage, DownloadItem, DownloadEpisodeItem, DownloadEpisodeChip, DownloadSeasonGroup } from "pages/downloads.slint";
 import { AppDebugMenu, DebugPageOption, DebugStateOption } from "components/app_debug_menu.slint";
 
 export struct PluginAction {
@@ -90,7 +90,7 @@ component GuideSectionTitle inherits Text {
 }
 
 export { ColorUtils, ParsedColor, CursorSample, SavedGradient }
-export { Theme, IconData, MediaCardItem, StreamLink, EpisodeItem, CastDevice, BoardSection, DiscoverRow, LibraryRow, AddonItem, CalendarRow, CalendarCell, CalendarMediaItem, SearchSuggestion, DownloadItem, HotkeyItem }
+export { Theme, IconData, MediaCardItem, StreamLink, EpisodeItem, CastDevice, BoardSection, DiscoverRow, LibraryRow, AddonItem, CalendarRow, CalendarCell, CalendarMediaItem, SearchSuggestion, DownloadItem, DownloadEpisodeItem, DownloadEpisodeChip, DownloadSeasonGroup, HotkeyItem }
 
 // Windows drives the notification area itself and renders this panel instead of
 // the platform menu; see `tray/windows.rs`.
@@ -457,6 +457,7 @@ export component MainWindow inherits Window {
     in-out property <[DownloadItem]> download-items: [];
     in-out property <bool> downloads-loading: false;
     in-out property <string> downloads-error: "";
+    in-out property <string> downloads-disk-usage: "";
 
     // Filters lists & values for Discover
     in property <[string]> discover-types: [];
@@ -911,8 +912,12 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-streaming-lsd: true;
     in-out property <string> settings-streaming-remote-url: "";
     in-out property <string> settings-streaming-logs-text: @tr("No logs loaded. Click Refresh.");
+    in-out property <string> settings-downloads-disk-limit: "Sin límite";
+    in-out property <string> settings-downloads-folder: "";
     in property <IconData> refresh-icon;
     in property <IconData> folder-icon;
+
+    callback settings-change-downloads-disk-limit(string);
 
     callback settings-change-seeding-enabled(bool);
     callback settings-change-dht-enabled(bool);
@@ -1092,6 +1097,7 @@ export component MainWindow inherits Window {
     callback details-retry();
     callback play-stream(string);
     callback download-stream(string);
+    callback start-download(string, string, int);
     
     // Settings callbacks
     callback apply-cache-settings(float);
@@ -1121,7 +1127,10 @@ export component MainWindow inherits Window {
     callback downloads-cancel(string);
     callback downloads-play(string);
     callback downloads-reveal(string);
+    callback downloads-delete-item(string);
+    callback downloads-open-folder();
     callback downloads-refresh();
+    callback downloads-request-download-episode(string, int, int);
     callback onboarding-completed();
     callback play-url-magnet-from-clipboard();
 
@@ -2193,6 +2202,8 @@ export component MainWindow inherits Window {
                         streaming-server-urls: settings-streaming-server-urls;
                         streaming-https-endpoint: settings-streaming-https-endpoint;
                         streaming-transcode-profile: settings-streaming-transcode-profile;
+                        downloads-folder-path: settings-downloads-folder;
+                        downloads-disk-limit: settings-downloads-disk-limit;
                         refresh-icon: refresh-icon;
                         folder-icon: folder-icon;
 
@@ -2282,6 +2293,8 @@ export component MainWindow inherits Window {
                         copy-remote-url(url) => { settings-copy-remote-url(url); }
                         change-streaming-https-endpoint(val) => { settings-change-streaming-https-endpoint(val); }
                         change-streaming-transcode-profile(val) => { settings-change-streaming-transcode-profile(val); }
+                        change-downloads-disk-limit(val) => { settings-change-downloads-disk-limit(val); }
+                        open-downloads-folder => { root.downloads-open-folder(); }
                         change-pause-on-minimize(val) => { settings-change-pause-on-minimize(val); }
                         change-quit-on-close(val) => { settings-change-quit-on-close(val); }
                         open-external-url(url) => { root.open-external-url(url); }
@@ -2370,12 +2383,16 @@ export component MainWindow inherits Window {
                         items: root.download-items;
                         loading: root.downloads-loading;
                         error: root.downloads-error;
+                        disk-usage-text: root.downloads-disk-usage;
                         pause(id) => { root.downloads-pause(id); }
                         resume(id) => { root.downloads-resume(id); }
                         cancel(id) => { root.downloads-cancel(id); }
                         play(id) => { root.downloads-play(id); }
                         reveal(id) => { root.downloads-reveal(id); }
+                        delete-item(id) => { root.downloads-delete-item(id); }
+                        open-downloads-folder => { root.downloads-open-folder(); }
                         retry => { root.downloads-refresh(); }
+                        request-download-episode(meta-id, season, episode) => { root.downloads-request-download-episode(meta-id, season, episode); }
                     }
                 }
             }
@@ -2546,6 +2563,7 @@ export component MainWindow inherits Window {
             notifications-changed(enabled) => { details-notifications-changed(enabled); }
             play-trailer(selection-id) => { play-stream(selection-id); }
             download-stream(selection-id) => { root.download-stream(selection-id); }
+            start-download(selection-id, scope, season) => { root.start-download(selection-id, scope, season); }
 
             is-series: root.debug-preview-enabled && root.debug-preview-page == 7
                 ? (root.debug-preview-state == "series-episodes"
@@ -3774,22 +3792,22 @@ export component MainWindow inherits Window {
                 root.downloads-error = state == "downloads-error" ? "download database operation failed" : "";
                 if (state == "downloads-active") {
                     root.download-items = [
-                        { id: "mock-1", title: "Spider-Man: Far from Home", filename: "Spider-Man_ Far from Home.mp4", destination: "C:/Downloads", status: "2.4 GB / 8.5 GB (14.2 MB/s)", progress: 0.28, can-pause: true, can-resume: false, can-play: false, can-cancel: true, can-delete: false }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "2.4 GB / 8.5 GB (14.2 MB/s)", progress: 0.28, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: true, can-resume: false, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-paused") {
                     root.download-items = [
-                        { id: "mock-1", title: "Spider-Man: Far from Home", filename: "Spider-Man_ Far from Home.mp4", destination: "C:/Downloads", status: "Paused", progress: 0.45, can-pause: false, can-resume: true, can-play: false, can-cancel: true, can-delete: false }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Paused", progress: 0.45, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: false, can-resume: true, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-completed") {
                     root.download-items = [
-                        { id: "mock-1", title: "Spider-Man: Far from Home", filename: "Spider-Man_ Far from Home.mp4", destination: "C:/Downloads", status: "Completed", progress: 1.0, can-pause: false, can-resume: false, can-play: true, can-cancel: false, can-delete: true }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Completed", progress: 1.0, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: false, can-resume: false, can-play: true, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-cancelled") {
                     root.download-items = [
-                        { id: "mock-1", title: "Spider-Man: Far from Home", filename: "Spider-Man_ Far from Home.mp4", destination: "C:/Downloads", status: "Cancelled", progress: 0.15, can-pause: false, can-resume: true, can-play: false, can-cancel: false, can-delete: true }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Cancelled", progress: 0.15, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: false, can-resume: true, can-play: false, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-empty" || state == "downloads-loading" || state == "downloads-error") {

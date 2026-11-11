@@ -960,6 +960,9 @@ async fn finish_startup(
                 sync_tab_from_model(selected_tab, &rt, &ui, &ui_weak_tab, &navigation_tab);
                 crate::event_loop::trim_process_memory(false);
                 match selected_tab {
+                    Tab::Downloads => {
+                        tokio::spawn(crate::downloads::project_active_profile(ui_weak_tab.clone()));
+                    }
                     Tab::Movies => ui.invoke_discover_type_changed("movie".into()),
                     Tab::Shows => ui.invoke_discover_type_changed("series".into()),
                     Tab::Anime => ui.invoke_discover_type_changed("anime".into()),
@@ -1087,6 +1090,7 @@ async fn finish_startup(
     );
     downloads::setup_ui_callbacks(
         &ui,
+        runtime.clone(),
         download_manager.clone(),
         native_playback_bridge.clone(),
         navigation.clone(),

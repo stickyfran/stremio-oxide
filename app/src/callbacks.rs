@@ -278,13 +278,15 @@ pub fn setup_ui_callbacks(
         }
     });
 
-    // Download stream action
+    // Download action (single episode/movie, season, or entire series)
     let download_manager_clone = download_manager.clone();
-    ui.on_download_stream({
+    let runtime_for_download = runtime.clone();
+    ui.on_start_download({
         let ui_weak = ui_weak.clone();
         let playback_selections = playback_selections.clone();
-        let download_manager = download_manager_clone;
-        move |selection_id| {
+        let download_manager = download_manager_clone.clone();
+        let runtime = runtime_for_download;
+        move |selection_id, scope, target_season| {
             let Some((selected, _stream_name)) = playback_selections.resolve(selection_id.as_str())
             else {
                 tracing::warn!(selection_id = %selection_id, "download selection expired");
@@ -294,68 +296,351 @@ pub fn setup_ui_callbacks(
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
-            let detail_title = ui.get_detail_title().to_string();
+
+            let raw_detail_title = ui.get_detail_title().to_string();
             let is_series = ui.get_detail_is_series();
-            let title = if is_series {
-                let active_ep = ui.get_detail_active_episode_idx();
-                let episodes = ui.get_detail_episodes();
-                if let Some(ep) = episodes.iter().nth(active_ep as usize) {
-                    let ep_title = ep.title.to_string();
-                    let season = ui.get_detail_active_season();
-                    let ep_num = ep.episode_num;
-                    if !ep_title.is_empty() && ep_title != detail_title {
-                        format!("{detail_title} - {ep_title} ({season}x{ep_num})")
-                    } else if ep_num > 0 && season > 0 {
-                        format!("{detail_title} ({season}x{ep_num})")
-                    } else {
-                        detail_title.clone()
-                    }
-                } else {
-                    detail_title.clone()
-                }
+            let scope = scope.to_string();
+
+            let model = runtime.model().expect("model read failed");
+            let settings = model.ctx.profile.settings.clone();
+            let streaming_server_url = model.streaming_server.base_url.clone();
+            let installed_addons = model.ctx.profile.addons.clone();
+            let user_sub_lang = settings.subtitles_language.clone();
+            let meta_item = model.meta_details.meta_items.iter().find_map(|r| match &r.content {
+                Some(stremio_core::models::common::Loadable::Ready(item)) => Some(item.clone()),
+                _ => None,
+            });
+            let detail_title = if !raw_detail_title.is_empty() {
+                raw_detail_title
             } else {
-                detail_title.clone()
+                meta_item.as_ref().map(|m| m.preview.name.clone()).unwrap_or_else(|| "Video".into())
             };
-
-            let sanitized_filename = format!("{title}.mp4");
-            let destination_dir = crate::paths::get().downloads();
-
-            let download_manager = download_manager.clone();
-            tokio::spawn(async move {
-                let resolution =
-                    crate::integrations::resolve_explicit_selection(selected.clone()).await;
-                let final_stream = match resolution {
-                    crate::integrations::DebridResolution::Resolved(res) => res.stream,
-                    crate::integrations::DebridResolution::Uncached { selected, .. } => {
-                        selected.stream
-                    }
-                    crate::integrations::DebridResolution::Fallback(res) => res.stream,
-                };
-
-                let download_url = match &final_stream.source {
-                    stremio_core::types::resource::StreamSource::Url { url } => {
-                        Some(url.to_string())
-                    }
-                    _ => None,
-                };
-
-                if let Some(url) = download_url {
-                    let source = crate::downloads::DownloadSource {
-                        url,
-                        headers: Vec::new(),
-                        kind: crate::downloads::DownloadSourceKind::DirectHttp,
-                    };
-                    let _ = download_manager
-                        .enqueue(
-                            "default",
-                            &title,
-                            &sanitized_filename,
-                            &destination_dir,
-                            source,
-                        )
-                        .await;
+            let meta_id = meta_item.as_ref().map(|m| m.preview.id.clone()).or_else(|| {
+                model.meta_details.selected.as_ref().map(|s| s.meta_path.id.clone())
+            });
+            let poster_url = meta_item.as_ref()
+                .and_then(|m| m.preview.poster.as_ref().map(|u| u.to_string()))
+                .or_else(|| {
+                    let u = ui.get_detail_poster_url().to_string();
+                    if !u.is_empty() { Some(u) } else { None }
+                });
+            let orig_lang: Option<String> = meta_item.as_ref().and_then(|meta| {
+                let id_lower = meta.preview.id.to_ascii_lowercase();
+                let type_lower = meta.preview.r#type.to_ascii_lowercase();
+                let is_anime = id_lower.starts_with("kitsu:")
+                    || type_lower == "anime"
+                    || meta.preview.links.iter().any(|l| {
+                        (l.category.eq_ignore_ascii_case("genre") || l.category.eq_ignore_ascii_case("genres"))
+                            && (l.name.eq_ignore_ascii_case("anime") || l.name.eq_ignore_ascii_case("animation"))
+                    });
+                if is_anime {
+                    Some("ja".to_string())
+                } else {
+                    Some("en".to_string())
                 }
             });
+
+            if is_series {
+                if let (Some(meta_id_val), Some(meta)) = (&meta_id, &meta_item) {
+                    let eps: Vec<crate::downloads::CachedEpisode> = meta.videos.iter().filter_map(|v| {
+                        let info = v.series_info.as_ref()?;
+                        Some(crate::downloads::CachedEpisode {
+                            id: v.id.clone(),
+                            title: v.title.clone(),
+                            season: info.season as i32,
+                            episode: info.episode as i32,
+                            released: v.released.map(|dt| dt.format("%Y-%m-%d").to_string()),
+                        })
+                    }).collect();
+                    if !eps.is_empty() {
+                        let m_id = meta_id_val.clone();
+                        tokio::spawn(async move {
+                            if let Ok(json) = serde_json::to_string(&eps) {
+                                let _ = crate::db::set_series_episodes_cache(&m_id, &json).await;
+                            }
+                        });
+                    }
+                }
+            }
+
+            drop(model);
+
+            let current_season = ui.get_detail_active_season();
+            let (current_ep_name, current_ep_num) = {
+                let active_ep_idx = ui.get_detail_active_episode_idx() as usize;
+                let episodes = ui.get_detail_episodes();
+                if let Some(ep) = episodes.iter().nth(active_ep_idx) {
+                    (ep.title.to_string(), ep.episode_num)
+                } else {
+                    (String::new(), 1)
+                }
+            };
+
+            let base_downloads_dir = crate::paths::get().downloads().to_path_buf();
+            let title_folder = base_downloads_dir.join(crate::downloads::sanitize_filename(&detail_title));
+
+            let download_manager = download_manager.clone();
+            let ui_weak_inner = ui_weak.clone();
+
+            tokio::spawn(async move {
+                let profile_id = crate::profiles::active_profile_id().await.map(|p| p.as_str().to_string()).unwrap_or_else(|_| "default".to_string());
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                    .unwrap_or_default();
+
+                // If scope is season or series, check if the source is a torrent pack with multiple files
+                let mut multi_files_enqueued = false;
+                if (scope == "season" || scope == "series") && is_series {
+                    if let stremio_core::types::resource::StreamSource::Torrent { info_hash, .. } = &selected.stream.source {
+                        let info_hash_hex = hex::encode(info_hash);
+                        let server_base = streaming_server_url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "http://127.0.0.1:11470/".into());
+                        let server_trimmed = server_base.trim_end_matches('/');
+                        let stats_url = format!("{server_trimmed}/{info_hash_hex}/stats.json");
+                        let create_url = format!("{server_trimmed}/{info_hash_hex}/create");
+
+                        let _ = client.post(&create_url).json(&serde_json::json!({})).timeout(std::time::Duration::from_secs(3)).send().await;
+
+                        let mut file_list: Option<Vec<serde_json::Value>> = None;
+                        for _ in 0..4 {
+                            if let Ok(resp) = client.get(&stats_url).timeout(std::time::Duration::from_secs(3)).send().await {
+                                if resp.status().is_success() {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        if let Some(files) = json.get("files").and_then(|f| f.as_array()) {
+                                            if !files.is_empty() {
+                                                file_list = Some(files.clone());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                        }
+
+                        if let Some(files) = file_list {
+                            let mut matched_jobs = 0;
+                            for (file_idx, file) in files.iter().enumerate() {
+                                let file_name = file.get("name").and_then(|n| n.as_str())
+                                    .or_else(|| file.get("path").and_then(|p| p.as_str()))
+                                    .unwrap_or("");
+                                let is_video = file_name.ends_with(".mkv") || file_name.ends_with(".mp4") || file_name.ends_with(".avi") || file_name.ends_with(".ts") || file_name.ends_with(".mov");
+                                if !is_video {
+                                    continue;
+                                }
+
+                                if let Some((s, e)) = crate::downloads::parse_season_episode_from_filename(file_name) {
+                                    if scope == "season" && s != target_season {
+                                        continue;
+                                    }
+
+                                    let file_stream_url = format!("{server_trimmed}/{info_hash_hex}/{file_idx}");
+                                    let ep_dest_dir = title_folder.join(format!("Temporada {:02}", s));
+                                    let ep_title = format!("{detail_title} S{:02}E{:02}", s, e);
+                                    let ep_filename = format!("{detail_title} - S{:02}E{:02}.mp4", s, e);
+                                    let video_id = meta_id.as_ref().map(|m| format!("{m}:{s}:{e}"));
+
+                                    let job_res = download_manager.enqueue_with_options(
+                                        &profile_id,
+                                        &ep_title,
+                                        &ep_filename,
+                                        &ep_dest_dir,
+                                        crate::downloads::DownloadSource {
+                                            url: file_stream_url,
+                                            headers: Vec::new(),
+                                            kind: crate::downloads::DownloadSourceKind::DirectHttp,
+                                        },
+                                        crate::downloads::EnqueueOptions {
+                                            meta_id: meta_id.clone(),
+                                            meta_type: Some("series".into()),
+                                            series_name: Some(detail_title.clone()),
+                                            season: Some(s),
+                                            episode: Some(e),
+                                            video_id: video_id.clone(),
+                                            poster_url: poster_url.clone(),
+                                            kind: Some("video".into()),
+                                            parent_job_id: None,
+                                            lang: None,
+                                        },
+                                    ).await;
+
+                                    if let Ok(job) = job_res {
+                                        matched_jobs += 1;
+                                        let vid_id = video_id.unwrap_or_default();
+                                        let dm = download_manager.clone();
+                                        let cl = client.clone();
+                                        let prof = profile_id.clone();
+                                        let addons = installed_addons.clone();
+                                        let u_lang = user_sub_lang.clone();
+                                        let o_lang = orig_lang.clone();
+                                        let subs = selected.stream.subtitles.clone();
+                                        let weak_sub = ui_weak_inner.clone();
+                                        tokio::spawn(async move {
+                                            crate::downloads::fetch_and_enqueue_subtitles(
+                                                dm,
+                                                &cl,
+                                                &prof,
+                                                &job,
+                                                "series",
+                                                &vid_id,
+                                                &subs,
+                                                &addons,
+                                                u_lang.as_deref(),
+                                                o_lang.as_deref(),
+                                            ).await;
+                                            crate::downloads::project_active_profile(weak_sub).await;
+                                        });
+                                    }
+                                }
+                            }
+
+                            if matched_jobs > 0 {
+                                multi_files_enqueued = true;
+                                crate::downloads::project_active_profile(ui_weak_inner.clone()).await;
+                            }
+                        }
+                    }
+                }
+
+                // If not handled as multi-file torrent pack, resolve and download single video
+                if !multi_files_enqueued {
+                    let resolution = crate::integrations::resolve_explicit_selection(selected.clone()).await;
+                    let final_stream = match resolution {
+                        crate::integrations::DebridResolution::Resolved(res) => res.stream,
+                        crate::integrations::DebridResolution::Uncached { selected, .. } => selected.stream,
+                        crate::integrations::DebridResolution::Fallback(res) => res.stream,
+                    };
+
+                    let download_url = match &final_stream.source {
+                        stremio_core::types::resource::StreamSource::Url { url } => Some(url.to_string()),
+                        stremio_core::types::resource::StreamSource::Torrent { info_hash, file_idx, .. } => {
+                            let server_base = streaming_server_url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "http://127.0.0.1:11470/".into());
+                            let server_trimmed = server_base.trim_end_matches('/');
+                            let info_hash_hex = hex::encode(info_hash);
+                            let create_url = format!("{server_trimmed}/{info_hash_hex}/create");
+                            let _ = client.post(&create_url).json(&serde_json::json!({})).timeout(std::time::Duration::from_secs(3)).send().await;
+
+                            let sdl = stremio_core::deep_links::StreamDeepLinks::from((
+                                &final_stream,
+                                streaming_server_url.as_ref(),
+                                &settings,
+                            ));
+                            sdl.external_player.download
+                                .or(sdl.external_player.streaming)
+                                .or_else(|| {
+                                    let idx = file_idx.map(|i| i.to_string()).unwrap_or_else(|| "0".to_string());
+                                    Some(format!("{server_trimmed}/{info_hash_hex}/{idx}"))
+                                })
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(url) = download_url {
+                        let (ep_title, season_num, ep_num, video_id, dest_dir) = if is_series {
+                            let s = current_season;
+                            let e = current_ep_num;
+                            let ep_name = current_ep_name;
+                            let title_str = if !ep_name.is_empty() && ep_name != detail_title {
+                                format!("{detail_title} - {ep_name} ({s}x{e})")
+                            } else {
+                                format!("{detail_title} ({s}x{e})")
+                            };
+                            let v_id = meta_id.as_ref().map(|m| format!("{m}:{s}:{e}"));
+                            let dir = title_folder.join(format!("Temporada {:02}", s));
+                            (title_str, Some(s), Some(e), v_id, dir)
+                        } else {
+                            (detail_title.clone(), None, None, meta_id.clone(), title_folder)
+                        };
+
+                        let sanitized_filename = format!("{}.mp4", crate::downloads::sanitize_filename(&ep_title));
+                        let job_res = download_manager.enqueue_with_options(
+                            &profile_id,
+                            &ep_title,
+                            &sanitized_filename,
+                            &dest_dir,
+                            crate::downloads::DownloadSource {
+                                url,
+                                headers: Vec::new(),
+                                kind: crate::downloads::DownloadSourceKind::DirectHttp,
+                            },
+                            crate::downloads::EnqueueOptions {
+                                meta_id: meta_id.clone(),
+                                meta_type: Some(if is_series { "series".into() } else { "movie".into() }),
+                                series_name: Some(detail_title.clone()),
+                                season: season_num,
+                                episode: ep_num,
+                                video_id: video_id.clone(),
+                                poster_url: poster_url.clone(),
+                                kind: Some("video".into()),
+                                parent_job_id: None,
+                                lang: None,
+                            },
+                        ).await;
+
+                        match job_res {
+                            Ok(job) => {
+                                let vid_id = video_id.unwrap_or_default();
+                                let media_type = if is_series { "series" } else { "movie" };
+                                let dm = download_manager.clone();
+                                let cl = client.clone();
+                                let prof = profile_id.clone();
+                                let addons = installed_addons.clone();
+                                let u_lang = user_sub_lang.clone();
+                                let o_lang = orig_lang.clone();
+                                let subs = final_stream.subtitles.clone();
+                                let weak_sub = ui_weak_inner.clone();
+                                tokio::spawn(async move {
+                                    crate::downloads::fetch_and_enqueue_subtitles(
+                                        dm,
+                                        &cl,
+                                        &prof,
+                                        &job,
+                                        media_type,
+                                        &vid_id,
+                                        &subs,
+                                        &addons,
+                                        u_lang.as_deref(),
+                                        o_lang.as_deref(),
+                                    ).await;
+                                    crate::downloads::project_active_profile(weak_sub).await;
+                                });
+                            }
+                            Err(err) => {
+                                let weak = ui_weak_inner.clone();
+                                let msg = match err {
+                                    crate::downloads::DownloadError::StorageLimitExceeded => {
+                                        "Límite de almacenamiento de descargas alcanzado. Ajusta el límite o elimina contenido.".to_string()
+                                    }
+                                    _ => format!("Error al iniciar descarga: {err}"),
+                                };
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(ui) = weak.upgrade() {
+                                        ui.set_downloads_error(msg.into());
+                                    }
+                                });
+                            }
+                        }
+                        crate::downloads::project_active_profile(ui_weak_inner).await;
+                    } else {
+                        let weak = ui_weak_inner.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                ui.set_downloads_error("No se pudo obtener el enlace de descarga para este stream.".into());
+                            }
+                        });
+                    }
+                }
+            });
+        }
+    });
+
+    // Compatibility callback
+    ui.on_download_stream({
+        let ui_weak = ui_weak.clone();
+        move |selection_id| {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.invoke_start_download(selection_id, "episode".into(), ui.get_detail_active_season());
+            }
         }
     });
 

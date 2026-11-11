@@ -1,6 +1,6 @@
 [package]
 name = "stremio-native"
-version = "0.99.93"
+version = "0.99.94"
 authors = ["perpetus <perpetus.github@gmail.com>"]
 edition = "2024"
 license = "GPL-3.0-only"
@@ -28,6 +28,7 @@ fluent-bundle.workspace = true
 anyhow.workspace = true
 argon2.workspace = true
 async-trait.workspace = true
+libc = "0.2"
 base64.workspace = true
 blake3.workspace = true
 tracing.workspace = true
