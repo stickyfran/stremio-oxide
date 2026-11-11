@@ -168,6 +168,74 @@ export component DetailsPage inherits Rectangle {
     background: Theme.modal-background;
     clip: true;
 
+    private property <float> page-fade-opacity: 0.0;
+    private property <bool> page-fade-in-pending: true;
+    private property <float> content-fade-opacity: 1.0;
+    private property <bool> content-fade-in-pending: false;
+    private property <int> streams-ready-state: root.streams.length > 0 ? 1 : 0;
+
+    function trigger-page-fade() {
+        root.page-fade-opacity = 0.0;
+        root.page-fade-in-pending = true;
+    }
+
+    function trigger-content-fade() {
+        root.content-fade-opacity = 0.0;
+        root.content-fade-in-pending = true;
+    }
+
+    init => {
+        root.trigger-page-fade();
+    }
+
+    changed item-title => {
+        if (root.item-title != "") {
+            root.trigger-content-fade();
+        }
+    }
+
+    changed loading => {
+        root.trigger-content-fade();
+    }
+
+    changed in-stream-view => {
+        root.trigger-content-fade();
+    }
+
+    changed active-season => {
+        root.trigger-content-fade();
+    }
+
+    changed streams-ready-state => {
+        if (root.streams-ready-state == 1) {
+            root.trigger-content-fade();
+        }
+    }
+
+    Timer {
+        interval: 25ms;
+        running: root.page-fade-in-pending;
+        triggered => {
+            root.page-fade-in-pending = false;
+            root.page-fade-opacity = 1.0;
+        }
+    }
+
+    Timer {
+        interval: 65ms;
+        running: root.content-fade-in-pending;
+        triggered => {
+            root.content-fade-in-pending = false;
+            root.content-fade-opacity = 1.0;
+        }
+    }
+
+    opacity: root.page-fade-opacity;
+    animate opacity {
+        duration: 240ms;
+        easing: ease-out;
+    }
+
     private property <image> backdrop-source: root.background-image.width > 0
         ? root.background-image
         : root.poster;
@@ -178,7 +246,8 @@ export component DetailsPage inherits Rectangle {
         source: root.backdrop-source;
         image-fit: cover;
         horizontal-alignment: center;
-        opacity: 0.38;
+        opacity: 0.38 * root.content-fade-opacity;
+        animate opacity { duration: 240ms; easing: ease-out; }
     }
 
     Rectangle {
@@ -250,6 +319,11 @@ export component DetailsPage inherits Rectangle {
         height: parent.height;
         background: transparent;
         clip: true;
+        opacity: root.content-fade-opacity;
+        animate opacity {
+            duration: root.content-fade-in-pending ? 65ms : 240ms;
+            easing: ease-out;
+        }
 
         MetaPreview {
             x: 4 * root.unit;
@@ -315,6 +389,11 @@ export component DetailsPage inherits Rectangle {
         border-radius: 1.25 * root.unit;
         background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
         accessible-name: root.enrichment-summary;
+        opacity: root.content-fade-opacity;
+        animate opacity {
+            duration: root.content-fade-in-pending ? 65ms : 240ms;
+            easing: ease-out;
+        }
         clicked => {
             if (root.enrichment-attribution-url != "") {
                 root.open-attribution(root.enrichment-attribution-url);
@@ -345,6 +424,11 @@ export component DetailsPage inherits Rectangle {
         border-bottom-left-radius: Theme.border-radius;
         background: Theme.drawer-background;
         clip: true;
+        opacity: root.content-fade-opacity;
+        animate opacity {
+            duration: root.content-fade-in-pending ? 65ms : 240ms;
+            easing: ease-out;
+        }
 
         // Base inset is the web's 1rem, shared by `.videos-container`,
         // `.streams-container` and `.select-choices-wrapper`. Sections the web

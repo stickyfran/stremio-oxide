@@ -95,12 +95,55 @@ export component MediaPreviewDrawer inherits Rectangle {
     background: Theme.modal-background;
     border-radius: Theme.border-radius;
 
+    private property <float> content-fade-opacity: 1.0;
+    private property <bool> content-fade-in-pending: false;
+    private property <int> poster-ready: root.poster.width > 0 ? 1 : 0;
+    private property <int> logo-ready: root.logo.width > 0 ? 1 : 0;
+
+    function trigger-content-fade() {
+        root.content-fade-opacity = 0.0;
+        root.content-fade-in-pending = true;
+    }
+
+    changed is-open => {
+        if (root.is-open) {
+            root.trigger-content-fade();
+        } else {
+            root.content-fade-opacity = 0.0;
+            root.content-fade-in-pending = false;
+        }
+    }
+
+    changed title => {
+        if (root.is-open && root.title != "") {
+            root.trigger-content-fade();
+        }
+    }
+
+    changed description => {
+        if (root.is-open && root.description != "") {
+            root.trigger-content-fade();
+        }
+    }
+
+    Timer {
+        interval: 65ms;
+        running: root.content-fade-in-pending;
+        triggered => {
+            root.content-fade-in-pending = false;
+            root.content-fade-opacity = 1.0;
+        }
+    }
+
     drawer-content := VerticalLayout {
         width: root.drawer-width;
         height: parent.height;
         spacing: 0px;
-        opacity: root.is-open ? 1.0 : 0.0;
-        animate opacity { duration: 120ms; easing: ease-out; }
+        opacity: root.is-open ? root.content-fade-opacity : 0.0;
+        animate opacity {
+            duration: root.content-fade-in-pending ? 65ms : 230ms;
+            easing: ease-out;
+        }
 
         // =====================================================================
         // 1. ZONA SUPERIOR: REPRODUCTOR DE TRAILER (16:9 FIJO - ESTILO TUBE OXIDE)

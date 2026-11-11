@@ -390,6 +390,27 @@ export component SettingsPage inherits Rectangle {
     in-out property <int> active-category: 0;
     background: transparent;
 
+    private property <float> content-fade-opacity: 1.0;
+    private property <bool> content-fade-in-pending: false;
+
+    function trigger-content-fade() {
+        root.content-fade-opacity = 0.0;
+        root.content-fade-in-pending = true;
+    }
+
+    init => {
+        root.trigger-content-fade();
+    }
+
+    Timer {
+        interval: 60ms;
+        running: root.content-fade-in-pending;
+        triggered => {
+            root.content-fade-in-pending = false;
+            root.content-fade-opacity = 1.0;
+        }
+    }
+
     private property <length> profiles-pos: profiles-sec.y;
     private property <length> integrations-pos: integrations-sec.y;
     private property <length> interface-pos: interface-sec.y;
@@ -424,15 +445,15 @@ export component SettingsPage inherits Rectangle {
             padding-right: 1.5 * root.unit;
             spacing: 0.5 * root.unit;
 
-            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_GENERAL" => "General"); selected: root.active-category == 0; clicked => { scroll.viewport-y = 0px; root.active-category = 0; } }
-            MenuButton { unit: root.unit; label: @tr("PROFILES_TITLE" => "Account & Profiles"); selected: root.active-category == 1; clicked => { scroll.viewport-y = -profiles-sec.y; root.active-category = 1; } }
-            MenuButton { unit: root.unit; label: @tr("INTEGRATIONS_TITLE" => "Integrations & Addons"); selected: root.active-category == 2; clicked => { scroll.viewport-y = -integrations-sec.y; root.active-category = 2; } }
-            MenuButton { unit: root.unit; label: @tr("INTERFACE" => "Interface"); selected: root.active-category == 3; clicked => { scroll.viewport-y = -interface-sec.y; root.active-category = 3; } }
-            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_PLAYER" => "Player"); selected: root.active-category == 4; clicked => { scroll.viewport-y = -player-sec.y; root.active-category = 4; } }
-            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_STREAMING" => "Streaming"); selected: root.active-category == 5; clicked => { scroll.viewport-y = -streaming-sec.y; root.active-category = 5; } }
-            MenuButton { unit: root.unit; label: @tr("DOWNLOADS_TITLE" => "Descargas"); selected: root.active-category == 6; clicked => { scroll.viewport-y = -downloads-sec.y; root.active-category = 6; } }
-            MenuButton { unit: root.unit; label: @tr("OPERATIONS_TITLE" => "Backup & Diagnostics"); selected: root.active-category == 7; clicked => { scroll.viewport-y = -operations-sec.y; root.active-category = 7; } }
-            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_SHORTCUTS" => "Shortcuts"); selected: root.active-category == 8; clicked => { scroll.viewport-y = -shortcuts-sec.y; root.active-category = 8; } }
+            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_GENERAL" => "General"); selected: root.active-category == 0; clicked => { root.trigger-content-fade(); scroll.viewport-y = 0px; root.active-category = 0; } }
+            MenuButton { unit: root.unit; label: @tr("PROFILES_TITLE" => "Account & Profiles"); selected: root.active-category == 1; clicked => { root.trigger-content-fade(); scroll.viewport-y = -profiles-sec.y; root.active-category = 1; } }
+            MenuButton { unit: root.unit; label: @tr("INTEGRATIONS_TITLE" => "Integrations & Addons"); selected: root.active-category == 2; clicked => { root.trigger-content-fade(); scroll.viewport-y = -integrations-sec.y; root.active-category = 2; } }
+            MenuButton { unit: root.unit; label: @tr("INTERFACE" => "Interface"); selected: root.active-category == 3; clicked => { root.trigger-content-fade(); scroll.viewport-y = -interface-sec.y; root.active-category = 3; } }
+            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_PLAYER" => "Player"); selected: root.active-category == 4; clicked => { root.trigger-content-fade(); scroll.viewport-y = -player-sec.y; root.active-category = 4; } }
+            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_STREAMING" => "Streaming"); selected: root.active-category == 5; clicked => { root.trigger-content-fade(); scroll.viewport-y = -streaming-sec.y; root.active-category = 5; } }
+            MenuButton { unit: root.unit; label: @tr("DOWNLOADS_TITLE" => "Descargas"); selected: root.active-category == 6; clicked => { root.trigger-content-fade(); scroll.viewport-y = -downloads-sec.y; root.active-category = 6; } }
+            MenuButton { unit: root.unit; label: @tr("OPERATIONS_TITLE" => "Backup & Diagnostics"); selected: root.active-category == 7; clicked => { root.trigger-content-fade(); scroll.viewport-y = -operations-sec.y; root.active-category = 7; } }
+            MenuButton { unit: root.unit; label: @tr("SETTINGS_NAV_SHORTCUTS" => "Shortcuts"); selected: root.active-category == 8; clicked => { root.trigger-content-fade(); scroll.viewport-y = -shortcuts-sec.y; root.active-category = 8; } }
             Rectangle { vertical-stretch: 1; }
             VerticalLayout {
                 spacing: 0.5 * root.unit;
@@ -473,6 +494,11 @@ export component SettingsPage inherits Rectangle {
 
         scroll := ScrollView {
             horizontal-stretch: 1;
+            opacity: root.content-fade-opacity;
+            animate opacity {
+                duration: root.content-fade-in-pending ? 60ms : 220ms;
+                easing: ease-out;
+            }
             scrolled => {
                 root.update-active-category(-self.viewport-y);
             }

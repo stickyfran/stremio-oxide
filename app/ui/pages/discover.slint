@@ -135,6 +135,48 @@ export component DiscoverPage inherits Rectangle {
         : root.grid-width;
     property <length> card-height: (root.card-width - 2 * root.unit) * 1.464 + 6 * root.unit;
 
+    private property <float> grid-fade-opacity: 1.0;
+    private property <bool> grid-fade-in-pending: false;
+    private property <int> has-rows-state: root.rows.length > 0 ? 1 : 0;
+
+    function trigger-grid-fade() {
+        root.grid-fade-opacity = 0.0;
+        root.grid-fade-in-pending = true;
+    }
+
+    init => {
+        root.trigger-grid-fade();
+    }
+
+    changed loading => {
+        root.trigger-grid-fade();
+    }
+
+    changed active-type => {
+        root.trigger-grid-fade();
+    }
+
+    changed active-catalog => {
+        root.trigger-grid-fade();
+    }
+
+    changed active-genre => {
+        root.trigger-grid-fade();
+    }
+
+    changed has-rows-state => {
+        root.trigger-grid-fade();
+    }
+
+    Timer {
+        interval: 60ms;
+        running: root.grid-fade-in-pending;
+        triggered => {
+            root.grid-fade-in-pending = false;
+            root.grid-fade-opacity = 1.0;
+        }
+    }
+
     background: transparent;
 
     HorizontalLayout {
@@ -275,6 +317,11 @@ export component DiscoverPage inherits Rectangle {
                 unit: root.unit;
                 card-width: root.card-width;
                 card-height: root.card-height;
+                opacity: root.grid-fade-opacity;
+                animate opacity {
+                    duration: root.grid-fade-in-pending ? 60ms : 230ms;
+                    easing: ease-out;
+                }
             }
 
             if (!root.loading && root.rows.length == 0) : EmptyState {
@@ -283,62 +330,79 @@ export component DiscoverPage inherits Rectangle {
                 icon-source: @image-url("../assets/images/icons/discover.svg");
                 title: @tr("No items found");
                 message: @tr("Try changing the catalog filters.");
+                opacity: root.grid-fade-opacity;
+                animate opacity {
+                    duration: root.grid-fade-in-pending ? 60ms : 230ms;
+                    easing: ease-out;
+                }
             }
 
-            if (!root.loading && root.rows.length > 0) : catalog-scroll := ListView {
+            if (!root.loading && root.rows.length > 0) : Rectangle {
                 vertical-stretch: 1;
-                viewport-width: catalog.width;
-                viewport-y <=> root.scroll-y;
-                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                changed viewport-y => {
-                    root.check-pagination(self.viewport-height + self.viewport-y - self.height);
-                }
-                changed viewport-height => {
-                    root.check-pagination(self.viewport-height + self.viewport-y - self.height);
+                background: transparent;
+                clip: true;
+                opacity: root.grid-fade-opacity;
+                animate opacity {
+                    duration: root.grid-fade-in-pending ? 60ms : 230ms;
+                    easing: ease-out;
                 }
 
-                for row[row-index] in root.rows : Rectangle {
-                    width: catalog.width;
-                    height: root.card-height + 0.5 * root.unit;
-                    clip: true;
-
-                    init => {
-                        if (row-index == root.rows.length - 1) {
-                            root.request-next-page();
-                        }
+                catalog-scroll := ListView {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: catalog.width;
+                    viewport-y <=> root.scroll-y;
+                    horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                    changed viewport-y => {
+                        root.check-pagination(self.viewport-height + self.viewport-y - self.height);
+                    }
+                    changed viewport-height => {
+                        root.check-pagination(self.viewport-height + self.viewport-y - self.height);
                     }
 
-                    MediaCardGridRow {
-                        x: 1.5 * root.unit;
-                        width: root.grid-width;
-                        height: root.card-height;
-                        unit: root.unit;
-                        items: row.cols;
-                        selected-id: root.selected-id;
-                        card-width: root.card-width;
-                        card-height: root.card-height;
-                        spacing: 0.5 * root.unit;
-                        enable-hover-preview: root.enable-hover-preview;
-                        hover-preview-delay: root.hover-preview-delay;
-                        item-selected(id, media-type, video-id) => {
-                            // Clicking the card that is already showing its
-                            // preview opens the full details, matching the
-                            // expected single-click-to-open behavior without
-                            // requiring a fast double-click.
-                            if (id == root.selected-id) {
-                                root.item-activated(id, media-type, video-id);
-                            } else {
-                                root.item-selected(id, media-type, video-id);
+                    for row[row-index] in root.rows : Rectangle {
+                        width: catalog.width;
+                        height: root.card-height + 0.5 * root.unit;
+                        clip: true;
+
+                        init => {
+                            if (row-index == root.rows.length - 1) {
+                                root.request-next-page();
                             }
                         }
-                        item-activated(id, media-type, video-id) => {
-                            root.item-activated(id, media-type, video-id);
+
+                        MediaCardGridRow {
+                            x: 1.5 * root.unit;
+                            width: root.grid-width;
+                            height: root.card-height;
+                            unit: root.unit;
+                            items: row.cols;
+                            selected-id: root.selected-id;
+                            card-width: root.card-width;
+                            card-height: root.card-height;
+                            spacing: 0.5 * root.unit;
+                            enable-hover-preview: root.enable-hover-preview;
+                            hover-preview-delay: root.hover-preview-delay;
+                            item-selected(id, media-type, video-id) => {
+                                // Clicking the card that is already showing its
+                                // preview opens the full details, matching the
+                                // expected single-click-to-open behavior without
+                                // requiring a fast double-click.
+                                if (id == root.selected-id) {
+                                    root.item-activated(id, media-type, video-id);
+                                } else {
+                                    root.item-selected(id, media-type, video-id);
+                                }
+                            }
+                            item-activated(id, media-type, video-id) => {
+                                root.item-activated(id, media-type, video-id);
+                            }
+                            poster-requested(url) => { root.poster-requested(url); }
+                            hover-preview-requested(id, media-type, x, y, width, height) => {
+                                root.hover-preview-requested(id, media-type, x, y, width, height);
+                            }
+                            hover-preview-dismissed => { root.hover-preview-dismissed(); }
                         }
-                        poster-requested(url) => { root.poster-requested(url); }
-                        hover-preview-requested(id, media-type, x, y, width, height) => {
-                            root.hover-preview-requested(id, media-type, x, y, width, height);
-                        }
-                        hover-preview-dismissed => { root.hover-preview-dismissed(); }
                     }
                 }
             }

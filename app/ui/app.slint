@@ -628,6 +628,22 @@ export component MainWindow inherits Window {
         }
     }
 
+    private property <float> tab-fade-opacity: 1.0;
+    private property <bool> tab-fade-in-pending: false;
+    function trigger-tab-fade() {
+        root.tab-fade-opacity = 0.0;
+        root.tab-fade-in-pending = true;
+    }
+
+    tab-fade-timer := Timer {
+        interval: 60ms;
+        running: root.tab-fade-in-pending;
+        triggered => {
+            root.tab-fade-in-pending = false;
+            root.tab-fade-opacity = 1.0;
+        }
+    }
+
     // Leaving the browsing surface tears the preview down immediately: the
     // cards that own the hover contract are gone, so nothing else would.
     private property <bool> hover-preview-route-visible: !root.effective-show-details
@@ -638,11 +654,14 @@ export component MainWindow inherits Window {
             if (root.effective-show-player) {
                 root.preview-drawer-close();
             }
+        } else {
+            root.trigger-tab-fade();
         }
     }
     changed effective-active-tab => {
         root.hover-preview-close();
         root.preview-drawer-close();
+        root.trigger-tab-fade();
     }
 
     // Detailed view parameters
@@ -1785,6 +1804,11 @@ export component MainWindow inherits Window {
                     vertical-stretch: 1;
                     background: transparent;
                     clip: true;
+                    opacity: root.tab-fade-opacity;
+                    animate opacity {
+                        duration: root.tab-fade-in-pending ? 60ms : 230ms;
+                        easing: ease-out;
+                    }
                     
                     if (root.effective-active-tab == 0) : BoardPage {
                         width: parent.width;

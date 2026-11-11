@@ -92,6 +92,42 @@ export component DownloadsPage inherits Rectangle {
 
     background: transparent;
 
+    private property <float> content-fade-opacity: 1.0;
+    private property <bool> content-fade-in-pending: false;
+    private property <int> has-items-state: root.items.length > 0 ? 1 : 0;
+
+    function trigger-content-fade() {
+        root.content-fade-opacity = 0.0;
+        root.content-fade-in-pending = true;
+    }
+
+    init => {
+        root.trigger-content-fade();
+    }
+
+    changed loading => {
+        root.trigger-content-fade();
+    }
+
+    changed has-items-state => {
+        root.trigger-content-fade();
+    }
+
+    Timer {
+        interval: 60ms;
+        running: root.content-fade-in-pending;
+        triggered => {
+            root.content-fade-in-pending = false;
+            root.content-fade-opacity = 1.0;
+        }
+    }
+
+    opacity: root.content-fade-opacity;
+    animate opacity {
+        duration: root.content-fade-in-pending ? 60ms : 230ms;
+        easing: ease-out;
+    }
+
     VerticalLayout {
         padding-left: 3 * root.unit;
         padding-right: 3 * root.unit;
