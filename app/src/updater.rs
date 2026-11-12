@@ -42,6 +42,7 @@ struct AvailableUpdate {
 
 #[derive(Clone, Copy)]
 enum CheckKind {
+    #[allow(dead_code)]
     Automatic,
     Manual,
 }
@@ -93,7 +94,7 @@ impl Drop for BusyGuard {
 }
 
 pub struct UpdaterHandle {
-    scheduled_check: JoinHandle<()>,
+    scheduled_check: Option<JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -130,7 +131,9 @@ impl InstallerLauncher {
 
 impl UpdaterHandle {
     pub fn shutdown(&self) {
-        self.scheduled_check.abort();
+        if let Some(handle) = &self.scheduled_check {
+            handle.abort();
+        }
     }
 }
 
@@ -226,17 +229,10 @@ pub(crate) fn setup(
         }
     });
 
-    let scheduled_updater = updater;
-    let scheduled_views = views;
-    let scheduled_check = tokio::spawn(async move {
-        // Avoid adding network work to first paint and stream-server startup.
-        tokio::time::sleep(Duration::from_secs(20)).await;
-        scheduled_updater
-            .check(scheduled_views, CheckKind::Automatic)
-            .await;
-    });
-
-    UpdaterHandle { scheduled_check }
+    // Periodic background updates are disabled to ensure peak efficiency.
+    // Update checks are performed only on explicit user request from settings/tray.
+    let _ = (updater, views);
+    UpdaterHandle { scheduled_check: None }
 }
 
 impl Updater {

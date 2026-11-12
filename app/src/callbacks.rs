@@ -886,6 +886,7 @@ pub fn setup_ui_callbacks(
         let ui_weak = ui_weak.clone();
         let navigation = navigation.clone();
         move || {
+            crate::models::details::request_reset_projection_fingerprint();
             if let Some(ui) = ui_weak.upgrade() {
                 navigation.dispatch_and_project(&ui, NavigationIntent::Back);
                 ui.set_details_loading(false);
@@ -897,9 +898,41 @@ pub fn setup_ui_callbacks(
         let ui_weak = ui_weak.clone();
         let navigation = navigation.clone();
         move || {
+            crate::models::details::request_reset_projection_fingerprint();
             if let Some(ui) = ui_weak.upgrade() {
                 navigation.dispatch_and_project(&ui, NavigationIntent::Forward);
                 ui.set_details_loading(false);
+            }
+        }
+    });
+
+    ui.on_request_reload_current_view({
+        let ui_weak = ui_weak.clone();
+        let runtime = runtime.clone();
+        let navigation = navigation.clone();
+        move || {
+            tracing::info!("user requested view refresh via F5");
+            crate::models::details::request_reset_projection_fingerprint();
+            crate::models::board::clear_sync_state();
+            if let Some(ui) = ui_weak.upgrade() {
+                let active_tab = navigation.active_tab_index();
+                crate::sync_tab_from_model(
+                    crate::navigation::Tab::try_from(active_tab).unwrap_or(crate::navigation::Tab::Board),
+                    &runtime,
+                    &ui,
+                    &ui_weak,
+                    &navigation,
+                );
+            }
+            // Discharging an Unload on Board forces stremio-core to not discard the re-fetch
+            runtime.dispatch(stremio_core::runtime::RuntimeAction {
+                field: Some(crate::AppModelField::Board),
+                action: stremio_core::runtime::msg::Action::Unload,
+            });
+            trigger_initial_load(&runtime);
+            // Also directly poke the catalog visibility loader so visible rows load right away
+            if let Some(loader) = crate::models::board::get_catalog_loader() {
+                let _ = loader.try_send(0);
             }
         }
     });

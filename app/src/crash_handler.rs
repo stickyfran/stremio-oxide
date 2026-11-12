@@ -5,21 +5,39 @@
 //! and dialog work so the in-process callback remains safe in a compromised
 //! process.
 
-use std::{
-    ffi::{OsStr, OsString},
-    fs::{File, OpenOptions},
-    io::Write as _,
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::{Arc, Mutex, MutexGuard, atomic::AtomicBool},
-    thread,
-    time::{Duration, Instant},
-};
+#[cfg(not(feature = "crash-reporter"))]
+pub(crate) struct CrashReporter;
 
-use anyhow::{Context as _, Result, anyhow, bail};
-use chrono::Utc;
-use minidumper::{Client, LoopAction, MinidumpBinary, Server, ServerHandler, SocketName};
-use uuid::Uuid;
+#[cfg(not(feature = "crash-reporter"))]
+pub(crate) fn run_helper_from_args() -> anyhow::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(not(feature = "crash-reporter"))]
+pub(crate) fn init_crash_handler(_log_dir: &std::path::Path) -> anyhow::Result<CrashReporter> {
+    Ok(CrashReporter)
+}
+
+#[cfg(feature = "crash-reporter")]
+pub(crate) use monitor::{CrashReporter, init_crash_handler, run_helper_from_args};
+
+#[cfg(feature = "crash-reporter")]
+mod monitor {
+    use std::{
+        ffi::{OsStr, OsString},
+        fs::{File, OpenOptions},
+        io::Write as _,
+        path::{Path, PathBuf},
+        process::{Child, Command, Stdio},
+        sync::{Arc, Mutex, MutexGuard, atomic::AtomicBool},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use anyhow::{Context as _, Result, anyhow, bail};
+    use chrono::Utc;
+    use minidumper::{Client, LoopAction, MinidumpBinary, Server, ServerHandler, SocketName};
+    use uuid::Uuid;
 
 const REPORTER_MODE: &str = "--stremio-crash-reporter";
 const METADATA_MESSAGE_KIND: u32 = 1;
@@ -712,4 +730,5 @@ mod tests {
             "unexpected dialog: {message}"
         );
     }
+}
 }

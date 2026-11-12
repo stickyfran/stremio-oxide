@@ -391,7 +391,11 @@ impl HttpCacheEntry {
     }
 
     fn is_expired(&self, now: i64) -> bool {
-        now.saturating_sub(self.validation_time()) > MAX_AGE_SECONDS
+        let max_age = match self.resource_kind.as_str() {
+            "catalog" | "addon_catalog" | "legacy_catalog" => 6 * 3600,
+            _ => MAX_AGE_SECONDS,
+        };
+        now.saturating_sub(self.validation_time()) > max_age
     }
 
     fn should_revalidate(&self, now: i64, kind: ResourceKind) -> bool {
@@ -460,7 +464,17 @@ where
     let mut stale_entry = None;
     match cache_lookup {
         Ok(Some(entry)) if entry.resource_kind == request.resource_kind.as_str() => {
-            if (200..300).contains(&entry.status) && !entry.is_expired(now) {
+            if (200..300).contains(&entry.status)
+                && is_empty_catalog_payload(request.resource_kind.as_str(), &entry.body)
+            {
+                tracing::warn!(
+                    cache_key = %request.cache_key,
+                    "discarding cached empty/poisoned catalog payload"
+                );
+                if let Err(error) = delete_entry(&request.cache_key).await {
+                    tracing::debug!(%error, "poisoned catalog cache entry deletion failed");
+                }
+            } else if (200..300).contains(&entry.status) && !entry.is_expired(now) {
                 match serde_json::from_slice::<OUT>(&entry.body) {
                     Ok(value) => {
                         metrics().hit_fresh.fetch_add(1, Ordering::Relaxed);
@@ -511,6 +525,7 @@ where
             && entry.resource_kind == request.resource_kind.as_str()
             && (200..300).contains(&entry.status)
             && !entry.is_expired(now)
+            && !is_empty_catalog_payload(request.resource_kind.as_str(), &entry.body)
             && let Ok(value) = serde_json::from_slice::<OUT>(&entry.body)
         {
             metrics().hit_fresh.fetch_add(1, Ordering::Relaxed);
@@ -591,7 +606,7 @@ where
         }
     };
 
-    if response_is_storable(&response)
+    if response_is_storable(&request, &response)
         && foreground_generation_is_current(&request.cache_key, generation)
     {
         metrics()
@@ -657,7 +672,7 @@ where
     };
     let value = serde_json::from_slice::<OUT>(&response.body)
         .map_err(|error| EnvError::Fetch(error.to_string()))?;
-    if response_is_storable(&response) {
+    if response_is_storable(&request, &response) {
         metrics()
             .response_bytes
             .fetch_add(response.body.len() as u64, Ordering::Relaxed);
@@ -994,7 +1009,7 @@ where
             return;
         }
 
-        if !response_is_storable(&response)
+        if !response_is_storable(&request, &response)
             || serde_json::from_slice::<OUT>(&response.body).is_err()
         {
             return;
@@ -1022,8 +1037,12 @@ async fn send_request_with_retry(
     validators: Option<&Validators>,
 ) -> Result<NetworkResponse, EnvError> {
     let max_retries = match request.resource_kind {
-        ResourceKind::Catalog | ResourceKind::LegacyCatalog => CATALOG_MAX_RETRIES,
-        _ => 0,
+        ResourceKind::Catalog
+        | ResourceKind::LegacyCatalog
+        | ResourceKind::Meta
+        | ResourceKind::LegacyMeta
+        | ResourceKind::AddonCatalog
+        | ResourceKind::Manifest => CATALOG_MAX_RETRIES,
     };
     let mut retries = 0;
 
@@ -1158,11 +1177,35 @@ async fn send_request(
     })
 }
 
-fn response_is_storable(response: &NetworkResponse) -> bool {
+fn response_is_storable(request: &CacheRequest, response: &NetworkResponse) -> bool {
     (200..300).contains(&response.status)
         && response.body.len() <= MAX_ENTRY_BYTES
         && !response.no_store
         && !response.vary_star
+        && !is_empty_catalog_payload(request.resource_kind.as_str(), &response.body)
+}
+
+/// Some addons answer `{}` or `{"metas":[]}` on transient failures. Storing
+/// that would hide the catalog until the entry expires, so the response is
+/// treated as a miss and never written to the cache.
+fn is_empty_catalog_payload(resource_kind: &str, body: &[u8]) -> bool {
+    if !matches!(
+        resource_kind,
+        "catalog" | "addon_catalog" | "legacy_catalog"
+    ) {
+        return false;
+    }
+    if body.is_empty() {
+        return true;
+    }
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    if text.trim() == "{}" {
+        return true;
+    }
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("\"metas\":[]")
 }
 
 fn header_string(
@@ -1425,6 +1468,7 @@ pub(crate) async fn maintain() -> Result<(), String> {
 
 async fn maintain_inner() -> Result<(), String> {
     let mut conn = get_db_conn().await.map_err(|error| error.to_string())?;
+
     let cutoff = chrono::Utc::now().timestamp() - MAX_AGE_SECONDS;
     conn.execute(
         "DELETE FROM http_cache

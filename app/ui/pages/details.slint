@@ -73,6 +73,7 @@ export component DetailsPage inherits Rectangle {
     in-out property <bool> show-filtered: false;
     in property <bool> loading: false;
     in property <string> load-error: "";
+    property <bool> show-placeholder: root.loading && root.item-title == "";
     in property <bool> is-in-library: false;
     in property <bool> is-watched: false;
     in property <bool> has-trailer: false;
@@ -276,7 +277,7 @@ export component DetailsPage inherits Rectangle {
         clicked => { root.close(); }
     }
 
-    if (root.loading) : Rectangle {
+    if (root.show-placeholder) : Rectangle {
         MetaPreviewPlaceholder {
             x: 4 * root.unit;
             y: 8 * root.unit;
@@ -314,7 +315,7 @@ export component DetailsPage inherits Rectangle {
         }
     }
 
-    if (!root.loading) : Rectangle {
+    if (!root.show-placeholder) : Rectangle {
         x: 0px;
         width: parent.width - root.drawer-width;
         height: parent.height;
@@ -382,7 +383,7 @@ export component DetailsPage inherits Rectangle {
         }
     }
 
-    if (!root.loading && root.enrichment-summary != "") : ButtonSurface {
+    if (!root.show-placeholder && root.enrichment-summary != "") : ButtonSurface {
         x: 4 * root.unit;
         y: parent.height - 3.5 * root.unit;
         width: parent.width - root.drawer-width - 8 * root.unit;
@@ -416,7 +417,7 @@ export component DetailsPage inherits Rectangle {
     // the web panel is a fixed-width column pinned to the full height of the
     // content row, never sized to its own content. It sits flush against the
     // right edge, so only the left corners are rounded.
-    if (!root.loading) : Rectangle {
+    if (!root.show-placeholder) : Rectangle {
         x: parent.width - root.drawer-width;
         y: 6 * root.unit;
         width: root.drawer-width;
@@ -865,7 +866,7 @@ export component DetailsPage inherits Rectangle {
     // so it has to span the page to clamp correctly. It also must not be a child
     // of the drawer's VerticalLayout: an overlay still claims a layout slot
     // there, which is what left a blank band under the list.
-    if (!root.loading) : ContextMenuSurface {
+    if (!root.show-placeholder) : ContextMenuSurface {
         x: 0px;
         y: 0px;
         width: parent.width;
@@ -926,7 +927,7 @@ export component DetailsPage inherits Rectangle {
         }
     }
 
-    if (!root.loading) : HorizontalLayout {
+    if (!root.show-placeholder) : HorizontalLayout {
         x: parent.width - 11 * root.unit;
         y: root.unit;
         height: 3.5 * root.unit;

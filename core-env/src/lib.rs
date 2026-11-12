@@ -24,6 +24,19 @@ use stremio_core::{
 pub mod dns;
 mod http_cache;
 
+static DNS_CACHE: LazyLock<dns::DnsCache> = LazyLock::new(dns::DnsCache::default);
+static DOH_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_doh_client() -> &'static reqwest::Client {
+    DOH_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .danger_accept_invalid_certs(true) // Direct IP DoH connects to 1.1.1.1 or 8.8.8.8
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 pub use dns::{DnsProvider, active_dns_provider, configure_dns, shared_dns_resolver};
 pub use http_cache::{ConnectivitySnapshot, connectivity_snapshot, probe_connectivity};
 
@@ -306,24 +319,72 @@ impl DesktopEnv {
         let log_url = sanitized_url_for_log(&url_str);
         tracing::debug!(method = ?parts.method, url = %log_url, "Sending Core API request");
 
-        let mut req_builder = client.request(method, &url_str);
+        let mut retries = 0;
+        let (resp, elapsed) = loop {
+            let mut req_builder = client.request(method.clone(), &url_str);
 
-        for (key, val) in parts.headers.iter() {
-            req_builder = req_builder.header(key.as_str(), val.as_bytes());
-        }
+            for (key, val) in parts.headers.iter() {
+                req_builder = req_builder.header(key.as_str(), val.as_bytes());
+            }
 
-        if parts.method != http::Method::GET {
-            req_builder = req_builder.json(&body);
-        }
+            if parts.method != http::Method::GET {
+                req_builder = req_builder.json(&body);
+            }
 
-        let start = std::time::Instant::now();
-        let resp = req_builder.send().await.map_err(|error| {
-            let error = error.without_url();
-            tracing::error!(url = %log_url, error = %error, "Core API request failed");
-            EnvError::Fetch(error.to_string())
-        })?;
+            let start = std::time::Instant::now();
+            match req_builder.send().await {
+                Ok(resp) if resp.status().is_server_error() && retries < 2 && parts.method == http::Method::GET => {
+                    retries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
+                }
+                Ok(resp) => break (resp, start.elapsed().as_millis()),
+                Err(_) if retries < 2 && parts.method == http::Method::GET => {
+                    retries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
+                }
+                Err(error) => {
+                    let is_connect_error = error.is_connect();
+                    // Detect if this host might be suffering from local DNS poisoning or connection refusal
+                    if is_connect_error && retries < 3 {
+                        if let Ok(parsed_url) = url::Url::parse(&url_str) {
+                            if let Some(host) = parsed_url.host_str() {
+                                if !host.ends_with(".local") && !host.ends_with(".lan") && host != "localhost" && host != "127.0.0.1" {
+                                    tracing::info!(host = %host, "attempting anti-tamper DoH resolution bypass for unreachable host");
+                                    let doh_client = get_doh_client();
+                                    if let Ok(resolved_ips) = dns::resolve_via_doh(doh_client, host, &dns::DnsProvider::Cloudflare).await {
+                                        if let Some(real_ip) = resolved_ips.first() {
+                                            tracing::info!(host = %host, real_ip = %real_ip, "successfully bypassed DNS block via Cloudflare DoH");
+                                            DNS_CACHE.insert(host.to_string(), resolved_ips.clone(), std::time::Duration::from_secs(300));
+                                            
+                                            // Reconstruct URL pointing directly to the resolved IP while preserving Host header
+                                            let mut bypassed_url = parsed_url.clone();
+                                            if bypassed_url.set_host(Some(&real_ip.to_string())).is_ok() {
+                                                let bypassed_url_str = bypassed_url.to_string();
+                                                let mut bypass_builder = client.request(method.clone(), &bypassed_url_str);
+                                                for (key, val) in parts.headers.iter() {
+                                                    bypass_builder = bypass_builder.header(key.as_str(), val.as_bytes());
+                                                }
+                                                bypass_builder = bypass_builder.header("Host", host);
+                                                if parts.method != http::Method::GET {
+                                                    bypass_builder = bypass_builder.json(&body);
+                                                }
+                                                if let Ok(bypass_resp) = bypass_builder.send().await {
+                                                    break (bypass_resp, start.elapsed().as_millis());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
-        let elapsed = start.elapsed().as_millis();
+                    let error = error.without_url();
+                    tracing::error!(url = %log_url, error = %error, "Core API request failed");
+                    return Err(EnvError::Fetch(error.to_string()));
+                }
+            }
+        };
         if elapsed > 300 {
             tracing::warn!(
                 url = %log_url,

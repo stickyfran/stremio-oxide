@@ -447,6 +447,7 @@ pub async fn get_setting(key: &str) -> anyhow::Result<Option<String>> {
     } else {
         Ok(None)
     };
+    while let Ok(Some(_)) = rows.next().await {}
     tracing::info!(
         key = %key,
         elapsed_ms = start.elapsed().as_millis(),

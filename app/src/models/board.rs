@@ -1035,13 +1035,15 @@ pub fn sync(
         AUTO_RETRY_ATTEMPTS.store(0, Ordering::Release);
     }
 
-    // Proactively keep initial catalog loading rolling if any top catalogs are still unloaded.
+    // Proactively keep initial catalog loading rolling if any top catalogs are still unloaded or in error.
     if let Some(loader) = BOARD_CATALOG_LOADER.get() {
-        let has_unloaded_initial = board
-            .catalogs
-            .iter()
-            .take(3)
-            .any(|cat| cat.first().is_none_or(|p| p.content.is_none()));
+        let has_unloaded_initial = board.catalogs.iter().take(3).any(|cat| {
+            cat.first().is_none_or(|p| match &p.content {
+                None | Some(stremio_core::models::common::Loadable::Err(_)) => true,
+                Some(stremio_core::models::common::Loadable::Ready(items)) => items.is_empty(),
+                _ => false,
+            })
+        });
         if has_unloaded_initial {
             let _ = loader.try_send(0);
         }

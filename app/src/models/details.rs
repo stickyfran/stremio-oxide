@@ -19,7 +19,7 @@ use stremio_core::{
     },
     types::{
         addon::ResourcePath,
-        resource::{MetaItem, Video},
+        resource::{MetaItem, MetaItemPreview, Video},
     },
 };
 
@@ -30,6 +30,8 @@ static EPISODE_SEARCH_QUERY: OnceLock<Mutex<String>> = OnceLock::new();
 static LAST_LOADED_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static PENDING_SEASON_SELECTION_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static PENDING_TARGET_EPISODE: OnceLock<Mutex<Option<(String, i32, i32)>>> = OnceLock::new();
+static RESET_PROJECTION_FINGERPRINT_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 thread_local! {
     static LAST_SYNCED_EPISODES: std::cell::Cell<Option<SyncFingerprint>> = const { std::cell::Cell::new(None) };
 }
@@ -39,6 +41,14 @@ pub fn set_pending_target_episode(meta_id: String, season: i32, episode: i32) {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((meta_id, season, episode));
+}
+
+pub(crate) fn take_reset_projection_fingerprint() -> bool {
+    RESET_PROJECTION_FINGERPRINT_REQUESTED.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+
+pub(crate) fn request_reset_projection_fingerprint() {
+    RESET_PROJECTION_FINGERPRINT_REQUESTED.store(true, std::sync::atomic::Ordering::Release);
 }
 
 fn get_active_season() -> &'static Mutex<i32> {
@@ -67,6 +77,33 @@ fn selected_details_are_ready(model: &AppModel, id: &str) -> bool {
         })
 }
 
+/// Optimistically populate the details view with basic metadata already visible in the UI
+/// (such as title, poster, year) so the screen appears instantly in 0ms while Core fetches streams.
+pub fn prefill_details_from_preview(ui: &MainWindow, preview: &MetaItemPreview) {
+    ui.set_detail_title(preview.name.as_str().into());
+    if let Some(desc) = preview.description.as_deref() {
+        ui.set_detail_description(desc.into());
+    }
+    if let Some(year) = preview.release_info.as_deref() {
+        ui.set_detail_year(year.into());
+    }
+    if let Some(poster) = &preview.poster {
+        ui.set_detail_poster_url(poster.as_str().into());
+        ui.set_detail_poster(crate::image_cache::get_poster_image(
+            &Some(poster.clone()),
+            &ui.as_weak(),
+        ));
+    }
+    let background = preview.background.as_ref().or(preview.poster.as_ref());
+    if let Some(bg) = background {
+        ui.set_detail_background_url(bg.as_str().into());
+        ui.set_detail_background(crate::image_cache::get_poster_image_ref(
+            Some(bg),
+            &ui.as_weak(),
+        ));
+    }
+}
+
 /// Opens the full details route and immediately reprojects a matching cached
 /// selection. Core may intentionally emit no state change for a cached reload,
 /// so every navigation entry point must use this instead of waiting for an
@@ -77,6 +114,7 @@ pub fn open_details_route(
     navigation: &NavigationController,
     id: &str,
 ) {
+    request_reset_projection_fingerprint();
     *PENDING_SEASON_SELECTION_ID
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -88,8 +126,65 @@ pub fn open_details_route(
         },
     );
 
+    let mut has_preview = false;
+    // Optimistically prefill from board / discover / library catalogs if available
+    if let Ok(model) = rt.model() {
+        let preview = model
+            .board
+            .catalogs
+            .iter()
+            .flatten()
+            .find_map(|page| match &page.content {
+                Some(Loadable::Ready(items)) => items.iter().find(|i| i.id == id).cloned(),
+                _ => None,
+            })
+            .or_else(|| {
+                model
+                    .discover
+                    .catalog
+                    .iter()
+                    .filter_map(|page| page.content.as_ref().and_then(Loadable::ready))
+                    .flatten()
+                    .find(|i| i.id == id)
+                    .cloned()
+            })
+            .or_else(|| {
+                model.ctx.library.items.get(id).map(|item| {
+                    use stremio_core::types::resource::PosterShape;
+                    MetaItemPreview {
+                        id: item.id.clone(),
+                        r#type: item.r#type.clone(),
+                        name: item.name.clone(),
+                        poster: item.poster.clone(),
+                        background: None,
+                        logo: None,
+                        description: None,
+                        release_info: None,
+                        runtime: None,
+                        released: None,
+                        poster_shape: PosterShape::Poster,
+                        links: Vec::new(),
+                        trailer_streams: Vec::new(),
+                        behavior_hints: Default::default(),
+                    }
+                })
+            });
+
+        if let Some(preview) = preview {
+            prefill_details_from_preview(ui, &preview);
+            has_preview = true;
+        }
+    }
+
     let ready = rt.model().ok().is_some_and(|model| {
-        if !selected_details_are_ready(&model, id) {
+        // Check either currently selected or any cached ready item matching the target ID
+        let cached_item = model.meta_details.meta_items.iter().find_map(|resource| {
+            match &resource.content {
+                Some(Loadable::Ready(item)) if item.preview.id == id => Some(item),
+                _ => None,
+            }
+        });
+        if cached_item.is_none() && !selected_details_are_ready(&model, id) {
             return false;
         }
         let is_in_library = model
@@ -108,7 +203,18 @@ pub fn open_details_route(
         );
         true
     });
-    ui.set_details_loading(!ready);
+    ui.set_details_loading(!ready && !has_preview);
+    if !ready {
+        let ui_weak = ui.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_secs(8), move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                if ui.get_details_loading() {
+                    tracing::warn!("details loading timed out; clearing loading spinner");
+                    ui.set_details_loading(false);
+                }
+            }
+        });
+    }
 }
 
 pub fn load_meta_details_for_video(
@@ -149,14 +255,22 @@ pub fn load_meta_details_for_video(
 /// that video's streams, while a metadata-only route lets Core select the
 /// appropriate video after the metadata response arrives.
 fn details_selection(meta_path: ResourcePath, video_id: Option<String>) -> DetailsSelected {
-    let stream_path = video_id
+    let effective_video_id = video_id
         .filter(|value| !value.is_empty())
-        .map(|id| ResourcePath {
-            resource: "stream".to_owned(),
-            r#type: meta_path.r#type.clone(),
-            id,
-            extra: vec![],
+        .or_else(|| {
+            if meta_path.r#type == "movie" {
+                Some(meta_path.id.clone())
+            } else {
+                None
+            }
         });
+
+    let stream_path = effective_video_id.map(|id| ResourcePath {
+        resource: "stream".to_owned(),
+        r#type: meta_path.r#type.clone(),
+        id,
+        extra: vec![],
+    });
 
     DetailsSelected {
         meta_path,
@@ -964,6 +1078,15 @@ pub fn sync(
             ui.set_details_loading(false);
             ui.set_detail_load_error(error.into());
         } else {
+            // If every meta item finished loading (or failed) without a match,
+            // release the loading lock so the details view cannot spin forever.
+            let still_loading = meta_details
+                .meta_items
+                .iter()
+                .any(|resource| matches!(&resource.content, Some(Loadable::Loading) | None));
+            if !still_loading && !meta_details.meta_items.is_empty() {
+                ui.set_details_loading(false);
+            }
             // A different title is still loading; do not keep the previous
             // title's error banner on screen.
             ui.set_detail_load_error("".into());
