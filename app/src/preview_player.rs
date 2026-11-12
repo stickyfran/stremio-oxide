@@ -7,15 +7,12 @@
 //! drawer of the next item.
 
 use std::{
-    sync::{
-        Arc, Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
 use playback_mpv::{
-    PreviewController, PreviewEvent, PreviewFrame, PreviewSource, PreviewUnavailableReason,
+    PreviewController, PreviewEvent, PreviewSource, PreviewUnavailableReason, RenderSource,
 };
 use slint::ComponentHandle;
 
@@ -39,14 +36,6 @@ type PreviewStarter =
     Box<dyn FnOnce(&PreviewPlayer) -> Option<playback_mpv::PreviewRuntime> + Send>;
 
 #[derive(Clone)]
-struct StagedPreviewFrame {
-    generation: u64,
-    pos: f64,
-    dur: f64,
-    frame: PreviewFrame,
-}
-
-#[derive(Clone)]
 pub struct PreviewPlayer {
     state: Arc<Mutex<PreviewState>>,
     controller: Arc<Mutex<Option<PreviewController>>>,
@@ -54,8 +43,7 @@ pub struct PreviewPlayer {
     starter: Arc<Mutex<Option<PreviewStarter>>>,
     ui: slint::Weak<MainWindow>,
     last_seek: Arc<Mutex<Instant>>,
-    latest_frame: Arc<Mutex<Option<StagedPreviewFrame>>>,
-    pending_frame: Arc<AtomicBool>,
+    render_source: Arc<Mutex<Option<RenderSource>>>,
 }
 
 impl PreviewPlayer {
@@ -67,8 +55,7 @@ impl PreviewPlayer {
             starter: Arc::new(Mutex::new(None)),
             ui,
             last_seek: Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1))),
-            latest_frame: Arc::new(Mutex::new(None)),
-            pending_frame: Arc::new(AtomicBool::new(false)),
+            render_source: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -94,6 +81,7 @@ impl PreviewPlayer {
         };
         if let Some(starter) = starter {
             if let Some(runtime) = starter(self) {
+                *lock_render_source(&self.render_source) = Some(runtime.render_source());
                 *self.runtime.lock().unwrap_or_else(|p| p.into_inner()) = Some(runtime);
             }
         }
@@ -114,6 +102,53 @@ impl PreviewPlayer {
     pub fn attach_controller(&self, controller: PreviewController) {
         *lock_controller(&self.controller) = Some(controller);
         lock_state(&self.state).worker_ready = true;
+    }
+
+    /// Client handle the GUI thread uses to create its MPV render context.
+    pub fn render_source(&self) -> Option<RenderSource> {
+        lock_render_source(&self.render_source).clone()
+    }
+
+    /// Whether a preview session currently wants frames presented. Paused
+    /// sessions still render when a seek produces a new frame.
+    pub fn render_active(&self) -> bool {
+        let state = lock_state(&self.state);
+        state.active_id.is_some() && state.worker_ready
+    }
+
+    /// Presentation size requested by the active surface (hover card, drawer
+    /// or fullscreen).
+    pub fn render_viewport(&self) -> (u32, u32) {
+        self.controller()
+            .map(|controller| controller.viewport())
+            .unwrap_or((1280, 720))
+    }
+
+    /// Session generation, used to discard frames from a trailer the user
+    /// already left.
+    pub fn render_generation(&self) -> u64 {
+        lock_state(&self.state).generation
+    }
+
+    /// Marks that the GUI thread composited a preview frame, refreshing the
+    /// loading state without moving pixels through a CPU buffer.
+    pub fn note_frame_published(&self) {
+        let playing = {
+            let mut state = lock_state(&self.state);
+            if state.active_id.is_none() {
+                return;
+            }
+            state.loading = false;
+            state.has_frame = true;
+            state.playing
+        };
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_hover_preview_loading(false);
+            ui.set_hover_preview_has_frame(true);
+            ui.set_preview_drawer_video_loading(false);
+            ui.set_preview_drawer_has_video_frame(true);
+            ui.set_preview_drawer_video_playing(playing);
+        }
     }
 
     pub fn worker_failed(&self, message: String) {
@@ -285,6 +320,14 @@ impl PreviewPlayer {
             }
         };
 
+        if let Some(controller) = self.controller() {
+            let (width, height) = match surface {
+                PreviewSurface::Details => (960, 540),
+                PreviewSurface::Drawer | PreviewSurface::Hover => (640, 360),
+            };
+            let _ = controller.set_viewport(width, height);
+        }
+
         if !reuse_existing {
             ui.set_preview_drawer_video_frame(slint::Image::default());
             ui.set_preview_drawer_has_video_frame(false);
@@ -298,7 +341,6 @@ impl PreviewPlayer {
             ui.set_preview_drawer_video_time_label("0:00 / 0:00".into());
 
             if let Some(controller) = self.controller() {
-                let _ = controller.set_viewport(640, 360);
                 if should_play {
                     if let Some(source) = source {
                         log_worker_command(controller.play(source));
@@ -348,7 +390,7 @@ impl PreviewPlayer {
     pub fn open_fullscreen(&self, ui: &MainWindow) {
         self.ensure_started();
         if let Some(controller) = self.controller() {
-            let _ = controller.set_viewport(1280, 720);
+            let _ = controller.set_viewport(1920, 1080);
         }
         let should_start = {
             let mut state = lock_state(&self.state);
@@ -371,7 +413,11 @@ impl PreviewPlayer {
     /// Closes the fullscreen trailer overlay back to the mini-player.
     pub fn close_fullscreen(&self, ui: &MainWindow) {
         if let Some(controller) = self.controller() {
-            let _ = controller.set_viewport(640, 360);
+            let (width, height) = match lock_state(&self.state).surface {
+                PreviewSurface::Details => (960, 540),
+                PreviewSurface::Drawer | PreviewSurface::Hover => (640, 360),
+            };
+            let _ = controller.set_viewport(width, height);
         }
         ui.set_preview_drawer_video_fullscreen(false);
     }
@@ -552,7 +598,43 @@ impl PreviewPlayer {
                     ui.set_preview_drawer_video_loading(false);
                 }
             }
-            PreviewEvent::Frame(frame) => self.handle_frame(frame),
+            PreviewEvent::Progress {
+                generation,
+                position,
+                duration,
+            } => {
+                let position = if position.is_finite() {
+                    position.max(0.0)
+                } else {
+                    0.0
+                };
+                let duration = if duration.is_finite() && duration > 0.0 {
+                    duration
+                } else {
+                    0.0
+                };
+                let Some(projection) = self.update_if_current(generation, |state| {
+                    state.position = position;
+                    if duration > 0.0 {
+                        state.duration = duration;
+                    }
+                    state.loading = false;
+                }) else {
+                    return;
+                };
+                if let Some(ui) = self.ui.upgrade() {
+                    let progress = if duration > 0.0 {
+                        (position / duration) as f32
+                    } else {
+                        0.0
+                    };
+                    ui.set_preview_drawer_video_progress(progress.clamp(0.0, 1.0));
+                    ui.set_preview_drawer_video_time_label(
+                        format_time_label(position, duration).into(),
+                    );
+                }
+                self.schedule_projection(projection);
+            }
             PreviewEvent::Unavailable { generation, reason } => {
                 let Some(projection) = self.update_if_current(generation, |state| {
                     state.loading = false;
@@ -586,81 +668,6 @@ impl PreviewPlayer {
                 tracing::info!(worker = "mpv-preview", "trailer preview worker stopped");
             }
         }
-    }
-
-    fn handle_frame(&self, frame: PreviewFrame) {
-        let (pos, dur) = {
-            let mut state = lock_state(&self.state);
-            if state.generation != frame.generation || state.active_id.is_none() {
-                return;
-            }
-            state.loading = false;
-            state.has_frame = true;
-            state.position = frame.position;
-            state.duration = frame.duration;
-            (frame.position, frame.duration)
-        };
-        let staged = StagedPreviewFrame {
-            generation: frame.generation,
-            pos,
-            dur,
-            frame,
-        };
-        *self.latest_frame.lock().unwrap() = Some(staged);
-        if self.pending_frame.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let ui = self.ui.clone();
-        let state = self.state.clone();
-        let latest_frame = self.latest_frame.clone();
-        let pending_frame = self.pending_frame.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            pending_frame.store(false, Ordering::Release);
-            let Some(staged) = latest_frame.lock().unwrap().take() else {
-                return;
-            };
-            let is_playing = {
-                let s = lock_state(&state);
-                if s.generation != staged.generation {
-                    return;
-                }
-                s.playing
-            };
-            let Some(ui) = ui.upgrade() else {
-                return;
-            };
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                staged.frame.rgba.as_ref(),
-                staged.frame.width,
-                staged.frame.height,
-            );
-            let image = slint::Image::from_rgba8(buffer);
-            ui.set_hover_preview_frame(image.clone());
-            ui.set_hover_preview_loading(false);
-            ui.set_hover_preview_has_frame(true);
-
-            // Drawer projection
-            ui.set_preview_drawer_video_frame(image);
-            ui.set_preview_drawer_has_video_frame(true);
-            ui.set_preview_drawer_video_loading(false);
-            ui.set_preview_drawer_video_playing(is_playing);
-            let progress = if staged.dur > 0.0 {
-                (staged.pos / staged.dur) as f32
-            } else {
-                0.0
-            };
-            let pos_sec = staged.pos.max(0.0) as u64;
-            let dur_sec = staged.dur.max(0.0) as u64;
-            let time_label = format!(
-                "{}:{:02} / {}:{:02}",
-                pos_sec / 60,
-                pos_sec % 60,
-                dur_sec / 60,
-                dur_sec % 60
-            );
-            ui.set_preview_drawer_video_progress(progress.clamp(0.0, 1.0));
-            ui.set_preview_drawer_video_time_label(time_label.into());
-        });
     }
 
     /// Mutates the session state only while `generation` is still the live one.
@@ -836,6 +843,27 @@ fn lock_controller(
     controller
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn lock_render_source(
+    source: &Mutex<Option<RenderSource>>,
+) -> MutexGuard<'_, Option<RenderSource>> {
+    source
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Formats the drawer timeline as `m:ss / m:ss`.
+fn format_time_label(position: f64, duration: f64) -> String {
+    let position = position.max(0.0) as u64;
+    let duration = duration.max(0.0) as u64;
+    format!(
+        "{}:{:02} / {}:{:02}",
+        position / 60,
+        position % 60,
+        duration / 60,
+        duration % 60
+    )
 }
 
 fn log_worker_command(result: Result<(), playback_mpv::MpvError>) {

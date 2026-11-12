@@ -100,6 +100,12 @@ The next releases focus on refining the native experience, visual consistency, a
   - El piso de compatibilidad se mantiene en la API 2.5 para que sistemas con libmpv 0.41 sigan funcionando; no se usan entry points exclusivos de 2.6.
   - Nuevo stack de red basado en libcurl con HTTP/2, HTTP/3 y pool de conexiones persistentes.
   - `--tls-verify` pasa a estar activado por defecto en mpv 0.42; se mantiene la verificación TLS con proveedores debrid y addons.
+- **Fase 4.6 — Zero-copy VA-API en Wayland (completado)**:
+  - Corregido `MPV_RENDER_PARAM_WL_DISPLAY` (era `15`, que corresponde a `DRM_DRAW_SURFACE_SIZE`; el valor correcto es `9`).
+  - El contexto principal pasa el `wl_display` real de la ventana, por lo que `hwdec_vaapi` puede usar `vaGetDisplayWl()` y ofrecer un decodificador `vaapi` sin copia.
+  - El panel de Estadísticas del reproductor muestra `hwdec-current`, de modo que se distingue `vaapi`, `vaapi-copy` y decodificación por software.
+  - El preview de trailers ahora renderiza en el contexto OpenGL de Slint con una textura prestada, igual que el player principal: se eliminaron `glReadPixels` y la copia a CPU por frame. El worker solo decodifica y controla la reproducción.
+  - El tamaño del preview se adapta a la superficie activa (tarjeta, panel, ficha o pantalla completa) y el formato de trailer prefiere 1080p.
 - **Fase 6 — Evaluación Continua de `gpu-next` en libmpv**:
   - En mpv 0.42 la render API de libmpv sigue exponiendo solo los backends `gpu` y `sw`; `gpu-next` todavía no se puede usar con `vo=libmpv`.
   - Monitorear las cabeceras de libmpv (`render.h`) para un futuro selector de backend (`MPV_RENDER_PARAM_BACKEND`).

@@ -2,6 +2,23 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.100.0 - 2026-11-12
+
+### Wayland VA-API zero-copy
+
+- Fixed `MPV_RENDER_PARAM_WL_DISPLAY`, which was mapped to `15` (`DRM_DRAW_SURFACE_SIZE`) instead of `9` (`WL_DISPLAY`). MPV never received a Wayland display, so VA-API non-copy interop could not initialize and `hwdec=auto` silently fell back to `vaapi-copy` or software.
+- The main render context now passes the live `struct wl_display*` obtained from Slint's window handle. This exposes the `"wl"` native resource that `hwdec_vaapi` uses with `vaGetDisplayWl()`, enabling a zero-copy decoder on Wayland.
+- `hwdec-current` is logged when it changes and is now displayed in the player Statistics panel, so `vaapi`, `vaapi-copy` and software decoding can be told apart at runtime.
+- Added the `raw-window-handle-06` Slint feature and the `raw-window-handle` dependency to read the native display handle.
+
+### Trailer previews: GPU-direct presentation
+
+- Moved preview presentation from the preview worker's private EGL context to Slint's OpenGL thread. The worker now only decodes and controls playback, while the GUI thread owns an MPV render context for the preview, exactly like the main player.
+- Removed the per-frame `glReadPixels` readback, the extra `SharedPixelBuffer` copy and the rgba channel. Preview frames stay in GPU memory and are composited through `BorrowedOpenGLTextureBuilder`.
+- The preview texture is sized from the active surface (hover card, drawer, details panel, fullscreen) and the decoded video dimensions, with a 1080p cap, instead of a fixed 720p cap.
+- Trailer format selection now prefers 1080p instead of 720p for fullscreen playback.
+- The worker publishes timeline position updates a few times per second instead of one event per video frame.
+
 ## 0.99.99 - 2026-11-12
 
 ### libmpv 0.42

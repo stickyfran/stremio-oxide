@@ -21,7 +21,7 @@ pub use actor::{
 };
 pub use ffi::{ApiVersion, HEADER_CLIENT_API_VERSION, MpvError};
 pub use preview::{
-    PreviewConfig, PreviewController, PreviewEvent, PreviewFrame, PreviewRuntime, PreviewSource,
+    PreviewConfig, PreviewController, PreviewEvent, PreviewRuntime, PreviewSource,
     PreviewUnavailableReason,
 };
 pub use render::{

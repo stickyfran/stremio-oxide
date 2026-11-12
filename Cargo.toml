@@ -44,6 +44,7 @@ self_update = { version = "0.44.0", default-features = false, features = ["reqwe
 sha2 = "0.10.9"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 slint = { version = "1.17.1", default-features = false }
+raw-window-handle = "0.6.2"
 slint-build = "1.17.1"
 stremio-core = { git = "https://github.com/perpetus/stremio-core.git", rev = "4562b37be8ea788801e12c608a6aa3e43c646123", features = ["derive", "analytics", "env-future-send"] }
 sys-locale = "0.3.2"

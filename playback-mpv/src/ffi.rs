@@ -41,9 +41,9 @@ pub const RENDER_PARAM_API_TYPE: c_int = 1;
 pub const RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 pub const RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub const RENDER_PARAM_FLIP_Y: c_int = 4;
+pub const RENDER_PARAM_WL_DISPLAY: c_int = 9;
 pub const RENDER_PARAM_ADVANCED_CONTROL: c_int = 10;
 pub const RENDER_PARAM_SKIP_RENDERING: c_int = 13;
-pub const RENDER_PARAM_WL_DISPLAY: c_int = 15;
 pub const RENDER_PARAM_SW_SIZE: c_int = 17;
 pub const RENDER_PARAM_SW_FORMAT: c_int = 18;
 pub const RENDER_PARAM_SW_STRIDE: c_int = 19;
@@ -1012,7 +1012,7 @@ mod tests {
 
     use super::{
         ApiVersion, FORMAT_STRING, HEADER_CLIENT_API_VERSION, MpvApi, MpvClient, MpvError,
-        string_list_nodes,
+        RENDER_PARAM_ADVANCED_CONTROL, RENDER_PARAM_WL_DISPLAY, string_list_nodes,
     };
 
     #[test]
@@ -1045,6 +1045,14 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn render_param_ids_should_match_the_mpv_header() {
+        // `include/mpv/render.h` of mpv 0.42: WL_DISPLAY is 9 and
+        // DRM_DRAW_SURFACE_SIZE (the old, wrong value) is 15.
+        assert_eq!(RENDER_PARAM_WL_DISPLAY, 9);
+        assert_eq!(RENDER_PARAM_ADVANCED_CONTROL, 10);
     }
 
     #[test]

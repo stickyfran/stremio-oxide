@@ -16,7 +16,7 @@ use crate::ffi::{
     MpvClient, MpvError, MpvOpenGlFbo, MpvOpenGlInitParams, MpvRenderContext, MpvRenderParam,
     RENDER_PARAM_ADVANCED_CONTROL, RENDER_PARAM_API_TYPE, RENDER_PARAM_FLIP_Y,
     RENDER_PARAM_INVALID, RENDER_PARAM_OPENGL_FBO, RENDER_PARAM_OPENGL_INIT_PARAMS,
-    RENDER_PARAM_SKIP_RENDERING, RENDER_UPDATE_FRAME,
+    RENDER_PARAM_SKIP_RENDERING, RENDER_PARAM_WL_DISPLAY, RENDER_UPDATE_FRAME,
 };
 
 /// OpenGL function resolver supplied by Slint while its context is current.
@@ -872,12 +872,37 @@ impl RenderSource {
     ///
     /// The caller must invoke this while Slint's OpenGL context is current and
     /// retain the returned context on that same thread.
+    ///
+    /// `wayland_display` must be the live `struct wl_display*` of the windowing
+    /// system when running on Wayland. MPV forwards it to the GPU backend as the
+    /// `"wl"` native resource, which is what VA-API needs to create a
+    /// non-copy (zero-copy) decoder. Without it, `hwdec=auto` silently falls
+    /// back to `vaapi-copy` or software. The pointer must outlive the context.
     pub fn create_context(
         &self,
         resolver: OpenGlProcAddress<'_>,
+        wayland_display: Option<*mut c_void>,
         request_redraw: impl FnMut() + Send + 'static,
     ) -> Result<RenderContext, MpvError> {
-        ResolverBridge::create(&self.client, resolver, request_redraw)
+        ResolverBridge::create(&self.client, resolver, wayland_display, request_redraw)
+    }
+
+    /// Current decoded video size, when a file with a video track is loaded.
+    ///
+    /// Read through libmpv's thread-safe property API, so the GUI thread can
+    /// size its render target without involving the playing worker.
+    pub fn video_dimensions(&self) -> Option<(u32, u32)> {
+        let width = self
+            .client
+            .get_i64("video-params/dw")
+            .or_else(|_| self.client.get_i64("video-params/w"))
+            .ok()?;
+        let height = self
+            .client
+            .get_i64("video-params/dh")
+            .or_else(|_| self.client.get_i64("video-params/h"))
+            .ok()?;
+        (width > 0 && height > 0).then_some((width as u32, height as u32))
     }
 }
 
@@ -894,6 +919,7 @@ impl<'a> ResolverBridge<'a> {
     fn create(
         client: &Arc<MpvClient>,
         resolver: OpenGlProcAddress<'a>,
+        wayland_display: Option<*mut c_void>,
         request_redraw: impl FnMut() + Send + 'static,
     ) -> Result<RenderContext, MpvError> {
         // SAFETY: Slint invokes this function with its OpenGL context current,
@@ -928,24 +954,32 @@ impl<'a> ResolverBridge<'a> {
         };
         let mut advanced_control: c_int = 1;
         let api_type = c"opengl";
-        let mut params = [
-            MpvRenderParam {
-                param_type: RENDER_PARAM_API_TYPE,
-                data: api_type.as_ptr().cast_mut().cast(),
-            },
-            MpvRenderParam {
-                param_type: RENDER_PARAM_OPENGL_INIT_PARAMS,
-                data: (&mut init_params as *mut MpvOpenGlInitParams).cast(),
-            },
-            MpvRenderParam {
-                param_type: RENDER_PARAM_ADVANCED_CONTROL,
-                data: (&mut advanced_control as *mut c_int).cast(),
-            },
-            MpvRenderParam {
-                param_type: RENDER_PARAM_INVALID,
-                data: std::ptr::null_mut(),
-            },
-        ];
+        let mut params = Vec::with_capacity(5);
+        params.push(MpvRenderParam {
+            param_type: RENDER_PARAM_API_TYPE,
+            data: api_type.as_ptr().cast_mut().cast(),
+        });
+        params.push(MpvRenderParam {
+            param_type: RENDER_PARAM_OPENGL_INIT_PARAMS,
+            data: (&mut init_params as *mut MpvOpenGlInitParams).cast(),
+        });
+        if let Some(display) = wayland_display {
+            // The param value is the `struct wl_display*` itself (not a pointer
+            // to it); MPV stores it as the GPU backend's `"wl"` native
+            // resource, which `hwdec_vaapi` uses for `vaGetDisplayWl()`.
+            params.push(MpvRenderParam {
+                param_type: RENDER_PARAM_WL_DISPLAY,
+                data: display,
+            });
+        }
+        params.push(MpvRenderParam {
+            param_type: RENDER_PARAM_ADVANCED_CONTROL,
+            data: (&mut advanced_control as *mut c_int).cast(),
+        });
+        params.push(MpvRenderParam {
+            param_type: RENDER_PARAM_INVALID,
+            data: std::ptr::null_mut(),
+        });
         let mut raw_context = std::ptr::null_mut();
         // SAFETY: Slint's context is current. Parameter storage and the resolver
         // bridge remain valid for the synchronous context creation call.
@@ -961,6 +995,7 @@ impl<'a> ResolverBridge<'a> {
             capability_query_ms = query_ms,
             state_prepare_ms = prepare_ms,
             render_create_ms,
+            wayland_display = wayland_display.is_some(),
             "MPV render context phase timings"
         );
 

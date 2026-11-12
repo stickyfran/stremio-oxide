@@ -1,13 +1,14 @@
-//! High-performance hardware-accelerated preview decoder adapted from Tube Oxide.
+//! High-performance hardware-accelerated hover-preview decoder.
 //!
-//! Uses libmpv's native `MpvRenderContext` with an offscreen EGL PBuffer OpenGL context
-//! (with Wayland VA-API zero-copy hardware acceleration on Linux) and automatic software
-//! fallback. Wakes reactively via UNIX pipe notifications without timer polling, achieves
-//! fluid 60 FPS presentation, and scales dynamically to the active UI viewport.
+//! Decoding, seeks and controls run on a dedicated MPV worker thread, while
+//! presentation is owned by the GUI thread: `PreviewRuntime::render_source()`
+//! hands the client to Slint's OpenGL thread, which creates the MPV render
+//! context there and composites the preview exactly like the main player. This
+//! keeps decoded frames in GPU memory (Wayland VA-API zero-copy) and removes the
+//! previous per-frame `glReadPixels` round trip through system memory.
 
 use std::{
-    ffi::{CString, c_int, c_void},
-    fmt,
+    ffi::c_void,
     path::PathBuf,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
@@ -19,138 +20,17 @@ use std::{
 
 use crate::ffi::{
     EVENT_END_FILE, EVENT_FILE_LOADED, EVENT_NONE, EVENT_PLAYBACK_RESTART, EVENT_SHUTDOWN,
-    MpvApi, MpvClient, MpvError, MpvEventEndFile, MpvOpenGlFbo, MpvOpenGlInitParams,
-    MpvRenderContext, MpvRenderParam, RENDER_PARAM_API_TYPE, RENDER_PARAM_FLIP_Y,
-    RENDER_PARAM_INVALID, RENDER_PARAM_OPENGL_FBO, RENDER_PARAM_OPENGL_INIT_PARAMS,
-    RENDER_PARAM_SKIP_RENDERING, RENDER_PARAM_SW_FORMAT, RENDER_PARAM_SW_POINTER,
-    RENDER_PARAM_SW_SIZE, RENDER_PARAM_SW_STRIDE, RENDER_PARAM_WL_DISPLAY,
-    RENDER_UPDATE_FRAME,
+    MpvApi, MpvClient, MpvError, MpvEventEndFile,
 };
 
-#[cfg(target_os = "linux")]
-mod egl {
-    use std::ffi::{c_char, c_void};
-
-    pub type EGLDisplay = *mut c_void;
-    pub type EGLConfig = *mut c_void;
-    pub type EGLContext = *mut c_void;
-    pub type EGLSurface = *mut c_void;
-    pub type EGLint = i32;
-    pub type EGLBoolean = u32;
-
-    pub const EGL_DEFAULT_DISPLAY: EGLDisplay = std::ptr::null_mut();
-    pub const EGL_NO_CONTEXT: EGLContext = std::ptr::null_mut();
-    pub const EGL_SURFACE_TYPE: EGLint = 0x3033;
-    pub const EGL_PBUFFER_BIT: EGLint = 0x0001;
-    pub const EGL_RENDERABLE_TYPE: EGLint = 0x3040;
-    pub const EGL_OPENGL_BIT: EGLint = 0x0008;
-    pub const EGL_NONE: EGLint = 0x3038;
-    pub const EGL_OPENGL_API: u32 = 0x30A2;
-    pub const EGL_WIDTH: EGLint = 0x3057;
-    pub const EGL_HEIGHT: EGLint = 0x3056;
-
-    #[link(name = "EGL")]
-    unsafe extern "C" {
-        pub fn eglGetDisplay(display_id: EGLDisplay) -> EGLDisplay;
-        pub fn eglInitialize(dpy: EGLDisplay, major: *mut EGLint, minor: *mut EGLint) -> EGLBoolean;
-        pub fn eglChooseConfig(
-            dpy: EGLDisplay,
-            attrib_list: *const EGLint,
-            configs: *mut EGLConfig,
-            config_size: EGLint,
-            num_config: *mut EGLint,
-        ) -> EGLBoolean;
-        pub fn eglBindAPI(api: u32) -> EGLBoolean;
-        pub fn eglCreateContext(
-            dpy: EGLDisplay,
-            config: EGLConfig,
-            share_context: EGLContext,
-            attrib_list: *const EGLint,
-        ) -> EGLContext;
-        pub fn eglCreatePbufferSurface(
-            dpy: EGLDisplay,
-            config: EGLConfig,
-            attrib_list: *const EGLint,
-        ) -> EGLSurface;
-        pub fn eglMakeCurrent(
-            dpy: EGLDisplay,
-            draw: EGLSurface,
-            read: EGLSurface,
-            ctx: EGLContext,
-        ) -> EGLBoolean;
-        pub fn eglGetProcAddress(procname: *const c_char) -> *mut c_void;
-        pub fn eglDestroySurface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
-        pub fn eglDestroyContext(dpy: EGLDisplay, ctx: EGLContext) -> EGLBoolean;
-        pub fn eglTerminate(dpy: EGLDisplay) -> EGLBoolean;
-    }
-
-    pub type GLuint = u32;
-    pub type GLint = i32;
-    pub type GLsizei = i32;
-    pub type GLenum = u32;
-    pub type GLvoid = c_void;
-
-    pub const GL_TEXTURE_2D: GLenum = 0x0DE1;
-    pub const GL_RGBA8: GLenum = 0x8058;
-    pub const GL_RGBA: GLenum = 0x1908;
-    pub const GL_UNSIGNED_BYTE: GLenum = 0x1401;
-    pub const GL_FRAMEBUFFER: GLenum = 0x8D40;
-    pub const GL_COLOR_ATTACHMENT0: GLenum = 0x8CE0;
-
-    #[link(name = "GL")]
-    unsafe extern "C" {
-        pub fn glGenTextures(n: GLsizei, textures: *mut GLuint);
-        pub fn glBindTexture(target: GLenum, texture: GLuint);
-        pub fn glTexImage2D(
-            target: GLenum,
-            level: GLint,
-            internalformat: GLint,
-            width: GLsizei,
-            height: GLsizei,
-            border: GLint,
-            format: GLenum,
-            type_: GLenum,
-            pixels: *const GLvoid,
-        );
-        pub fn glDeleteTextures(n: GLsizei, textures: *const GLuint);
-        pub fn glReadPixels(
-            x: GLint,
-            y: GLint,
-            width: GLsizei,
-            height: GLsizei,
-            format: GLenum,
-            type_: GLenum,
-            pixels: *mut GLvoid,
-        );
-    }
-
-    #[link(name = "wayland-client")]
-    unsafe extern "C" {
-        pub fn wl_display_connect(name: *const c_char) -> *mut c_void;
-        pub fn wl_display_disconnect(display: *mut c_void);
-    }
-
-    pub unsafe extern "C" fn get_proc_address_egl(
-        _ctx: *mut c_void,
-        name: *const c_char,
-    ) -> *mut c_void {
-        unsafe { eglGetProcAddress(name) }
-    }
-}
-
-/// Resource and scheduling limits for the hover preview decoder.
+/// Decoder limits for the hover preview worker. Presentation size is chosen by
+/// the GUI thread, which owns the MPV render context.
 #[derive(Clone, Debug)]
 pub struct PreviewConfig {
-    pub max_width: u32,
-    pub max_height: u32,
-    /// Wall-clock spacing between delivered frames.
-    pub frame_interval: Duration,
     pub load_timeout: Duration,
     pub hardware_decoding: bool,
     /// Restarts the trailer at EOF so the popup keeps moving while hovered.
     pub loop_playback: bool,
-    /// Consecutive capture failures tolerated before the source is abandoned.
-    pub max_capture_failures: u8,
     /// Explicit `yt-dlp` location for MPV's `ytdl_hook`. [`None`] leaves the
     /// hook to find the binary on `PATH` itself.
     pub ytdl_path: Option<PathBuf>,
@@ -159,13 +39,9 @@ pub struct PreviewConfig {
 impl Default for PreviewConfig {
     fn default() -> Self {
         Self {
-            max_width: 1280,
-            max_height: 720,
-            frame_interval: Duration::from_millis(16),
             load_timeout: Duration::from_secs(20),
             hardware_decoding: true,
             loop_playback: true,
-            max_capture_failures: 5,
             ytdl_path: None,
         }
     }
@@ -173,7 +49,7 @@ impl Default for PreviewConfig {
 
 /// Trailers arrive as YouTube links, so the popup needs `ytdl_hook` too.
 const PREVIEW_YTDL_FORMAT: &str =
-    "bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]/bestvideo+bestaudio/best";
+    "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best[height<=1080]/bestvideo+bestaudio/best";
 
 /// A trailer assigned to the preview worker.
 #[derive(Clone, Debug)]
@@ -183,31 +59,6 @@ pub struct PreviewSource {
     pub start_seconds: f64,
     pub muted: bool,
     pub volume: f32,
-}
-
-/// A tightly packed, top-down RGBA preview frame.
-#[derive(Clone)]
-pub struct PreviewFrame {
-    pub generation: u64,
-    pub width: u32,
-    pub height: u32,
-    pub position: f64,
-    pub duration: f64,
-    pub rgba: Arc<[u8]>,
-}
-
-impl fmt::Debug for PreviewFrame {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PreviewFrame")
-            .field("generation", &self.generation)
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("position", &self.position)
-            .field("duration", &self.duration)
-            .field("rgba_bytes", &self.rgba.len())
-            .finish()
-    }
 }
 
 /// Why a preview could not be produced for a source.
@@ -242,7 +93,14 @@ pub enum PreviewEvent {
         generation: u64,
         duration: f64,
     },
-    Frame(PreviewFrame),
+    /// Playback position for the drawer timeline. Emitted a few times per
+    /// second instead of once per video frame, because presentation is now
+    /// owned by the GUI thread and no pixels travel through this channel.
+    Progress {
+        generation: u64,
+        position: f64,
+        duration: f64,
+    },
     Unavailable {
         generation: u64,
         reason: PreviewUnavailableReason,
@@ -349,15 +207,22 @@ impl PreviewController {
         Ok(())
     }
 
-    /// Dynamically scales rendering resolution to the active UI viewport,
-    /// avoiding wasteful transfers when displayed in a compact widget.
+    /// Records the requested presentation size for the active UI surface.
+    /// Rendering happens on the GUI thread, so this is only a hint used to
+    /// size the preview texture.
     pub fn set_viewport(&self, width: u32, height: u32) -> Result<(), MpvError> {
         let mut mailbox = lock_mailbox(&self.shared);
         ensure_open(&mailbox)?;
-        mailbox.controls.push_back(Control::SetViewport(width, height));
+        mailbox.viewport = [width.max(1), height.max(1)];
         drop(mailbox);
-        self.shared.signal();
         Ok(())
+    }
+
+    /// Presentation size requested by the active UI surface.
+    pub fn viewport(&self) -> (u32, u32) {
+        let mailbox = lock_mailbox(&self.shared);
+        let [width, height] = mailbox.viewport;
+        (width.max(1), height.max(1))
     }
 
     fn shutdown(&self) {
@@ -376,6 +241,7 @@ impl PreviewController {
 /// Owns the persistent preview thread and joins it on shutdown or drop.
 pub struct PreviewRuntime {
     controller: PreviewController,
+    client: Arc<MpvClient>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -401,15 +267,17 @@ impl PreviewRuntime {
             shared: shared.clone(),
         };
         let sink: Arc<dyn Fn(PreviewEvent) + Send + Sync> = Arc::new(event_sink);
+        let worker_client = client.clone();
         let worker = thread::Builder::new()
             .name("mpv-preview".to_owned())
             .spawn(move || {
-                worker_main(client, shared, config, sink, started_at.elapsed());
+                worker_main(worker_client, shared, config, sink, started_at.elapsed());
             })
             .map_err(|error| MpvError::InvalidNode(format!("could not start worker: {error}")))?;
 
         Ok(Self {
             controller,
+            client,
             worker: Some(worker),
         })
     }
@@ -417,6 +285,13 @@ impl PreviewRuntime {
     /// Returns a clonable handle for source and mute control.
     pub fn controller(&self) -> PreviewController {
         self.controller.clone()
+    }
+
+    /// Client handle used by the GUI thread to create and own the MPV render
+    /// context. Decoding runs on the worker thread, while presentation stays on
+    /// Slint's OpenGL thread, exactly like the main player.
+    pub fn render_source(&self) -> crate::RenderSource {
+        crate::RenderSource::new(self.client.clone())
     }
 
     /// Requests shutdown and joins the worker thread.
@@ -464,12 +339,26 @@ impl SharedMailbox {
     }
 }
 
-#[derive(Default)]
 struct Mailbox {
     controls: std::collections::VecDeque<Control>,
     source_revision: u64,
     muted: bool,
     closed: bool,
+    /// Requested presentation size from the active UI surface. The GUI thread
+    /// renders the preview itself, so this only sizes its texture.
+    viewport: [u32; 2],
+}
+
+impl Default for Mailbox {
+    fn default() -> Self {
+        Self {
+            controls: std::collections::VecDeque::new(),
+            source_revision: 0,
+            muted: false,
+            closed: false,
+            viewport: [1280, 720],
+        }
+    }
 }
 
 enum Control {
@@ -480,7 +369,6 @@ enum Control {
     Seek(f64),
     SeekAbsolute(f64),
     Pause(bool),
-    SetViewport(u32, u32),
     Stop(u64),
     Shutdown,
 }
@@ -491,15 +379,6 @@ unsafe extern "C" fn wakeup_preview(context: *mut c_void) {
     }
     let shared = unsafe { &*context.cast::<SharedMailbox>() };
     shared.mpv_wakeup_revision.fetch_add(1, Ordering::Release);
-    shared.signal();
-}
-
-#[cfg(unix)]
-unsafe extern "C" fn on_mpv_render_update(context: *mut c_void) {
-    if context.is_null() {
-        return;
-    }
-    let shared = unsafe { &*context.cast::<SharedMailbox>() };
     shared.signal();
 }
 
@@ -519,28 +398,9 @@ fn ensure_open(mailbox: &Mailbox) -> Result<(), MpvError> {
 }
 
 fn validate_config(config: &PreviewConfig) -> Result<(), MpvError> {
-    if config.max_width == 0 || config.max_height == 0 {
+    if config.load_timeout.is_zero() {
         return Err(MpvError::InvalidNode(
-            "preview bounds must be non-zero".to_owned(),
-        ));
-    }
-    let _ = usize::try_from(config.max_width)
-        .ok()
-        .and_then(|width| {
-            usize::try_from(config.max_height)
-                .ok()
-                .and_then(|height| width.checked_mul(height))
-        })
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or_else(|| MpvError::InvalidNode("preview bounds overflow memory size".to_owned()))?;
-    if config.frame_interval.is_zero() {
-        return Err(MpvError::InvalidNode(
-            "preview frame interval must be non-zero".to_owned(),
-        ));
-    }
-    if config.max_capture_failures == 0 {
-        return Err(MpvError::InvalidNode(
-            "preview capture failure budget must be non-zero".to_owned(),
+            "preview load timeout must be non-zero".to_owned(),
         ));
     }
     Ok(())
@@ -549,9 +409,10 @@ fn validate_config(config: &PreviewConfig) -> Result<(), MpvError> {
 fn configure_client(client: &MpvClient, config: &PreviewConfig) -> Result<(), MpvError> {
     let hwdec_val = if cfg!(target_os = "windows") {
         "auto-copy"
-    } else if cfg!(target_os = "linux") {
-        "vaapi"
     } else {
+        // On Linux/X11 this prefers non-copy `vaapi` when the render context
+        // has a Wayland display, and falls back to `vaapi-copy` (or software)
+        // elsewhere.
         "auto-safe"
     };
 
@@ -610,10 +471,6 @@ fn configure_client(client: &MpvClient, config: &PreviewConfig) -> Result<(), Mp
 struct PlayingSource {
     generation: u64,
     duration: f64,
-    video_width: u32,
-    video_height: u32,
-    vp_w: u32,
-    vp_h: u32,
     paused: bool,
 }
 
@@ -627,164 +484,11 @@ fn worker_main(
     tracing::info!(
         worker = "mpv-preview",
         initialization_ms = initialization_time.as_millis(),
-        "hover preview worker starting (Tube Oxide hardware zero-copy engine)"
+        "hover preview worker starting (decode only; the GUI thread presents frames)"
     );
 
-    // 1. Initialize EGL & OpenGL offscreen rendering context on this worker thread (Linux)
-    #[allow(unused_mut)]
-    let mut is_opengl = false;
-
-    #[cfg(target_os = "linux")]
-    let wl_dpy = unsafe { egl::wl_display_connect(std::ptr::null()) };
-    #[cfg(target_os = "linux")]
-    let dpy = if !wl_dpy.is_null() {
-        let d = unsafe { egl::eglGetDisplay(wl_dpy) };
-        if d.is_null() {
-            unsafe { egl::eglGetDisplay(egl::EGL_DEFAULT_DISPLAY) }
-        } else {
-            d
-        }
-    } else {
-        unsafe { egl::eglGetDisplay(egl::EGL_DEFAULT_DISPLAY) }
-    };
-
-    #[cfg(target_os = "linux")]
-    let mut egl_ctx = egl::EGL_NO_CONTEXT;
-    #[cfg(target_os = "linux")]
-    let mut pbuf = std::ptr::null_mut();
-    #[cfg(target_os = "linux")]
-    let mut fbo = 0u32;
-    #[cfg(target_os = "linux")]
-    let mut tex = 0u32;
-    #[cfg(target_os = "linux")]
-    let mut gl_bind_fb: Option<unsafe extern "C" fn(egl::GLenum, egl::GLuint)> = None;
-    #[cfg(target_os = "linux")]
-    let mut gl_fb_tex: Option<unsafe extern "C" fn(egl::GLenum, egl::GLenum, egl::GLenum, egl::GLuint, egl::GLint)> = None;
-    #[cfg(target_os = "linux")]
-    let mut gl_del_fb: Option<unsafe extern "C" fn(egl::GLsizei, *const egl::GLuint)> = None;
-
-    #[cfg(target_os = "linux")]
-    if !dpy.is_null() {
-        let mut maj = 0;
-        let mut min = 0;
-        if unsafe { egl::eglInitialize(dpy, &mut maj, &mut min) } != 0 {
-            let config_attribs = [
-                egl::EGL_SURFACE_TYPE, egl::EGL_PBUFFER_BIT,
-                egl::EGL_RENDERABLE_TYPE, egl::EGL_OPENGL_BIT,
-                egl::EGL_NONE,
-            ];
-            let mut cfg: egl::EGLConfig = std::ptr::null_mut();
-            let mut num_configs = 0;
-            if unsafe { egl::eglChooseConfig(dpy, config_attribs.as_ptr(), &mut cfg, 1, &mut num_configs) } != 0 && num_configs > 0 {
-                unsafe { egl::eglBindAPI(egl::EGL_OPENGL_API) };
-                egl_ctx = unsafe { egl::eglCreateContext(dpy, cfg, egl::EGL_NO_CONTEXT, std::ptr::null()) };
-                if !egl_ctx.is_null() {
-                    let pbuf_attribs = [
-                        egl::EGL_WIDTH, 16,
-                        egl::EGL_HEIGHT, 16,
-                        egl::EGL_NONE,
-                    ];
-                    pbuf = unsafe { egl::eglCreatePbufferSurface(dpy, cfg, pbuf_attribs.as_ptr()) };
-                    if !pbuf.is_null() && unsafe { egl::eglMakeCurrent(dpy, pbuf, pbuf, egl_ctx) } != 0 {
-                        let c_gl_gen_fb = CString::new("glGenFramebuffers").unwrap();
-                        let c_gl_bind_fb = CString::new("glBindFramebuffer").unwrap();
-                        let c_gl_fb_tex = CString::new("glFramebufferTexture2D").unwrap();
-                        let c_gl_del_fb = CString::new("glDeleteFramebuffers").unwrap();
-
-                        let gl_gen_fb_ptr = unsafe { egl::eglGetProcAddress(c_gl_gen_fb.as_ptr()) };
-                        let gl_bind_fb_ptr = unsafe { egl::eglGetProcAddress(c_gl_bind_fb.as_ptr()) };
-                        let gl_fb_tex_ptr = unsafe { egl::eglGetProcAddress(c_gl_fb_tex.as_ptr()) };
-                        let gl_del_fb_ptr = unsafe { egl::eglGetProcAddress(c_gl_del_fb.as_ptr()) };
-
-                        if !gl_gen_fb_ptr.is_null() && !gl_bind_fb_ptr.is_null() && !gl_fb_tex_ptr.is_null() && !gl_del_fb_ptr.is_null() {
-                            let gl_gen_fb: unsafe extern "C" fn(egl::GLsizei, *mut egl::GLuint) = unsafe { std::mem::transmute(gl_gen_fb_ptr) };
-                            gl_bind_fb = Some(unsafe { std::mem::transmute(gl_bind_fb_ptr) });
-                            gl_fb_tex = Some(unsafe { std::mem::transmute(gl_fb_tex_ptr) });
-                            gl_del_fb = Some(unsafe { std::mem::transmute(gl_del_fb_ptr) });
-
-                            unsafe {
-                                egl::glGenTextures(1, &mut tex);
-                                egl::glBindTexture(egl::GL_TEXTURE_2D, tex);
-                                egl::glTexImage2D(
-                                    egl::GL_TEXTURE_2D, 0, egl::GL_RGBA8 as i32,
-                                    1280, 720, 0,
-                                    egl::GL_RGBA, egl::GL_UNSIGNED_BYTE, std::ptr::null(),
-                                );
-                                gl_gen_fb(1, &mut fbo);
-                                if let Some(bind_fb) = gl_bind_fb {
-                                    bind_fb(egl::GL_FRAMEBUFFER, fbo);
-                                }
-                                if let Some(fb_tex) = gl_fb_tex {
-                                    fb_tex(egl::GL_FRAMEBUFFER, egl::GL_COLOR_ATTACHMENT0, egl::GL_TEXTURE_2D, tex, 0);
-                                }
-                            }
-                            is_opengl = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Create MPV render context (hardware OpenGL with Wayland VA-API on Linux, fallback to SW)
-    let mut r_ctx: *mut MpvRenderContext = std::ptr::null_mut();
-
-    #[cfg(target_os = "linux")]
-    if is_opengl {
-        let mut gl_init = MpvOpenGlInitParams {
-            get_proc_address: Some(egl::get_proc_address_egl),
-            get_proc_address_ctx: std::ptr::null_mut(),
-        };
-        let opengl_api = b"opengl\0";
-        let mut params = Vec::with_capacity(4);
-        params.push(MpvRenderParam {
-            param_type: RENDER_PARAM_API_TYPE,
-            data: opengl_api.as_ptr().cast_mut().cast(),
-        });
-        params.push(MpvRenderParam {
-            param_type: RENDER_PARAM_OPENGL_INIT_PARAMS,
-            data: (&mut gl_init as *mut MpvOpenGlInitParams).cast(),
-        });
-        if !wl_dpy.is_null() {
-            params.push(MpvRenderParam {
-                param_type: RENDER_PARAM_WL_DISPLAY,
-                data: wl_dpy,
-            });
-        }
-        params.push(MpvRenderParam {
-            param_type: RENDER_PARAM_INVALID,
-            data: std::ptr::null_mut(),
-        });
-        let err = unsafe { (client.api.render_create)(&mut r_ctx, client.handle(), params.as_mut_ptr()) };
-        if err < 0 {
-            tracing::warn!(err, "mpv_render_context_create OpenGL failed, falling back to software");
-            is_opengl = false;
-        } else {
-            tracing::info!("preview worker hardware zero-copy OpenGL/VA-API render context initialized successfully");
-        }
-    }
-
-    if !is_opengl {
-        let sw_api = b"sw\0";
-        let mut params = [
-            MpvRenderParam {
-                param_type: RENDER_PARAM_API_TYPE,
-                data: sw_api.as_ptr().cast_mut().cast(),
-            },
-            MpvRenderParam {
-                param_type: RENDER_PARAM_INVALID,
-                data: std::ptr::null_mut(),
-            },
-        ];
-        let err = unsafe { (client.api.render_create)(&mut r_ctx, client.handle(), params.as_mut_ptr()) };
-        if err < 0 {
-            tracing::error!(err, "mpv_render_context_create SW fallback failed");
-        } else {
-            tracing::info!("preview worker software render context initialized successfully");
-        }
-    }
-
-    // 3. Setup reactive wakeup pipe and update callback
+    // Reactive wakeup pipe: MPV core events and control messages wake the
+    // worker without timer polling.
     #[cfg(unix)]
     let mut wakeup_pipe = [-1i32; 2];
     #[cfg(unix)]
@@ -803,31 +507,13 @@ fn worker_main(
     #[cfg(unix)]
     shared.wakeup_tx.store(wakeup_tx, Ordering::SeqCst);
 
-    #[cfg(unix)]
-    if !r_ctx.is_null() && wakeup_tx >= 0 {
-        unsafe {
-            (client.api.render_set_update_callback)(
-                r_ctx,
-                Some(on_mpv_render_update),
-                Arc::as_ptr(&shared).cast_mut().cast::<c_void>(),
-            );
-        }
-    }
-
-    // 4. Recyclable pixel buffer pool (Triple-buffered)
-    let (pool_tx, pool_rx) = crossbeam_channel::bounded::<Vec<u8>>(4);
-    for _ in 0..4 {
-        let _ = pool_tx.send(Vec::new());
-    }
-
     sink(PreviewEvent::WorkerReady);
     let mut source: Option<PlayingSource> = None;
-    let mut current_buf_w: u32 = 1280;
-    let mut current_buf_h: u32 = 720;
-
     let mut running = true;
+    let mut last_progress = Instant::now() - Duration::from_secs(1);
+
     while running {
-        // 1. Drain control messages
+        // 1. Drain control messages.
         while let Some(control) = take_control(&shared) {
             running = handle_control(&client, &shared, &config, &sink, &mut source, control);
             if !running {
@@ -838,7 +524,7 @@ fn worker_main(
             break;
         }
 
-        // 2. Drain MPV core events
+        // 2. Drain MPV core events.
         loop {
             let event = client.wait_event(0.0);
             if event.is_null() {
@@ -852,22 +538,11 @@ fn worker_main(
                 EVENT_PLAYBACK_RESTART => {
                     if let Some(playing) = source.as_mut() {
                         playing.paused = false;
-                        let duration = client.get_double("duration").ok().unwrap_or(playing.duration);
+                        let duration = client
+                            .get_double("duration")
+                            .ok()
+                            .unwrap_or(playing.duration);
                         playing.duration = duration;
-                        let width = client
-                            .get_i64("video-params/dw")
-                            .or_else(|_| client.get_i64("video-params/w"))
-                            .unwrap_or(0);
-                        let height = client
-                            .get_i64("video-params/dh")
-                            .or_else(|_| client.get_i64("video-params/h"))
-                            .unwrap_or(0);
-                        if width > 0 {
-                            playing.video_width = width as u32;
-                        }
-                        if height > 0 {
-                            playing.video_height = height as u32;
-                        }
                         sink(PreviewEvent::Playing {
                             generation: playing.generation,
                             duration,
@@ -887,183 +562,41 @@ fn worker_main(
             }
         }
 
-        // 3. Render next frame if MPV has one ready
-        if !r_ctx.is_null() {
-            let flags = unsafe { (client.api.render_update)(r_ctx) };
-            if flags & RENDER_UPDATE_FRAME != 0 {
-                if let Some(playing) = source.as_mut() {
-                    let revision = lock_mailbox(&shared).source_revision;
-                    if playing.paused {
-                        let mut skip: c_int = 1;
-                        let mut params = [
-                            MpvRenderParam {
-                                param_type: RENDER_PARAM_SKIP_RENDERING,
-                                data: (&mut skip as *mut c_int).cast(),
-                            },
-                            MpvRenderParam {
-                                param_type: RENDER_PARAM_INVALID,
-                                data: std::ptr::null_mut(),
-                            },
-                        ];
-                        unsafe { (client.api.render)(r_ctx, params.as_mut_ptr()) };
-                    } else {
-                        let vid_w = playing.video_width;
-                        let vid_h = playing.video_height;
-                        let vp_w = playing.vp_w;
-                        let vp_h = playing.vp_h;
-                        let max_w = config.max_width.min(1920);
-                        let max_h = config.max_height.min(1080);
-                        let (target_w, target_h) = if vid_w > 0 && vid_h > 0 {
-                            let max_scale = (max_w as f32 / vid_w as f32).min(max_h as f32 / vid_h as f32).min(1.0);
-                            let min_scale = (240.0 / (vid_w.max(vid_h) as f32)).min(max_scale);
-                            let vp_scale = if vp_w > 16 && vp_h > 16 {
-                                let sx = (vp_w as f32 * 1.15) / vid_w as f32;
-                                let sy = (vp_h as f32 * 1.15) / vid_h as f32;
-                                sx.max(sy).clamp(min_scale, max_scale)
-                            } else {
-                                max_scale
-                            };
-                            let tw = (((vid_w as f32 * vp_scale).round() as u32) & !1).max(2);
-                            let th = (((vid_h as f32 * vp_scale).round() as u32) & !1).max(2);
-                            (tw, th)
-                        } else {
-                            (config.max_width.min(1280), config.max_height.min(720))
-                        };
-
-                        if target_w != current_buf_w || target_h != current_buf_h {
-                            current_buf_w = target_w;
-                            current_buf_h = target_h;
-                            #[cfg(target_os = "linux")]
-                            if is_opengl {
-                                unsafe {
-                                    egl::glBindTexture(egl::GL_TEXTURE_2D, tex);
-                                    egl::glTexImage2D(
-                                        egl::GL_TEXTURE_2D, 0, egl::GL_RGBA8 as i32,
-                                        current_buf_w as i32, current_buf_h as i32, 0,
-                                        egl::GL_RGBA, egl::GL_UNSIGNED_BYTE, std::ptr::null(),
-                                    );
-                                    if let Some(bind_fb) = gl_bind_fb {
-                                        bind_fb(egl::GL_FRAMEBUFFER, fbo);
-                                    }
-                                    if let Some(fb_tex) = gl_fb_tex {
-                                        fb_tex(egl::GL_FRAMEBUFFER, egl::GL_COLOR_ATTACHMENT0, egl::GL_TEXTURE_2D, tex, 0);
-                                    }
-                                }
-                            }
-                        }
-
-                        let byte_size = (current_buf_w * current_buf_h * 4) as usize;
-                        let mut target_vec = match pool_rx.try_recv() {
-                            Ok(mut v) => {
-                                if v.len() != byte_size {
-                                    v.resize(byte_size, 0);
-                                }
-                                v
-                            }
-                            Err(_) => vec![0u8; byte_size],
-                        };
-
-                        let mut render_ok = false;
-                        #[cfg(target_os = "linux")]
-                        if is_opengl {
-                            let mut fbo_param = MpvOpenGlFbo {
-                                fbo: fbo as i32,
-                                width: current_buf_w as i32,
-                                height: current_buf_h as i32,
-                                internal_format: egl::GL_RGBA8 as i32,
-                            };
-                            let mut flip_y: c_int = 0;
-                            let mut render_params = [
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_OPENGL_FBO,
-                                    data: (&mut fbo_param as *mut MpvOpenGlFbo).cast(),
-                                },
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_FLIP_Y,
-                                    data: (&mut flip_y as *mut c_int).cast(),
-                                },
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_INVALID,
-                                    data: std::ptr::null_mut(),
-                                },
-                            ];
-                            let err = unsafe { (client.api.render)(r_ctx, render_params.as_mut_ptr()) };
-                            if err >= 0 {
-                                unsafe {
-                                    if let Some(bind_fb) = gl_bind_fb {
-                                        bind_fb(egl::GL_FRAMEBUFFER, fbo);
-                                    }
-                                    egl::glReadPixels(
-                                        0, 0,
-                                        current_buf_w as i32, current_buf_h as i32,
-                                        egl::GL_RGBA, egl::GL_UNSIGNED_BYTE,
-                                        target_vec.as_mut_ptr().cast(),
-                                    );
-                                }
-                                render_ok = true;
-                            }
-                        }
-
-                        if !render_ok {
-                            let mut size = [current_buf_w as i32, current_buf_h as i32];
-                            let fmt_rgba = b"rgba\0";
-                            let mut stride = (current_buf_w * 4) as usize;
-                            let mut render_params = [
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_SW_SIZE,
-                                    data: size.as_mut_ptr().cast(),
-                                },
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_SW_FORMAT,
-                                    data: fmt_rgba.as_ptr() as *mut c_void,
-                                },
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_SW_STRIDE,
-                                    data: (&mut stride as *mut usize).cast(),
-                                },
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_SW_POINTER,
-                                    data: target_vec.as_mut_ptr().cast(),
-                                },
-                                MpvRenderParam {
-                                    param_type: RENDER_PARAM_INVALID,
-                                    data: std::ptr::null_mut(),
-                                },
-                            ];
-                            let err = unsafe { (client.api.render)(r_ctx, render_params.as_mut_ptr()) };
-                            render_ok = err >= 0;
-                        }
-
-                        if render_ok && is_source_current(&shared, revision) {
-                            let position = client.get_double("time-pos").ok().unwrap_or(0.0);
-                            let duration = client.get_double("duration").ok().unwrap_or(playing.duration);
-                            let frame = PreviewFrame {
-                                generation: playing.generation,
-                                width: current_buf_w,
-                                height: current_buf_h,
-                                position,
-                                duration,
-                                rgba: Arc::from(target_vec.into_boxed_slice()),
-                            };
-                            sink(PreviewEvent::Frame(frame));
-                        }
-                    }
-                }
-            }
+        // 3. Publish playback position for the drawer timeline. Pixel
+        //    presentation belongs to the GUI thread's MPV render context, so
+        //    nothing here touches OpenGL or transfers frames.
+        if let Some(playing) = source.as_ref()
+            && !playing.paused
+            && last_progress.elapsed() >= Duration::from_millis(200)
+        {
+            last_progress = Instant::now();
+            let position = client.get_double("time-pos").ok().unwrap_or(0.0);
+            let duration = client
+                .get_double("duration")
+                .ok()
+                .unwrap_or(playing.duration);
+            sink(PreviewEvent::Progress {
+                generation: playing.generation,
+                position,
+                duration,
+            });
         }
 
-        // 4. Reactive sleep: wakes immediately on MPV core events or new render frame notification
+        // 4. Reactive sleep: wakes immediately on MPV core events or control
+        //    messages.
         #[cfg(unix)]
         {
-            let timeout_ms = if source.as_ref().is_some_and(|s| !s.paused) { 20 } else { 80 };
+            let timeout_ms = if source.as_ref().is_some_and(|s| !s.paused) {
+                20
+            } else {
+                80
+            };
             if wakeup_rx >= 0 {
-                let mut pfds = [
-                    libc::pollfd {
-                        fd: wakeup_rx,
-                        events: libc::POLLIN,
-                        revents: 0,
-                    },
-                ];
+                let mut pfds = [libc::pollfd {
+                    fd: wakeup_rx,
+                    events: libc::POLLIN,
+                    revents: 0,
+                }];
                 let poll_res = unsafe { libc::poll(pfds.as_mut_ptr(), 1, timeout_ms) };
                 if poll_res > 0 && (pfds[0].revents & libc::POLLIN) != 0 {
                     let mut drain_buf = [0u8; 256];
@@ -1081,14 +614,8 @@ fn worker_main(
         }
     }
 
-    // Cleanup resources on exit
     #[cfg(unix)]
     shared.wakeup_tx.store(-1, Ordering::SeqCst);
-    if !r_ctx.is_null() {
-        unsafe {
-            (client.api.render_set_update_callback)(r_ctx, None, std::ptr::null_mut());
-        }
-    }
     #[cfg(unix)]
     unsafe {
         if wakeup_tx >= 0 {
@@ -1096,34 +623,6 @@ fn worker_main(
         }
         if wakeup_rx >= 0 {
             libc::close(wakeup_rx);
-        }
-    }
-    if !r_ctx.is_null() {
-        unsafe { (client.api.render_free)(r_ctx) };
-    }
-    #[cfg(target_os = "linux")]
-    if is_opengl {
-        unsafe {
-            if tex != 0 {
-                egl::glDeleteTextures(1, &tex);
-            }
-            if let Some(del_fb) = gl_del_fb {
-                if fbo != 0 {
-                    del_fb(1, &fbo);
-                }
-            }
-            if !pbuf.is_null() {
-                egl::eglDestroySurface(dpy, pbuf);
-            }
-            if !egl_ctx.is_null() {
-                egl::eglDestroyContext(dpy, egl_ctx);
-            }
-            if !dpy.is_null() {
-                egl::eglTerminate(dpy);
-            }
-            if !wl_dpy.is_null() {
-                egl::wl_display_disconnect(wl_dpy);
-            }
         }
     }
 
@@ -1213,13 +712,6 @@ fn handle_control(
             if let Some(playing) = source.as_mut() {
                 let _ = client.set_flag("pause", paused);
                 playing.paused = paused;
-            }
-            true
-        }
-        Control::SetViewport(width, height) => {
-            if let Some(playing) = source.as_mut() {
-                playing.vp_w = width;
-                playing.vp_h = height;
             }
             true
         }
@@ -1317,10 +809,6 @@ fn load_source(
     Ok(Some(PlayingSource {
         generation: source.generation,
         duration,
-        video_width: width as u32,
-        video_height: height as u32,
-        vp_w: 640,
-        vp_h: 360,
         paused: false,
     }))
 }
@@ -1418,18 +906,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zero_frame_interval_is_rejected() {
+    fn zero_load_timeout_is_rejected() {
         let config = PreviewConfig {
-            frame_interval: Duration::ZERO,
-            ..PreviewConfig::default()
-        };
-        assert!(validate_config(&config).is_err());
-    }
-
-    #[test]
-    fn zero_bounds_are_rejected() {
-        let config = PreviewConfig {
-            max_width: 0,
+            load_timeout: Duration::ZERO,
             ..PreviewConfig::default()
         };
         assert!(validate_config(&config).is_err());

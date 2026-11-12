@@ -1093,6 +1093,12 @@ impl NativePlayback {
                 }
             }
         });
+        // Start early so the GUI thread can create the preview render context
+        // during renderer setup, before the first hover requests a trailer.
+        // The preview player still starts lazily if both features are off.
+        if app_config.hover_trailer_previews_enabled || app_config.trailer_autoplay {
+            previews.ensure_started();
+        }
         let desired_shader_preset =
             crate::shaders::preset_from_config(app_config.active_shader_preset);
         let shader_coordinator = Arc::new(Mutex::new(
@@ -4865,7 +4871,17 @@ fn apply_state_to_ui(
         ui.set_player_file_format(state.file_format.as_deref().unwrap_or_default().into());
     }
     if previous.is_none_or(|previous| previous.hardware_decoder != state.hardware_decoder) {
-        ui.set_player_hwdec(state.hardware_decoder.as_deref().unwrap_or_default().into());
+        let decoder = state.hardware_decoder.as_deref().unwrap_or_default();
+        if decoder.is_empty() {
+            tracing::debug!("MPV hardware decoder state is not available yet");
+        } else {
+            tracing::info!(
+                hardware_decoder = decoder,
+                zero_copy = decoder != "no" && !decoder.ends_with("-copy"),
+                "MPV decoder in use"
+            );
+        }
+        ui.set_player_hwdec(decoder.into());
     }
 
     let buffered_percent = if state.duration > 0.0 {
@@ -4909,6 +4925,8 @@ fn install_renderer(
     );
     let window_weak = ui.as_weak();
     let mut context: Option<RenderContext> = None;
+    let mut preview_context: Option<RenderContext> = None;
+    let mut preview_context_attempted = false;
     let mut prewarm_spawned = false;
     let mut render_target_ready = false;
     let mut initial_surface_logged = false;
@@ -4927,6 +4945,7 @@ fn install_renderer(
             if is_rendering_setup {
                 tracing::info!(?graphics_api, "Slint rendering setup started");
                 context_initialization_attempted = false;
+                preview_context_attempted = false;
             }
 
             // Slint's GL context is live once the notifier runs, so this is the
@@ -5011,6 +5030,28 @@ fn install_renderer(
                             context = Some(render_context);
                             missing_context_logged = false;
                             tracing::info!("MPV OpenGL render context created");
+
+                            // The preview runtime starts eagerly, so its render
+                            // context can be created now, before the first hover
+                            // asks MPV to start a trailer with `vo=libmpv`.
+                            if preview_context.is_none() && !preview_context_attempted
+                                && let Some(source) = crate::preview_player::global()
+                                    .and_then(|player| player.render_source())
+                            {
+                                preview_context_attempted = true;
+                                match create_preview_render_context(
+                                    &source,
+                                    &window_weak,
+                                    graphics_api,
+                                ) {
+                                    Ok(preview) => preview_context = Some(preview),
+                                    Err(error) => tracing::error!(
+                                        %error,
+                                        "could not create trailer preview render context"
+                                    ),
+                                }
+                            }
+
                             if !is_rendering_setup {
                                 ui.window().request_redraw();
                             }
@@ -5047,6 +5088,14 @@ fn install_renderer(
                         {
                             tracing::error!(%error, "MPV hidden-frame update processing failed");
                         }
+                        render_preview_frame(
+                            &ui,
+                            &window_weak,
+                            graphics_api,
+                            context.is_some(),
+                            &mut preview_context,
+                            &mut preview_context_attempted,
+                        );
                         return;
                     }
 
@@ -5080,6 +5129,14 @@ fn install_renderer(
                         render_target_ready = false;
                     }
                     if !render_target_ready {
+                        render_preview_frame(
+                            &ui,
+                            &window_weak,
+                            graphics_api,
+                            context.is_some(),
+                            &mut preview_context,
+                            &mut preview_context_attempted,
+                        );
                         return;
                     }
                     let size = ui.window().size();
@@ -5158,6 +5215,14 @@ fn install_renderer(
                             }
                         }
                     }
+                    render_preview_frame(
+                        &ui,
+                        &window_weak,
+                        graphics_api,
+                        context.is_some(),
+                        &mut preview_context,
+                        &mut preview_context_attempted,
+                    );
                 }
                 slint::RenderingState::AfterRendering => {}
                 slint::RenderingState::RenderingTeardown => {
@@ -5167,11 +5232,17 @@ fn install_renderer(
                         if let Some(ui) = teardown_window.upgrade() {
                             ui.set_player_video_frame(slint::Image::default());
                             ui.set_player_has_video_frame(false);
+                            ui.set_hover_preview_frame(slint::Image::default());
+                            ui.set_hover_preview_has_frame(false);
+                            ui.set_preview_drawer_video_frame(slint::Image::default());
+                            ui.set_preview_drawer_has_video_frame(false);
                         }
                     }) {
                         tracing::debug!(%error, "could not queue MPV surface teardown update");
                     }
                     context = None;
+                    preview_context = None;
+                    preview_context_attempted = false;
                     let shader_update = {
                         let mut coordinator = lock_shader_coordinator(&shader_coordinator);
                         coordinator.context_torn_down()
@@ -5196,6 +5267,19 @@ fn install_renderer(
     Ok(())
 }
 
+/// Returns the windowing system's `struct wl_display*` when Slint is running on
+/// Wayland. On X11, Windows or macOS this returns `None`.
+fn wayland_display_handle(window: &slint::Window) -> Option<*mut std::ffi::c_void> {
+    use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+
+    let handle = window.window_handle();
+    let display = handle.display_handle().ok()?;
+    match display.as_raw() {
+        RawDisplayHandle::Wayland(display) => Some(display.display.as_ptr()),
+        _ => None,
+    }
+}
+
 fn create_render_context(
     source: &RenderSource,
     window_weak: &slint::Weak<MainWindow>,
@@ -5206,8 +5290,14 @@ fn create_render_context(
             "MPV requires Slint's NativeOpenGL renderer, got {graphics_api:?}"
         ));
     };
+    // MPV needs the live `struct wl_display*` to expose the `"wl"` native
+    // resource to its GPU backend. VA-API uses it for `vaGetDisplayWl()`, the
+    // only way to get a non-copy (`vaapi`, zero-copy) decoder on Wayland.
+    let wayland_display = window_weak
+        .upgrade()
+        .and_then(|ui| wayland_display_handle(ui.window()));
     let redraw_weak = window_weak.clone();
-    let render_context = source.create_context(get_proc_address, move || {
+    let render_context = source.create_context(get_proc_address, wayland_display, move || {
         crate::performance::counters().record_mpv_redraw_post();
         let redraw_weak = redraw_weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -5229,9 +5319,159 @@ fn create_render_context(
         context_profile = ?diagnostics.context_profile,
         glsl_version = %diagnostics.shading_language_version,
         shader_support = ?diagnostics.video_shader_support(),
+        wayland_display = wayland_display.is_some(),
         "MPV is sharing Slint's OpenGL context"
     );
     Ok(render_context)
+}
+
+/// Creates the trailer preview's MPV render context on Slint's OpenGL thread.
+///
+/// Decoding stays on the preview worker; the GUI thread owns presentation, so
+/// preview frames never leave GPU memory. This mirrors the main player rather
+/// than reading pixels back through `glReadPixels`.
+fn create_preview_render_context(
+    source: &RenderSource,
+    window_weak: &slint::Weak<MainWindow>,
+    graphics_api: &slint::GraphicsAPI<'_>,
+) -> anyhow::Result<RenderContext> {
+    let slint::GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
+        return Err(anyhow!(
+            "trailer previews require Slint's NativeOpenGL renderer, got {graphics_api:?}"
+        ));
+    };
+    let wayland_display = window_weak
+        .upgrade()
+        .and_then(|ui| wayland_display_handle(ui.window()));
+    let redraw_weak = window_weak.clone();
+    let render_context = source.create_context(get_proc_address, wayland_display, move || {
+        let redraw_weak = redraw_weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            let active = crate::preview_player::global().is_some_and(|player| player.render_active());
+            if active && let Some(ui) = redraw_weak.upgrade() {
+                ui.window().request_redraw();
+            }
+        });
+    })?;
+    let diagnostics = render_context.open_gl_diagnostics();
+    tracing::info!(
+        renderer = %diagnostics.renderer,
+        wayland_display = wayland_display.is_some(),
+        "trailer preview render context created on Slint's OpenGL thread"
+    );
+    Ok(render_context)
+}
+
+/// Upper bound for preview presentation. Trailers are capped at 1080p by the
+/// `ytdl_hook` format selector, so a larger target would only waste VRAM.
+const PREVIEW_MAX_WIDTH: u32 = 1920;
+const PREVIEW_MAX_HEIGHT: u32 = 1080;
+const PREVIEW_MIN_EDGE: f32 = 240.0;
+
+/// Chooses the preview texture size from the active viewport and the decoded
+/// video dimensions, preserving the video's aspect ratio.
+fn preview_target_size(source: &RenderSource, viewport: (u32, u32)) -> (u32, u32) {
+    let fallback = (viewport.0.max(2), viewport.1.max(2));
+    let (video_width, video_height) = source.video_dimensions().unwrap_or(fallback);
+    let video_width = video_width.max(2);
+    let video_height = video_height.max(2);
+    let max_scale = (PREVIEW_MAX_WIDTH as f32 / video_width as f32)
+        .min(PREVIEW_MAX_HEIGHT as f32 / video_height as f32)
+        .min(1.0);
+    let min_scale = (PREVIEW_MIN_EDGE / video_width.max(video_height) as f32).min(max_scale);
+    let (vp_width, vp_height) = viewport;
+    let scale = if vp_width > 16 && vp_height > 16 {
+        let sx = (vp_width as f32 * 1.15) / video_width as f32;
+        let sy = (vp_height as f32 * 1.15) / video_height as f32;
+        sx.max(sy).clamp(min_scale, max_scale)
+    } else {
+        max_scale
+    };
+    let width = (((video_width as f32 * scale).round() as u32) & !1)
+        .clamp(2, PREVIEW_MAX_WIDTH & !1);
+    let height = (((video_height as f32 * scale).round() as u32) & !1)
+        .clamp(2, PREVIEW_MAX_HEIGHT & !1);
+    (width, height)
+}
+
+/// Renders one preview frame into the GUI thread's borrowed texture, if a
+/// preview session is active. `main_context_ready` avoids creating a second
+/// render context before the main one has warmed the graphics driver.
+fn render_preview_frame(
+    ui: &MainWindow,
+    window_weak: &slint::Weak<MainWindow>,
+    graphics_api: &slint::GraphicsAPI<'_>,
+    main_context_ready: bool,
+    preview_context: &mut Option<RenderContext>,
+    preview_attempted: &mut bool,
+) {
+    let Some(player) = crate::preview_player::global() else {
+        return;
+    };
+    if !player.render_active() {
+        if let Some(context) = preview_context.as_mut()
+            && let Err(error) = context.process_updates(false)
+        {
+            tracing::error!(%error, "trailer preview hidden-frame processing failed");
+        }
+        return;
+    }
+    if preview_context.is_none() && !*preview_attempted && main_context_ready {
+        let Some(source) = player.render_source() else {
+            return;
+        };
+        *preview_attempted = true;
+        match create_preview_render_context(&source, window_weak, graphics_api) {
+            Ok(context) => *preview_context = Some(context),
+            Err(error) => {
+                tracing::error!(%error, "could not create trailer preview render context");
+                return;
+            }
+        }
+    }
+    let Some(source) = player.render_source() else {
+        return;
+    };
+    let Some(context) = preview_context.as_mut() else {
+        return;
+    };
+    let generation = player.render_generation();
+    let (width, height) = preview_target_size(&source, player.render_viewport());
+    match context.ensure_video_textures(width as i32, height as i32) {
+        Ok(true) => {
+            // A resized target discards the textures the previous borrowed
+            // image points at; install the new frame in this same callback.
+            ui.set_hover_preview_frame(slint::Image::default());
+            ui.set_preview_drawer_video_frame(slint::Image::default());
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::error!(%error, "trailer preview render target creation failed");
+            return;
+        }
+    }
+    match context.render() {
+        Ok(RenderOutcome::Rendered { texture, .. }) => {
+            if player.render_generation() != generation || !player.render_active() {
+                return;
+            }
+            // SAFETY: The texture belongs to the render context created on
+            // Slint's OpenGL thread and lives until the next resize or teardown.
+            let image = unsafe {
+                BorrowedOpenGLTextureBuilder::new_gl_2d_rgba_texture(
+                    texture.texture_id(),
+                    (texture.width(), texture.height()).into(),
+                )
+            }
+            .origin(BorrowedOpenGLTextureOrigin::TopLeft)
+            .build();
+            ui.set_hover_preview_frame(image.clone());
+            ui.set_preview_drawer_video_frame(image);
+            player.note_frame_published();
+        }
+        Ok(RenderOutcome::NoFrame) => {}
+        Err(error) => tracing::error!(%error, "trailer preview frame rendering failed"),
+    }
 }
 
 fn ensure_render_target(ui: &MainWindow, context: &mut RenderContext) -> anyhow::Result<bool> {

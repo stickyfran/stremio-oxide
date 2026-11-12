@@ -8765,6 +8765,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pin-weak",
+ "raw-window-handle",
  "slint-macros",
  "unicode-segmentation",
  "vtable",
@@ -9117,7 +9118,7 @@ dependencies = [
 
 [[package]]
 name = "stremio-native"
-version = "0.99.99"
+version = "0.100.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9152,6 +9153,7 @@ dependencies = [
  "percent-encoding",
  "playback-mpv",
  "rand 0.10.2",
+ "raw-window-handle",
  "reqwest 0.13.4",
  "rodio",
  "self_update",

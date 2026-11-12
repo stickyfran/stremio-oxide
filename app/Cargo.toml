@@ -1,6 +1,6 @@
 [package]
 name = "stremio-native"
-version = "0.99.99"
+version = "0.100.0"
 authors = ["perpetus <perpetus.github@gmail.com>"]
 edition = "2024"
 license = "GPL-3.0-only"
@@ -14,11 +14,13 @@ server-connector = { path = "../server-connector" }
 slint = { workspace = true, features = [
     "accessibility",
     "compat-1-2",
+    "raw-window-handle-06",
     "renderer-femtovg",
     "std",
     "system-tray",
     "unstable-winit-030",
 ] }
+raw-window-handle.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["rt"] }
 serde = { workspace = true, features = ["derive"] }
