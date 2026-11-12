@@ -90,7 +90,9 @@ pub fn x11_display() -> Option<*mut c_void> {
 
         pub fn open() -> Option<*mut c_void> {
             DISPLAY
-                .get_or_init(|| unsafe { NonNull::new(XOpenDisplay(std::ptr::null())) })
+                .get_or_init(|| unsafe {
+                    NonNull::new(XOpenDisplay(std::ptr::null())).map(DisplayHandle)
+                })
                 .as_ref()
                 .map(|handle| handle.0.as_ptr())
         }
@@ -1523,7 +1525,7 @@ impl RenderContext {
                 "external render target size must be positive".to_owned(),
             ));
         }
-        let gl_state = OpenGlStateGuard::new(&self.gl, self.capabilities);
+        let _gl_state = OpenGlStateGuard::new(&self.gl, self.capabilities);
         // SAFETY: Slint's OpenGL context is current on this thread.
         unsafe {
             let texture = self.gl.create_texture().map_err(MpvError::OpenGl)?;
