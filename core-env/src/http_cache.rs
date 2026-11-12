@@ -1037,12 +1037,8 @@ async fn send_request_with_retry(
     validators: Option<&Validators>,
 ) -> Result<NetworkResponse, EnvError> {
     let max_retries = match request.resource_kind {
-        ResourceKind::Catalog
-        | ResourceKind::LegacyCatalog
-        | ResourceKind::Meta
-        | ResourceKind::LegacyMeta
-        | ResourceKind::AddonCatalog
-        | ResourceKind::Manifest => CATALOG_MAX_RETRIES,
+        ResourceKind::Catalog | ResourceKind::LegacyCatalog => CATALOG_MAX_RETRIES,
+        _ => 0,
     };
     let mut retries = 0;
 
