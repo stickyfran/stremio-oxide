@@ -27,6 +27,15 @@ pub fn hdr_plane_enabled() -> bool {
     })
 }
 
+/// Automatic HDR passthrough for the dedicated HDR launcher: use the native
+/// plane whenever the content is HDR, without requiring the user to cycle the
+/// HDR button to Passthrough.
+pub fn hdr_auto() -> bool {
+    std::env::var_os("STREMIO_HDR_AUTO").is_some_and(|value| {
+        value == std::ffi::OsStr::new("1") || value == std::ffi::OsStr::new("true")
+    })
+}
+
 /// Owns the optional native HDR plane and its two 10-bit render targets.
 #[derive(Default)]
 pub struct HdrPlaneState {

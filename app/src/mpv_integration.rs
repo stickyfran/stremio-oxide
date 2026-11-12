@@ -5159,7 +5159,8 @@ fn install_renderer(
                     };
                     let hdr_wanted = crate::wayland_hdr::hdr_plane_enabled()
                         && hdr_content
-                        && hdr_mode == HdrMode::Passthrough
+                        && (hdr_mode == HdrMode::Passthrough
+                            || crate::wayland_hdr::hdr_auto())
                         && !ui.get_player_pip_active();
                     if let Some(context) = context.as_mut()
                         && hdr_plane.render(
