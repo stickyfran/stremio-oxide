@@ -372,6 +372,10 @@ mod linux {
 
             let child = compositor.create_surface(&qh, ());
             let subsurface = subcompositor.get_subsurface(&child, &parent, &qh, ());
+            // A new sub-surface is stacked above its parent by default, which
+            // would cover Slint's controls. Put the video plane below the
+            // parent; the transparent player hole reveals it.
+            subsurface.place_below(&parent);
             let viewport = viewporter.get_viewport(&child, &qh, ());
             let color_surface = color_manager.get_surface(&child, &qh, ());
 
