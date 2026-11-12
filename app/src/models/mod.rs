@@ -258,11 +258,7 @@ fn visible_catalog_load_range(
         |index| {
             catalogs.catalogs[index]
                 .first()
-                .is_none_or(|page| match &page.content {
-                    None | Some(stremio_core::models::common::Loadable::Err(_)) => true,
-                    Some(stremio_core::models::common::Loadable::Ready(items)) => items.is_empty(),
-                    _ => false,
-                })
+                .is_none_or(|page| matches!(&page.content, None | Some(stremio_core::models::common::Loadable::Err(_))))
         },
     )
 }
