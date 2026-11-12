@@ -805,6 +805,7 @@ export component MainWindow inherits Window {
     in-out property <string> player-audio-format: "";
     in-out property <string> player-file-format: "";
     in-out property <string> player-hwdec: "";
+    in-out property <string> player-render-api: "";
     in-out property <float> player-buffered-percent: 0.0;
     in-out property <string> player-download-speed: "";
     in-out property <string> player-upload-speed: "";
@@ -2759,6 +2760,7 @@ export component MainWindow inherits Window {
             audio-format: player-audio-format;
             file-format: player-file-format;
             hardware-decoder: player-hwdec;
+            render-api: player-render-api;
             buffered-percent: player-buffered-percent;
             download-speed: player-download-speed;
             upload-speed: player-upload-speed;

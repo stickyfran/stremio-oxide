@@ -5030,6 +5030,9 @@ fn install_renderer(
                             context = Some(render_context);
                             missing_context_logged = false;
                             tracing::info!("MPV OpenGL render context created");
+                            if let Some(context) = context.as_ref() {
+                                ui.set_player_render_api(context.render_api().label().into());
+                            }
 
                             // The preview runtime starts eagerly, so its render
                             // context can be created now, before the first hover
@@ -5319,6 +5322,7 @@ fn create_render_context(
         context_profile = ?diagnostics.context_profile,
         glsl_version = %diagnostics.shading_language_version,
         shader_support = ?diagnostics.video_shader_support(),
+        render_api = render_context.render_api().label(),
         wayland_display = wayland_display.is_some(),
         "MPV is sharing Slint's OpenGL context"
     );
@@ -5356,6 +5360,7 @@ fn create_preview_render_context(
     let diagnostics = render_context.open_gl_diagnostics();
     tracing::info!(
         renderer = %diagnostics.renderer,
+        render_api = render_context.render_api().label(),
         wayland_display = wayland_display.is_some(),
         "trailer preview render context created on Slint's OpenGL thread"
     );

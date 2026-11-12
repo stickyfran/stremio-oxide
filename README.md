@@ -108,6 +108,7 @@ The next releases focus on refining the native experience, visual consistency, a
   - El tamaño del preview se adapta a la superficie activa (tarjeta, panel, ficha o pantalla completa) y el formato de trailer prefiere 1080p.
 - **Fase 6 — Evaluación Continua de `gpu-next` en libmpv**:
   - En mpv 0.42 la render API de libmpv sigue exponiendo solo los backends `gpu` y `sw`; `gpu-next` todavía no se puede usar con `vo=libmpv`.
+  - El cliente ya prueba `MPV_RENDER_API_TYPE_OPENGL_NEXT` (`opengl-next`) y cae a `opengl` si el runtime no lo soporta; se puede forzar con `STREMIO_MPV_RENDER_BACKEND=gpu|gpu-next`. Queda pendiente construir un libmpv con el parche upstream (PR #18607) para activarlo.
   - Monitorear las cabeceras de libmpv (`render.h`) para un futuro selector de backend (`MPV_RENDER_PARAM_BACKEND`).
   - Preservar `vo=libmpv` con tone mapping automático a SDR hasta que exista soporte de renderizado directo / subsuperficies nativas con composición HDR de 10/16 bits en Slint.
 

@@ -2,6 +2,16 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.101.0 - 2026-11-12
+
+### gpu-next render API groundwork
+
+- Added probing of `MPV_RENDER_API_TYPE_OPENGL_NEXT` (`"opengl-next"`), the libplacebo-based `gpu-next` render API proposed upstream in mpv PR #18607 and tracked by issue #10810.
+- The render context tries `gpu-next` first and transparently falls back to the classic `opengl` API when the runtime does not expose it, so stock libmpv 0.41/0.42 builds keep working unchanged.
+- `STREMIO_MPV_RENDER_BACKEND=gpu|gpu-next` forces a specific backend for testing.
+- `RenderContext::render_api()` exposes the backend that libmpv accepted, and both the main player and the trailer preview log it as `render_api`.
+- Using `gpu-next` requires a libmpv build carrying the upstream `opengl-next` patch; the pinned Windows runtime and the Flatpak currently use stock mpv 0.42 and therefore stay on `gpu`.
+
 ## 0.100.0 - 2026-11-12
 
 ### Wayland VA-API zero-copy

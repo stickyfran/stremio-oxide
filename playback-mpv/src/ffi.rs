@@ -50,6 +50,12 @@ pub const RENDER_PARAM_SW_STRIDE: c_int = 19;
 pub const RENDER_PARAM_SW_POINTER: c_int = 20;
 pub const RENDER_UPDATE_FRAME: u64 = 1 << 0;
 
+/// Classic libmpv OpenGL render API (`vo=gpu` internally).
+pub const RENDER_API_TYPE_OPENGL: &CStr = c"opengl";
+/// libplacebo-based OpenGL render API (`vo=gpu-next` internally). Only
+/// available in libmpv builds carrying the upstream `opengl-next` patch.
+pub const RENDER_API_TYPE_OPENGL_NEXT: &CStr = c"opengl-next";
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ApiVersion {
     pub major: u16,

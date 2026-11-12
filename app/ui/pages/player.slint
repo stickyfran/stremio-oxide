@@ -306,6 +306,7 @@ export component PlayerPage inherits Rectangle {
     in property <string> audio-format: "";
     in property <string> file-format: "";
     in property <string> hardware-decoder: "";
+    in property <string> render-api: "";
     in property <float> buffered-percent: 0.0;
     in property <string> download-speed: "";
     in property <string> upload-speed: "";
@@ -3354,7 +3355,7 @@ export component PlayerPage inherits Rectangle {
         x: parent.width - stats-menu.width - 32px;
         y: parent.height - stats-menu.height - 112px;
         width: min(480px, parent.width - 64px);
-        height: 225px;
+        height: 260px;
         background: Theme.card-background;
         border-radius: Theme.border-radius;
         border-width: 1px;
@@ -3420,6 +3421,21 @@ export component PlayerPage inherits Rectangle {
                 Text { text: @tr("PLAYER_DECODER" => "Decoder"); color: Theme.text-muted; font-size: 15px; font-weight: 500; vertical-alignment: center; }
                 Text {
                     text: hardware-decoder != "" ? hardware-decoder : "N/A";
+                    color: Theme.surface-light;
+                    font-size: 15px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+
+            // libmpv render API accepted by the shared OpenGL context:
+            // `gpu` for the classic backend, `gpu-next` for libplacebo.
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                Text { text: @tr("PLAYER_RENDERER" => "Renderer"); color: Theme.text-muted; font-size: 15px; font-weight: 500; vertical-alignment: center; }
+                Text {
+                    text: render-api != "" ? render-api : "N/A";
                     color: Theme.surface-light;
                     font-size: 15px;
                     font-weight: 700;

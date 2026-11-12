@@ -22,6 +22,43 @@ use crate::ffi::{
 /// OpenGL function resolver supplied by Slint while its context is current.
 pub type OpenGlProcAddress<'a> = &'a dyn Fn(&CStr) -> *const c_void;
 
+/// Which libmpv rendering API owns Slint's shared OpenGL context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderApi {
+    /// Classic `vo=gpu` path (`"opengl"`), available in every libmpv build.
+    Gpu,
+    /// libplacebo `vo=gpu-next` path (`"opengl-next"`). Requires a libmpv
+    /// runtime built with the upstream `opengl-next` render-API patch.
+    GpuNext,
+}
+
+impl RenderApi {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gpu => "gpu",
+            Self::GpuNext => "gpu-next",
+        }
+    }
+
+    fn api_type(self) -> &'static CStr {
+        match self {
+            Self::Gpu => crate::ffi::RENDER_API_TYPE_OPENGL,
+            Self::GpuNext => crate::ffi::RENDER_API_TYPE_OPENGL_NEXT,
+        }
+    }
+}
+
+/// Render APIs to try, in order. `STREMIO_MPV_RENDER_BACKEND` can force
+/// `gpu`/`opengl` or `gpu-next`/`opengl-next`; the default probes gpu-next and
+/// transparently falls back to gpu when the runtime does not expose it.
+fn render_api_candidates() -> Vec<RenderApi> {
+    match std::env::var("STREMIO_MPV_RENDER_BACKEND").as_deref() {
+        Ok("gpu") | Ok("opengl") => vec![RenderApi::Gpu],
+        Ok("gpu-next") | Ok("opengl-next") => vec![RenderApi::GpuNext],
+        _ => vec![RenderApi::GpuNext, RenderApi::Gpu],
+    }
+}
+
 /// The OpenGL API profile backing Slint's renderer context.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OpenGlProfile {
@@ -953,40 +990,62 @@ impl<'a> ResolverBridge<'a> {
             get_proc_address_ctx: (&mut bridge as *mut Self).cast(),
         };
         let mut advanced_control: c_int = 1;
-        let api_type = c"opengl";
-        let mut params = Vec::with_capacity(5);
-        params.push(MpvRenderParam {
-            param_type: RENDER_PARAM_API_TYPE,
-            data: api_type.as_ptr().cast_mut().cast(),
-        });
-        params.push(MpvRenderParam {
-            param_type: RENDER_PARAM_OPENGL_INIT_PARAMS,
-            data: (&mut init_params as *mut MpvOpenGlInitParams).cast(),
-        });
-        if let Some(display) = wayland_display {
-            // The param value is the `struct wl_display*` itself (not a pointer
-            // to it); MPV stores it as the GPU backend's `"wl"` native
-            // resource, which `hwdec_vaapi` uses for `vaGetDisplayWl()`.
-            params.push(MpvRenderParam {
-                param_type: RENDER_PARAM_WL_DISPLAY,
-                data: display,
-            });
-        }
-        params.push(MpvRenderParam {
-            param_type: RENDER_PARAM_ADVANCED_CONTROL,
-            data: (&mut advanced_control as *mut c_int).cast(),
-        });
-        params.push(MpvRenderParam {
-            param_type: RENDER_PARAM_INVALID,
-            data: std::ptr::null_mut(),
-        });
         let mut raw_context = std::ptr::null_mut();
-        // SAFETY: Slint's context is current. Parameter storage and the resolver
-        // bridge remain valid for the synchronous context creation call.
+        let mut selected_api = None;
+        let mut last_error = None;
         let create_start = std::time::Instant::now();
-        client.api.result(unsafe {
-            (client.api.render_create)(&mut raw_context, client.handle(), params.as_mut_ptr())
-        })?;
+        for api in render_api_candidates() {
+            raw_context = std::ptr::null_mut();
+            let mut params = Vec::with_capacity(5);
+            params.push(MpvRenderParam {
+                param_type: RENDER_PARAM_API_TYPE,
+                data: api.api_type().as_ptr().cast_mut().cast(),
+            });
+            params.push(MpvRenderParam {
+                param_type: RENDER_PARAM_OPENGL_INIT_PARAMS,
+                data: (&mut init_params as *mut MpvOpenGlInitParams).cast(),
+            });
+            if let Some(display) = wayland_display {
+                // The param value is the `struct wl_display*` itself (not a
+                // pointer to it); MPV stores it as the GPU backend's `"wl"`
+                // native resource, which `hwdec_vaapi` uses for
+                // `vaGetDisplayWl()`.
+                params.push(MpvRenderParam {
+                    param_type: RENDER_PARAM_WL_DISPLAY,
+                    data: display,
+                });
+            }
+            params.push(MpvRenderParam {
+                param_type: RENDER_PARAM_ADVANCED_CONTROL,
+                data: (&mut advanced_control as *mut c_int).cast(),
+            });
+            params.push(MpvRenderParam {
+                param_type: RENDER_PARAM_INVALID,
+                data: std::ptr::null_mut(),
+            });
+            // SAFETY: Slint's context is current. Parameter storage and the
+            // resolver bridge remain valid for the synchronous call.
+            let result = client.api.result(unsafe {
+                (client.api.render_create)(&mut raw_context, client.handle(), params.as_mut_ptr())
+            });
+            match result {
+                Ok(()) => {
+                    selected_api = Some(api);
+                    break;
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        api = api.label(),
+                        %error,
+                        "MPV render API unavailable; trying the next one"
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+        let Some(render_api) = selected_api else {
+            return Err(last_error.expect("at least one render API must be probed"));
+        };
         let render_create_ms = create_start.elapsed().as_millis();
 
         tracing::info!(
@@ -995,6 +1054,7 @@ impl<'a> ResolverBridge<'a> {
             capability_query_ms = query_ms,
             state_prepare_ms = prepare_ms,
             render_create_ms,
+            render_api = render_api.label(),
             wayland_display = wayland_display.is_some(),
             "MPV render context phase timings"
         );
@@ -1034,6 +1094,7 @@ impl<'a> ResolverBridge<'a> {
             gl,
             capabilities,
             diagnostics,
+            render_api,
             render_targets: None,
             slint_viewport,
             force_render: false,
@@ -1146,6 +1207,7 @@ pub struct RenderContext {
     gl: Rc<glow::Context>,
     capabilities: OpenGlContextCapabilities,
     diagnostics: OpenGlDiagnostics,
+    render_api: RenderApi,
     render_targets: Option<OpenGlRenderTargets>,
     slint_viewport: [c_int; 4],
     force_render: bool,
@@ -1159,6 +1221,11 @@ pub struct RenderContext {
 impl RenderContext {
     pub fn open_gl_diagnostics(&self) -> OpenGlDiagnostics {
         self.diagnostics.clone()
+    }
+
+    /// Render API that libmpv accepted when this context was created.
+    pub fn render_api(&self) -> RenderApi {
+        self.render_api
     }
 
     /// Allocates the double-buffered private video textures on first use.
