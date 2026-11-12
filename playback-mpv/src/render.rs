@@ -54,9 +54,14 @@ impl RenderApi {
 /// transparently falls back to gpu when the runtime does not expose it.
 fn render_api_candidates() -> Vec<RenderApi> {
     match std::env::var("STREMIO_MPV_RENDER_BACKEND").as_deref() {
-        Ok("gpu") | Ok("opengl") => vec![RenderApi::Gpu],
         Ok("gpu-next") | Ok("opengl-next") => vec![RenderApi::GpuNext],
-        _ => vec![RenderApi::GpuNext, RenderApi::Gpu],
+        // Explicit fallback probe, for testing a runtime without knowing
+        // whether it was built with the opengl-next patch.
+        Ok("auto") => vec![RenderApi::GpuNext, RenderApi::Gpu],
+        // Default: do not create a failed opengl-next render context on stock
+        // libmpv builds. A rejected first context can leave the client's VO
+        // update callback unusable, which manifests as playback with no video.
+        _ => vec![RenderApi::Gpu],
     }
 }
 
