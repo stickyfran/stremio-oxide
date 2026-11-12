@@ -593,8 +593,7 @@ impl PlaybackRuntime {
         if let Err(error) = client.set_option("ytdl-raw-options", YTDL_RAW_OPTIONS) {
             tracing::warn!(%error, "could not apply ytdl raw options");
         }
-        client.set_option("terminal", "yes")?;
-        client.set_option("msg-level", "all=info,vo/gpu=v,vo/libmpv=v")?;
+        client.set_option("terminal", "no")?;
         client.set_option("input-default-bindings", "no")?;
         client.set_option("input-vo-keyboard", "no")?;
         client.set_option("osc", "no")?;
