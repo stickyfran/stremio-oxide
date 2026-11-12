@@ -1713,7 +1713,10 @@ impl RenderContext {
             self.client.set_flag("hdr-compute-peak", true)?;
             self.client.set_string("dither-depth", "8")?;
         }
-        self.client.set_flag("target-colorspace-hint", false)
+        // `target-colorspace-hint` is a choice option (auto/no/yes), not a
+        // flag; set_flag produced "Invalid value ... false" and aborted the
+        // HDR transition.
+        self.client.set_string("target-colorspace-hint", "no")
     }
 
     fn capture_gl_error(&mut self) {

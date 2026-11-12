@@ -218,7 +218,6 @@ mod linux {
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle,
         backend::{Backend, ObjectId},
-        globals::{GlobalListContents, registry_queue_init},
         protocol::{
             wl_buffer::WlBuffer,
             wl_compositor::WlCompositor,
@@ -299,25 +298,39 @@ mod linux {
             // close it on drop.
             let backend = unsafe { Backend::from_foreign_display(display.cast()) };
             let connection = Connection::from_backend(backend);
-            let (globals, mut queue) = registry_queue_init::<HdrState>(&connection)
-                .map_err(|error| format!("wl_registry: {error:?}"))?;
+            let mut queue = connection.new_event_queue::<HdrState>();
             let qh = queue.handle();
 
-            let compositor: WlCompositor = globals
-                .bind(&qh, 1..=6, ())
-                .map_err(|error| format!("wl_compositor: {error:?}"))?;
-            let subcompositor: WlSubcompositor = globals
-                .bind(&qh, 1..=1, ())
-                .map_err(|error| format!("wl_subcompositor: {error:?}"))?;
-            let viewporter: WpViewporter = globals
-                .bind(&qh, 1..=1, ())
-                .map_err(|error| format!("wp_viewporter: {error:?}"))?;
-            let dmabuf: ZwpLinuxDmabufV1 = globals
-                .bind(&qh, 3..=4, ())
-                .map_err(|error| format!("zwp_linux_dmabuf_v1: {error:?}"))?;
-            let color_manager: WpColorManagerV1 = globals
-                .bind(&qh, 1..=3, ())
-                .map_err(|error| format!("wp_color_manager_v1: {error:?}"))?;
+            // Bind globals on our private event queue. `registry_queue_init`
+            // dispatches the connection's default queue, which Winit owns;
+            // doing that from inside the render notifier deadlocks the UI.
+            let registry = connection.display().get_registry(&qh, ());
+            let mut state = HdrState::default();
+            queue
+                .roundtrip(&mut state)
+                .map_err(|error| format!("wl_registry roundtrip: {error:?}"))?;
+            registry.destroy();
+            tracing::info!("native HDR plane: Wayland globals bound");
+            let compositor = state
+                .compositor
+                .take()
+                .ok_or_else(|| "wl_compositor is not available".to_owned())?;
+            let subcompositor = state
+                .subcompositor
+                .take()
+                .ok_or_else(|| "wl_subcompositor is not available".to_owned())?;
+            let viewporter = state
+                .viewporter
+                .take()
+                .ok_or_else(|| "wp_viewporter is not available".to_owned())?;
+            let dmabuf = state
+                .dmabuf
+                .take()
+                .ok_or_else(|| "zwp_linux_dmabuf_v1 is not available".to_owned())?;
+            let color_manager = state
+                .color_manager
+                .take()
+                .ok_or_else(|| "wp_color_manager_v1 is not available".to_owned())?;
 
             // Reconstruct Slint's parent surface on the foreign connection.
             // SAFETY: `surface` is the live `wl_surface*` of the window and
@@ -342,7 +355,6 @@ mod linux {
             creator.set_luminances(0, 1000, 203);
             let description = creator.create(&qh, ());
 
-            let mut state = HdrState::default();
             queue
                 .roundtrip(&mut state)
                 .map_err(|error| format!("color management roundtrip: {error:?}"))?;
@@ -479,6 +491,11 @@ mod linux {
 
     #[derive(Default)]
     struct HdrState {
+        compositor: Option<WlCompositor>,
+        subcompositor: Option<WlSubcompositor>,
+        viewporter: Option<WpViewporter>,
+        dmabuf: Option<ZwpLinuxDmabufV1>,
+        color_manager: Option<WpColorManagerV1>,
         description_ready: bool,
         formats: Vec<u32>,
         modifiers: Vec<(u32, u64)>,
@@ -538,15 +555,66 @@ mod linux {
         ZwpLinuxBufferParamsV1,
     );
 
-    impl Dispatch<WlRegistry, GlobalListContents> for HdrState {
+    impl Dispatch<WlRegistry, ()> for HdrState {
         fn event(
-            _: &mut Self,
-            _: &WlRegistry,
-            _: wayland_client::protocol::wl_registry::Event,
-            _: &GlobalListContents,
+            state: &mut Self,
+            registry: &WlRegistry,
+            event: wayland_client::protocol::wl_registry::Event,
+            _: &(),
             _: &Connection,
-            _: &QueueHandle<Self>,
+            qh: &QueueHandle<Self>,
         ) {
+            let wayland_client::protocol::wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } = event
+            else {
+                return;
+            };
+            match interface.as_str() {
+                "wl_compositor" => {
+                    state.compositor = Some(registry.bind::<WlCompositor, _, _>(
+                        name,
+                        version.min(6),
+                        qh,
+                        (),
+                    ));
+                }
+                "wl_subcompositor" => {
+                    state.subcompositor = Some(registry.bind::<WlSubcompositor, _, _>(
+                        name,
+                        version.min(1),
+                        qh,
+                        (),
+                    ));
+                }
+                "wp_viewporter" => {
+                    state.viewporter = Some(registry.bind::<WpViewporter, _, _>(
+                        name,
+                        version.min(1),
+                        qh,
+                        (),
+                    ));
+                }
+                "zwp_linux_dmabuf_v1" if version >= 3 => {
+                    state.dmabuf = Some(registry.bind::<ZwpLinuxDmabufV1, _, _>(
+                        name,
+                        version.min(4),
+                        qh,
+                        (),
+                    ));
+                }
+                "wp_color_manager_v1" => {
+                    state.color_manager = Some(registry.bind::<WpColorManagerV1, _, _>(
+                        name,
+                        version.min(3),
+                        qh,
+                        (),
+                    ));
+                }
+                _ => {}
+            }
         }
     }
 
