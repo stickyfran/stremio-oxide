@@ -294,6 +294,7 @@ mod linux {
         buffers: HashMap<u32, PlaneBuffer>,
         width: u32,
         height: u32,
+        scale: f32,
         visible: bool,
     }
 
@@ -320,6 +321,7 @@ mod linux {
             };
             let display = display_handle.display.as_ptr();
             let surface = window.surface.as_ptr();
+            let scale = ui.window().scale_factor().max(1.0);
 
             // SAFETY: the raw display pointer belongs to Winit/Slint and stays
             // alive for the whole process; `from_foreign_display` does not
@@ -396,7 +398,9 @@ mod linux {
             if child.version() >= 3 {
                 child.set_buffer_scale(1);
             }
-            viewport.set_destination(width as i32, height as i32);
+            let logical_width = (width as f32 / scale).round().max(1.0) as i32;
+            let logical_height = (height as f32 / scale).round().max(1.0) as i32;
+            viewport.set_destination(logical_width, logical_height);
             child.commit();
             connection
                 .flush()
@@ -416,6 +420,7 @@ mod linux {
                 buffers: HashMap::new(),
                 width,
                 height,
+                scale,
                 visible: false,
             })
         }
@@ -471,7 +476,9 @@ mod linux {
         pub(super) fn resize(&mut self, width: u32, height: u32) {
             self.width = width;
             self.height = height;
-            self.viewport.set_destination(width as i32, height as i32);
+            let logical_width = (width as f32 / self.scale).round().max(1.0) as i32;
+            let logical_height = (height as f32 / self.scale).round().max(1.0) as i32;
+            self.viewport.set_destination(logical_width, logical_height);
             self.child.commit();
             self.buffers.clear();
             let _ = self.connection.flush();

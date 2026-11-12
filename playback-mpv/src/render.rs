@@ -1650,10 +1650,10 @@ impl RenderContext {
             height: target.height,
             internal_format: target.internal_format as c_int,
         };
-        // DMA-BUF scanout has no texture-origin metadata: the compositor
-        // interprets row 0 as the top row. Flip MPV's bottom-left output so
-        // the native plane is not upside down.
-        let mut flip_y: c_int = 1;
+        // Keep MPV's native FBO orientation. Requesting a flip here produced
+        // an upside-down native plane on Wayland/Mesa, so the DMA-BUF is
+        // consumed in the same orientation as the FBO.
+        let mut flip_y: c_int = 0;
         let mut depth = depth;
         let mut params = [
             MpvRenderParam {
