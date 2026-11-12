@@ -9180,6 +9180,8 @@ dependencies = [
  "url",
  "uuid 1.24.0",
  "walkdir",
+ "wayland-client",
+ "wayland-protocols",
  "windows 0.62.2",
  "windows-sys 0.61.2",
  "winres",

@@ -9,8 +9,41 @@ This file records notable changes to Stremio Native relative to the initial sour
 - Added probing of `MPV_RENDER_API_TYPE_OPENGL_NEXT` (`"opengl-next"`), the libplacebo-based `gpu-next` render API proposed upstream in mpv PR #18607 and tracked by issue #10810.
 - The render context tries `gpu-next` first and transparently falls back to the classic `opengl` API when the runtime does not expose it, so stock libmpv 0.41/0.42 builds keep working unchanged.
 - `STREMIO_MPV_RENDER_BACKEND=gpu|gpu-next` forces a specific backend for testing.
-- `RenderContext::render_api()` exposes the backend that libmpv accepted, and both the main player and the trailer preview log it as `render_api`.
-- Using `gpu-next` requires a libmpv build carrying the upstream `opengl-next` patch; the pinned Windows runtime and the Flatpak currently use stock mpv 0.42 and therefore stay on `gpu`.
+- `RenderContext::render_api()` exposes the backend that libmpv accepted; both the main player and the trailer preview log it as `render_api`, and the player Statistics panel shows it as **Renderer**.
+- Added `.github/patches/mpv-gpu-next-opengl.patch`: upstream PR #18607 (`opengl-next` / `gpu-next` render API) rebased onto mpv 0.42.0, with the six post-PR `vo_gpu_next` fixes ported into the extracted libplacebo renderer.
+- The Flatpak now applies that patch and builds libplacebo with OpenGL enabled, so its libmpv exposes `gpu-next`; the `MPV runtime builds` workflow gained a `runtime_profile=gpu-next` option for custom Linux/Windows runtimes.
+- Validated on Mesa 26.2 / Intel Arc / Wayland with a GLES 3.2 EGL PBuffer: `opengl-next` creates the render context, reports `hwdec-current=vaapi` and renders 60 non-black frames, matching the classic `opengl` backend.
+
+### Zero-copy outside Wayland
+
+- On X11 the render context now opens a process-wide `Display*` with libX11 and passes `MPV_RENDER_PARAM_X11_DISPLAY` to MPV, so VA-API/GLX can create a non-copy decoder instead of falling back to `vaapi-copy` or software. The X11 connection is only opened when Slint's window is not on Wayland.
+- DRM/KMS and Windows D3D11 still lack a native-resource path because Slint presents through OpenGL; the render API would need a native surface/backend that Slint does not expose.
+
+### HDR and output quality
+
+- HDR content is still tone-mapped to the 8-bit SDR FBO that Slint can compose, but the mapping is now explicit: `tone-mapping=bt.2390`, `gamut-mapping-mode=auto`, dynamic `hdr-compute-peak`, `target-trc=srgb`, `target-prim=bt.709` and `dither-depth=8`. `HdrMode::Disabled` uses clip mapping without peak detection.
+- Added built-in GL/GLES scaling defaults (`scale=lanczos`, `dscale=mitchell`, `cscale=bicubic`, correct/linear downscaling) and debanding, which do not depend on the Anime4K/FSR user shaders that GLES rejects.
+- Server-side `gamut-mapping-mode`, `target-trc` and `dither-depth` errors are logged and ignored so older libmpv runtimes cannot break playback.
+- A true 10-bit/HDR presentation still requires Slint to expose a 10/16-bit swapchain or a native video plane; the render API cannot change that limit by itself.
+
+### Telemetry and caching
+
+- The player now observes and exposes `frame-drop-count`, `decoder-frame-drop-count`, `vo-delayed-frame-count`, `avsync`, `estimated-vf-fps` and `display-fps`. The Statistics panel shows a compact `Performance` line with FPS, VO/decoder/delayed drops and A/V sync.
+- Missing statistics properties are logged and skipped instead of preventing the playback runtime from starting.
+- The global cache default is now `auto` instead of `no`; per-file load options still force `cache=yes` with size/readahead limits for YouTube, loopback streaming and remote HTTP.
+
+### Omniphony / spatial audio
+
+- Rebased `mpv-omniphony.patch` from 0.41 to 0.42 and fixed the overlay client creation (`mp_client_set_weak` was replaced by `mp_new_weak_client` in 0.42). The rebased patch applies cleanly to the 0.42 tarball and compiles with `-Dorender=enabled`.
+
+### Native HDR video plane (Wayland)
+
+- Added an experimental Wayland native plane path for real HDR passthrough instead of SDR tone mapping. When the content is HDR and the user selects `HdrMode::Passthrough`, the player renders into two 10-bit `RGB10_A2` targets, exports them as DMA-BUFs and attaches them to a `wl_subsurface` below Slint's surface.
+- The subsurface is created on Slint's own Wayland connection by reconstructing `wl_display`/`wl_surface` from `raw-window-handle`; a foreign `wayland_client::Connection` with a private event queue binds `wl_subcompositor`, `wp_viewporter`, `zwp_linux_dmabuf_v1` and `wp_color_management_v1`.
+- Video color is signalled as BT.2020/ST.2084 (PQ) through `wp_color_manager_v1`, while Slint keeps drawing controls, subtitles and overlays in SDR above the plane. No 10-bit swapchain is required from Slint.
+- `RenderContext` gained `create_rgb10_target`, `render_external` (with `MPV_RENDER_PARAM_DEPTH=10` and a flipped output for DMA-BUF scanout), `delete_external_target` and `set_hdr_passthrough` to switch MPV between PQ/BT.2020 and the regular 8-bit sRGB target.
+- The main window is now created with a transparent Winit surface; the player page exposes a transparent video hole when `player-hdr-plane-active` is set. If color management, DMA-BUF export or the protocol is unavailable, the app logs once and falls back to the proven SDR texture path.
+- This path is opt-in: it only activates with HDR content plus the Passthrough mode, and it is disabled for PiP.
 
 ## 0.100.0 - 2026-11-12
 

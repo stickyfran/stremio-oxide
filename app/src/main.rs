@@ -83,6 +83,7 @@ pub mod startup_metrics;
 mod taskbar_media;
 mod theme_studio;
 mod thumbnail_preview;
+mod wayland_hdr;
 mod trailer_cache;
 mod tray;
 mod window_events;
@@ -184,6 +185,10 @@ async fn run_app(
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("femtovg".into())
+        // The optional native HDR video plane is composited by the Wayland
+        // compositor below Slint's surface, so the player page needs a
+        // transparent hole. Opaque pages keep their own backgrounds.
+        .with_winit_window_attributes_hook(|attributes| attributes.with_transparent(true))
         .select()
         .context("could not select Slint's FemtoVG renderer")?;
     tracing::info!(

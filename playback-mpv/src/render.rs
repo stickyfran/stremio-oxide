@@ -14,9 +14,10 @@ use glow::HasContext;
 
 use crate::ffi::{
     MpvClient, MpvError, MpvOpenGlFbo, MpvOpenGlInitParams, MpvRenderContext, MpvRenderParam,
-    RENDER_PARAM_ADVANCED_CONTROL, RENDER_PARAM_API_TYPE, RENDER_PARAM_FLIP_Y,
+    RENDER_PARAM_ADVANCED_CONTROL, RENDER_PARAM_API_TYPE, RENDER_PARAM_DEPTH, RENDER_PARAM_FLIP_Y,
     RENDER_PARAM_INVALID, RENDER_PARAM_OPENGL_FBO, RENDER_PARAM_OPENGL_INIT_PARAMS,
-    RENDER_PARAM_SKIP_RENDERING, RENDER_PARAM_WL_DISPLAY, RENDER_UPDATE_FRAME,
+    RENDER_PARAM_SKIP_RENDERING, RENDER_PARAM_WL_DISPLAY, RENDER_PARAM_X11_DISPLAY,
+    RENDER_UPDATE_FRAME,
 };
 
 /// OpenGL function resolver supplied by Slint while its context is current.
@@ -57,6 +58,51 @@ fn render_api_candidates() -> Vec<RenderApi> {
         Ok("gpu-next") | Ok("opengl-next") => vec![RenderApi::GpuNext],
         _ => vec![RenderApi::GpuNext, RenderApi::Gpu],
     }
+}
+
+/// Lazily opens the X11 `Display*` used by VA-API non-copy interop on X11.
+///
+/// Opening it once per process keeps the pointer valid for the lifetime of
+/// every MPV render context. It is only called when the window is not on
+/// Wayland, because MPV prefers the `"wl"` native resource.
+#[cfg(target_os = "linux")]
+pub fn x11_display() -> Option<*mut c_void> {
+    mod xlib {
+        use std::{
+            ffi::{c_char, c_void},
+            ptr::NonNull,
+            sync::OnceLock,
+        };
+
+        #[link(name = "X11")]
+        unsafe extern "C" {
+            fn XOpenDisplay(name: *const c_char) -> *mut c_void;
+        }
+
+        struct DisplayHandle(NonNull<c_void>);
+        // SAFETY: `Display*` is MPV's native-resource handle; Xlib serializes
+        // access internally and the pointer is valid for the whole process.
+        unsafe impl Send for DisplayHandle {}
+        // SAFETY: see above.
+        unsafe impl Sync for DisplayHandle {}
+
+        static DISPLAY: OnceLock<Option<DisplayHandle>> = OnceLock::new();
+
+        pub fn open() -> Option<*mut c_void> {
+            DISPLAY
+                .get_or_init(|| unsafe { NonNull::new(XOpenDisplay(std::ptr::null())) })
+                .as_ref()
+                .map(|handle| handle.0.as_ptr())
+        }
+    }
+
+    xlib::open()
+}
+
+/// No X11 native resource on non-Linux targets.
+#[cfg(not(target_os = "linux"))]
+pub fn x11_display() -> Option<*mut c_void> {
+    None
 }
 
 /// The OpenGL API profile backing Slint's renderer context.
@@ -762,6 +808,34 @@ impl VideoTexture {
     }
 }
 
+/// Render target created by the embedder, normally exported as a DMA-BUF and
+/// attached to a native video plane (Wayland subsurface).
+pub struct ExternalVideoTarget {
+    texture: glow::Texture,
+    framebuffer: glow::Framebuffer,
+    width: i32,
+    height: i32,
+    internal_format: u32,
+}
+
+impl ExternalVideoTarget {
+    pub fn texture_id(&self) -> NonZeroU32 {
+        self.texture.0
+    }
+
+    pub fn width(&self) -> i32 {
+        self.width
+    }
+
+    pub fn height(&self) -> i32 {
+        self.height
+    }
+
+    pub fn internal_format(&self) -> u32 {
+        self.internal_format
+    }
+}
+
 fn create_render_target(
     gl: &glow::Context,
     context_capabilities: OpenGlContextCapabilities,
@@ -919,9 +993,16 @@ impl RenderSource {
         &self,
         resolver: OpenGlProcAddress<'_>,
         wayland_display: Option<*mut c_void>,
+        x11_display: Option<*mut c_void>,
         request_redraw: impl FnMut() + Send + 'static,
     ) -> Result<RenderContext, MpvError> {
-        ResolverBridge::create(&self.client, resolver, wayland_display, request_redraw)
+        ResolverBridge::create(
+            &self.client,
+            resolver,
+            wayland_display,
+            x11_display,
+            request_redraw,
+        )
     }
 
     /// Current decoded video size, when a file with a video track is loaded.
@@ -957,6 +1038,7 @@ impl<'a> ResolverBridge<'a> {
         client: &Arc<MpvClient>,
         resolver: OpenGlProcAddress<'a>,
         wayland_display: Option<*mut c_void>,
+        x11_display: Option<*mut c_void>,
         request_redraw: impl FnMut() + Send + 'static,
     ) -> Result<RenderContext, MpvError> {
         // SAFETY: Slint invokes this function with its OpenGL context current,
@@ -1015,6 +1097,14 @@ impl<'a> ResolverBridge<'a> {
                     data: display,
                 });
             }
+            if let Some(display) = x11_display {
+                // `Display*` for the X11 VA-API/GLX interop path. Without it,
+                // `hwdec=auto` falls back to `vaapi-copy` on X11.
+                params.push(MpvRenderParam {
+                    param_type: RENDER_PARAM_X11_DISPLAY,
+                    data: display,
+                });
+            }
             params.push(MpvRenderParam {
                 param_type: RENDER_PARAM_ADVANCED_CONTROL,
                 data: (&mut advanced_control as *mut c_int).cast(),
@@ -1056,6 +1146,7 @@ impl<'a> ResolverBridge<'a> {
             render_create_ms,
             render_api = render_api.label(),
             wayland_display = wayland_display.is_some(),
+            x11_display = x11_display.is_some(),
             "MPV render context phase timings"
         );
 
@@ -1414,6 +1505,208 @@ impl RenderContext {
                 frame_ready,
             }
         })
+    }
+
+    /// A caller-owned RGBA/10-bit render target, used by the native HDR plane.
+    ///
+    /// Unlike the internal double-buffered targets, this framebuffer is
+    /// created by the embedder so its texture can be exported as a DMA-BUF and
+    /// attached to a Wayland subsurface.
+    pub fn create_external_target(
+        &mut self,
+        width: i32,
+        height: i32,
+        internal_format: u32,
+    ) -> Result<ExternalVideoTarget, MpvError> {
+        if width <= 0 || height <= 0 {
+            return Err(MpvError::InvalidNode(
+                "external render target size must be positive".to_owned(),
+            ));
+        }
+        let gl_state = OpenGlStateGuard::new(&self.gl, self.capabilities);
+        // SAFETY: Slint's OpenGL context is current on this thread.
+        unsafe {
+            let texture = self.gl.create_texture().map_err(MpvError::OpenGl)?;
+            self.gl.active_texture(glow::TEXTURE0);
+            if self.capabilities.state.pixel_buffer_objects {
+                self.gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+            }
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            self.gl
+                .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            self.gl
+                .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            self.gl
+                .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            self.gl
+                .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            if self.capabilities.state.texture_swizzle {
+                self.gl
+                    .tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_SWIZZLE_A, glow::ONE as i32);
+            }
+            let (format, pixel_type) = match internal_format {
+                glow::RGB10_A2 => (glow::RGBA, glow::UNSIGNED_INT_2_10_10_10_REV),
+                glow::RGBA16F => (glow::RGBA, glow::HALF_FLOAT),
+                _ => (glow::RGBA, glow::UNSIGNED_BYTE),
+            };
+            self.gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                internal_format as i32,
+                width,
+                height,
+                0,
+                format,
+                pixel_type,
+                glow::PixelUnpackData::Slice(None),
+            );
+            let framebuffer = self.gl.create_framebuffer().map_err(|error| {
+                self.gl.delete_texture(texture);
+                MpvError::OpenGl(error)
+            })?;
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(framebuffer));
+            self.gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(texture),
+                0,
+            );
+            let status = self.gl.check_framebuffer_status(glow::FRAMEBUFFER);
+            if status != glow::FRAMEBUFFER_COMPLETE {
+                self.gl.delete_framebuffer(framebuffer);
+                self.gl.delete_texture(texture);
+                return Err(MpvError::IncompleteOpenGlFramebuffer { status });
+            }
+            Ok(ExternalVideoTarget {
+                texture,
+                framebuffer,
+                width,
+                height,
+                internal_format,
+            })
+        }
+    }
+
+    /// Frees a target created with [`Self::create_external_target`].
+    pub fn delete_external_target(&mut self, target: ExternalVideoTarget) {
+        // SAFETY: The target was created in this current context.
+        unsafe {
+            self.gl.delete_framebuffer(target.framebuffer);
+            self.gl.delete_texture(target.texture);
+        }
+    }
+
+    /// Renders the next MPV frame into an external target.
+    ///
+    /// `depth` is the target bit depth passed through
+    /// `MPV_RENDER_PARAM_DEPTH`; use 10 for an RGB10_A2 target.
+    pub fn render_external(
+        &mut self,
+        target: &ExternalVideoTarget,
+        depth: c_int,
+    ) -> Result<bool, MpvError> {
+        let update_requested = self._redraw.pending.swap(false, Ordering::AcqRel);
+        if !update_requested && !self.frame_pending && !self.force_render {
+            return Ok(false);
+        }
+        let state_guard =
+            FrameOpenGlStateGuard::new(&self.gl, self.capabilities, self.slint_viewport);
+        prepare_for_mpv_frame(&self.gl, self.capabilities);
+        if update_requested {
+            // SAFETY: Called on the render-context owner thread with Slint's
+            // OpenGL context current.
+            let update_flags = unsafe { (self.client.api.render_update)(self.context.as_ptr()) };
+            if update_flags & RENDER_UPDATE_FRAME != 0 {
+                self.frame_pending = true;
+            }
+        }
+        if !self.frame_pending && !self.force_render {
+            drop(state_guard);
+            self.capture_gl_error();
+            return Ok(false);
+        }
+        let framebuffer_id = target.framebuffer.0.get() as c_int;
+        // SAFETY: The target belongs to this context.
+        unsafe {
+            self.gl
+                .bind_framebuffer(glow::FRAMEBUFFER, Some(target.framebuffer));
+            self.gl.viewport(0, 0, target.width, target.height);
+            self.gl.disable(glow::SCISSOR_TEST);
+            self.gl.color_mask(true, true, true, true);
+            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+        }
+        let mut framebuffer = MpvOpenGlFbo {
+            fbo: framebuffer_id,
+            width: target.width,
+            height: target.height,
+            internal_format: target.internal_format as c_int,
+        };
+        // DMA-BUF scanout has no texture-origin metadata: the compositor
+        // interprets row 0 as the top row. Flip MPV's bottom-left output so
+        // the native plane is not upside down.
+        let mut flip_y: c_int = 1;
+        let mut depth = depth;
+        let mut params = [
+            MpvRenderParam {
+                param_type: RENDER_PARAM_OPENGL_FBO,
+                data: (&mut framebuffer as *mut MpvOpenGlFbo).cast(),
+            },
+            MpvRenderParam {
+                param_type: RENDER_PARAM_FLIP_Y,
+                data: (&mut flip_y as *mut c_int).cast(),
+            },
+            MpvRenderParam {
+                param_type: RENDER_PARAM_DEPTH,
+                data: (&mut depth as *mut c_int).cast(),
+            },
+            MpvRenderParam {
+                param_type: RENDER_PARAM_INVALID,
+                data: std::ptr::null_mut(),
+            },
+        ];
+        // SAFETY: Same context and thread that created the render context.
+        let result = self.client.api.result(unsafe {
+            (self.client.api.render)(self.context.as_ptr(), params.as_mut_ptr())
+        });
+        drop(state_guard);
+        self.capture_gl_error();
+        result.map(|()| {
+            self.force_render = false;
+            self.frame_pending = false;
+            true
+        })
+    }
+
+    /// Creates a 10-bit RGB target suitable for HDR10 scanout.
+    pub fn create_rgb10_target(
+        &mut self,
+        width: i32,
+        height: i32,
+    ) -> Result<ExternalVideoTarget, MpvError> {
+        self.create_external_target(width, height, glow::RGB10_A2)
+    }
+
+    /// Switches MPV to PQ/BT.2020 output for the native HDR plane, or back to
+    /// the 8-bit sRGB path that Slint composites.
+    pub fn set_hdr_passthrough(&self, enabled: bool) -> Result<(), MpvError> {
+        if enabled {
+            self.client.set_string("target-trc", "pq")?;
+            self.client.set_string("target-prim", "bt.2020")?;
+            self.client.set_string("target-peak", "1000")?;
+            self.client.set_string("tone-mapping", "clip")?;
+            self.client.set_flag("hdr-compute-peak", false)?;
+            self.client.set_string("dither-depth", "10")?;
+        } else {
+            self.client.set_string("target-trc", "srgb")?;
+            self.client.set_string("target-prim", "bt.709")?;
+            self.client.set_string("target-peak", "auto")?;
+            self.client.set_string("tone-mapping", "bt.2390")?;
+            self.client.set_flag("hdr-compute-peak", true)?;
+            self.client.set_string("dither-depth", "8")?;
+        }
+        self.client.set_flag("target-colorspace-hint", false)
     }
 
     fn capture_gl_error(&mut self) {

@@ -4884,6 +4884,17 @@ fn apply_state_to_ui(
         ui.set_player_hwdec(decoder.into());
     }
 
+    if previous.is_none_or(|previous| {
+        previous.dropped_frames != state.dropped_frames
+            || previous.decoder_dropped_frames != state.decoder_dropped_frames
+            || previous.delayed_frames != state.delayed_frames
+            || previous.estimated_fps != state.estimated_fps
+            || previous.display_fps != state.display_fps
+            || previous.avsync != state.avsync
+    }) {
+        ui.set_player_performance(format_performance(&state).into());
+    }
+
     let buffered_percent = if state.duration > 0.0 {
         let current_pos = state.time.max(0.0);
         let buffered_end = (current_pos + state.buffered_until).min(state.duration);
@@ -4910,6 +4921,30 @@ fn apply_state_to_ui(
     projection.previous = Some(state);
 }
 
+/// Compact one-line summary of MPV's live performance counters for the
+/// Statistics panel: display/decoded FPS, VO/decoder/delayed drops and A/V sync.
+fn format_performance(state: &PlaybackState) -> String {
+    if !state.loaded {
+        return String::new();
+    }
+    let fps = if state.display_fps > 0.0 && state.estimated_fps > 0.0 {
+        format!("{:.2}/{:.2} fps", state.estimated_fps, state.display_fps)
+    } else if state.estimated_fps > 0.0 {
+        format!("{:.2} fps", state.estimated_fps)
+    } else if state.display_fps > 0.0 {
+        format!("{:.2} Hz", state.display_fps)
+    } else {
+        "fps N/A".to_owned()
+    };
+    format!(
+        "{fps} · drop {}/{}/{} · a/v {:+.1} ms",
+        state.dropped_frames,
+        state.decoder_dropped_frames,
+        state.delayed_frames,
+        state.avsync * 1000.0
+    )
+}
+
 fn install_renderer(
     ui: &MainWindow,
     source: RenderSource,
@@ -4925,6 +4960,7 @@ fn install_renderer(
     );
     let window_weak = ui.as_weak();
     let mut context: Option<RenderContext> = None;
+    let mut hdr_plane = crate::wayland_hdr::HdrPlaneState::default();
     let mut preview_context: Option<RenderContext> = None;
     let mut preview_context_attempted = false;
     let mut prewarm_spawned = false;
@@ -5091,6 +5127,9 @@ fn install_renderer(
                         {
                             tracing::error!(%error, "MPV hidden-frame update processing failed");
                         }
+                        if let Some(context) = context.as_mut() {
+                            hdr_plane.render(&ui, context, false, 0, 0);
+                        }
                         render_preview_frame(
                             &ui,
                             &window_weak,
@@ -5099,6 +5138,27 @@ fn install_renderer(
                             &mut preview_context,
                             &mut preview_context_attempted,
                         );
+                        return;
+                    }
+
+                    let window_size = ui.window().size();
+                    let window_width = i32::try_from(window_size.width).unwrap_or(i32::MAX);
+                    let window_height = i32::try_from(window_size.height).unwrap_or(i32::MAX);
+                    let state_snapshot = read_state(&playback_state);
+                    let hdr_wanted = state_snapshot.hdr_content
+                        && state_snapshot.hdr_mode == HdrMode::Passthrough
+                        && !ui.get_player_pip_active();
+                    if let Some(context) = context.as_mut()
+                        && hdr_plane.render(
+                            &ui,
+                            context,
+                            hdr_wanted,
+                            window_width,
+                            window_height,
+                        )
+                    {
+                        // The native Wayland plane owns presentation this
+                        // frame; Slint keeps drawing only the UI above it.
                         return;
                     }
 
@@ -5243,6 +5303,12 @@ fn install_renderer(
                     }) {
                         tracing::debug!(%error, "could not queue MPV surface teardown update");
                     }
+                    if let Some(context) = context.as_mut() {
+                        hdr_plane.reset(context);
+                    }
+                    if let Some(ui) = window_weak.upgrade() {
+                        ui.set_player_hdr_plane_active(false);
+                    }
                     context = None;
                     preview_context = None;
                     preview_context_attempted = false;
@@ -5299,8 +5365,14 @@ fn create_render_context(
     let wayland_display = window_weak
         .upgrade()
         .and_then(|ui| wayland_display_handle(ui.window()));
+    let x11_display = if wayland_display.is_none() {
+        playback_mpv::x11_display()
+    } else {
+        None
+    };
     let redraw_weak = window_weak.clone();
-    let render_context = source.create_context(get_proc_address, wayland_display, move || {
+    let render_context =
+        source.create_context(get_proc_address, wayland_display, x11_display, move || {
         crate::performance::counters().record_mpv_redraw_post();
         let redraw_weak = redraw_weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -5324,6 +5396,7 @@ fn create_render_context(
         shader_support = ?diagnostics.video_shader_support(),
         render_api = render_context.render_api().label(),
         wayland_display = wayland_display.is_some(),
+        x11_display = x11_display.is_some(),
         "MPV is sharing Slint's OpenGL context"
     );
     Ok(render_context)
@@ -5347,8 +5420,14 @@ fn create_preview_render_context(
     let wayland_display = window_weak
         .upgrade()
         .and_then(|ui| wayland_display_handle(ui.window()));
+    let x11_display = if wayland_display.is_none() {
+        playback_mpv::x11_display()
+    } else {
+        None
+    };
     let redraw_weak = window_weak.clone();
-    let render_context = source.create_context(get_proc_address, wayland_display, move || {
+    let render_context =
+        source.create_context(get_proc_address, wayland_display, x11_display, move || {
         let redraw_weak = redraw_weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             let active = crate::preview_player::global().is_some_and(|player| player.render_active());
@@ -5362,6 +5441,7 @@ fn create_preview_render_context(
         renderer = %diagnostics.renderer,
         render_api = render_context.render_api().label(),
         wayland_display = wayland_display.is_some(),
+        x11_display = x11_display.is_some(),
         "trailer preview render context created on Slint's OpenGL thread"
     );
     Ok(render_context)

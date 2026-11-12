@@ -106,9 +106,14 @@ The next releases focus on refining the native experience, visual consistency, a
   - El panel de Estadísticas del reproductor muestra `hwdec-current`, de modo que se distingue `vaapi`, `vaapi-copy` y decodificación por software.
   - El preview de trailers ahora renderiza en el contexto OpenGL de Slint con una textura prestada, igual que el player principal: se eliminaron `glReadPixels` y la copia a CPU por frame. El worker solo decodifica y controla la reproducción.
   - El tamaño del preview se adapta a la superficie activa (tarjeta, panel, ficha o pantalla completa) y el formato de trailer prefiere 1080p.
+  - En X11 se pasa un `Display*` real al contexto de render, habilitando VA-API sin copia también fuera de Wayland.
+  - El panel de Estadísticas muestra FPS, drops de VO/decoder/retardados y A/V sync en vivo, además de decoder y renderer.
+  - `mpv-omniphony.patch` fue rebasado a 0.42 (incluye el cambio a `mp_new_weak_client`); sigue siendo opcional porque requiere `liborender.so`.
+  - HDR real en Wayland (experimental): con contenido HDR y modo Passthrough, el video se renderiza a targets RGB10_A2, se exporta por DMA-BUF y se adjunta a una `wl_subsurface` debajo de Slint; la UI sigue en SDR. Usa `wp_color_management_v1` (BT.2020/PQ) y cae al path SDR si el compositor no lo soporta.
 - **Fase 6 — Evaluación Continua de `gpu-next` en libmpv**:
   - En mpv 0.42 la render API de libmpv sigue exponiendo solo los backends `gpu` y `sw`; `gpu-next` todavía no se puede usar con `vo=libmpv`.
-  - El cliente ya prueba `MPV_RENDER_API_TYPE_OPENGL_NEXT` (`opengl-next`) y cae a `opengl` si el runtime no lo soporta; se puede forzar con `STREMIO_MPV_RENDER_BACKEND=gpu|gpu-next`. Queda pendiente construir un libmpv con el parche upstream (PR #18607) para activarlo.
+  - El cliente ya prueba `MPV_RENDER_API_TYPE_OPENGL_NEXT` (`opengl-next`) y cae a `opengl` si el runtime no lo soporta; se puede forzar con `STREMIO_MPV_RENDER_BACKEND=gpu|gpu-next`. El parche upstream (#18607) está rebasado sobre 0.42 en `.github/patches/mpv-gpu-next-opengl.patch`; el Flatpak lo aplica y el workflow `MPV runtime builds` puede compilar un runtime `gpu-next` para Linux/Windows.
+  - Validado en Mesa/Intel Arc/Wayland con GLES 3.2: `opengl-next` inicializa, usa `vaapi` sin copia y renderiza frames correctamente.
   - Monitorear las cabeceras de libmpv (`render.h`) para un futuro selector de backend (`MPV_RENDER_PARAM_BACKEND`).
   - Preservar `vo=libmpv` con tone mapping automático a SDR hasta que exista soporte de renderizado directo / subsuperficies nativas con composición HDR de 10/16 bits en Slint.
 

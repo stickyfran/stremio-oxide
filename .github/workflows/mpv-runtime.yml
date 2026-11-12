@@ -27,13 +27,18 @@ on:
         default: https://github.com/mpv-player/mpv.git
       mpv_ref:
         description: mpv commit or tag (blank keeps whatever mpv-winbuild pins)
-        default: ""
+        default: "v0.42.0"
       gcc_arch:
         description: Microarchitecture level (-march) to compile for
         default: x86-64-v3
       extra_meson_args:
         description: 'Extra mpv meson args, e.g. "-Dorender=enabled -Dasio=enabled"'
         default: ""
+      runtime_profile:
+        description: Patch set to build
+        type: choice
+        options: [omniphony, gpu-next, stock]
+        default: omniphony
 
 permissions:
   contents: read
@@ -88,6 +93,7 @@ jobs:
           MPV_REPOSITORY: ${{ inputs.mpv_repository }}
           MPV_REF: ${{ inputs.mpv_ref }}
           EXTRA_MESON_ARGS: ${{ inputs.extra_meson_args }}
+          RUNTIME_PROFILE: ${{ inputs.runtime_profile }}
         run: |
           set -euo pipefail
           # Every edit is anchored on a line upstream owns. If an anchor moves,
@@ -100,6 +106,7 @@ jobs:
           repository = os.environ["MPV_REPOSITORY"]
           ref = os.environ["MPV_REF"]
           extra = os.environ["EXTRA_MESON_ARGS"].split()
+          profile = os.environ["RUNTIME_PROFILE"]
 
           anchor = "GIT_REPOSITORY https://github.com/mpv-player/mpv.git"
           if text.count(anchor) != 1:
@@ -108,22 +115,39 @@ jobs:
           if ref:
               replacement += f"\n    GIT_TAG {ref}"
 
-          # Add PATCH_COMMAND to apply the omniphony spatial audio decoder patch
-          patch_path = "${CMAKE_CURRENT_SOURCE_DIR}/../stremio-native/.github/patches/mpv-omniphony.patch"
-          replacement += f"\n    PATCH_COMMAND git -C <SOURCE_DIR> reset --hard && git -C <SOURCE_DIR> clean -fd && git -C <SOURCE_DIR> apply --3way {patch_path}"
+          patches = {
+              "omniphony": "mpv-omniphony.patch",
+              "gpu-next": "mpv-gpu-next-opengl.patch",
+          }
+          if profile in patches and not ref:
+              sys.exit(
+                  f"::error::runtime_profile={profile} requires mpv_ref pinned to v0.42.0"
+              )
+          if profile in patches:
+              patch_path = (
+                  "${CMAKE_CURRENT_SOURCE_DIR}/../stremio-native/.github/patches/"
+                  + patches[profile]
+              )
+              replacement += (
+                  "\n    PATCH_COMMAND git -C <SOURCE_DIR> reset --hard"
+                  " && git -C <SOURCE_DIR> clean -fd"
+                  f" && git -C <SOURCE_DIR> apply --3way {patch_path}"
+              )
 
           text = text.replace(anchor, replacement, 1)
 
           meson_anchor = "        -Dlibmpv=true\n"
           if text.count(meson_anchor) != 1:
               sys.exit("::error::packages/mpv.cmake lost its -Dlibmpv=true anchor")
-          added = "        -Dorender=enabled\n"
+          added = ""
+          if profile == "omniphony":
+              added += "        -Dorender=enabled\n"
           if extra:
               added += "".join(f"        {argument}\n" for argument in extra)
           text = text.replace(meson_anchor, meson_anchor + added, 1)
 
           open(path, "w").write(text)
-          print(f"rewrote {path}")
+          print(f"rewrote {path} for runtime profile {profile}")
           PY
           echo "resulting mpv package definition:"
           sed -n '20,60p' packages/mpv.cmake
@@ -139,9 +163,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: mpv-ccache-${{ inputs.gcc_arch }}-${{ hashFiles('.github/patches/mpv-winbuild-avx-stack-alignment.patch', '.github/patches/mpv-omniphony.patch') }}-${{ github.run_id }}
+          key: mpv-ccache-${{ inputs.gcc_arch }}-${{ hashFiles('.github/patches/mpv-winbuild-avx-stack-alignment.patch', '.github/patches/mpv-omniphony.patch', '.github/patches/mpv-gpu-next-opengl.patch') }}-${{ github.run_id }}
           restore-keys: |
-            mpv-ccache-${{ inputs.gcc_arch }}-${{ hashFiles('.github/patches/mpv-winbuild-avx-stack-alignment.patch', '.github/patches/mpv-omniphony.patch') }}-
+            mpv-ccache-${{ inputs.gcc_arch }}-${{ hashFiles('.github/patches/mpv-winbuild-avx-stack-alignment.patch', '.github/patches/mpv-omniphony.patch', '.github/patches/mpv-gpu-next-opengl.patch') }}-
             mpv-ccache-${{ inputs.gcc_arch }}-
 
       - name: Build the cross toolchain and libmpv
@@ -236,7 +260,7 @@ jobs:
             libpulse-dev libasound2-dev libjack-jackd2-dev \
             libwayland-dev wayland-protocols libxkbcommon-dev \
             libx11-dev libxext-dev libxpresent-dev libxrandr-dev libxss-dev libxv-dev \
-            libvulkan-dev libshaderc-dev libuchardet-dev liblua5.2-dev libmujs-dev
+            libvulkan-dev libshaderc-dev libuchardet-dev liblua5.2-dev libmujs-dev patchelf
 
       - name: Verify the assembler supports the workaround
         run: |
@@ -248,19 +272,50 @@ jobs:
           fi
           as --version | head -1
 
+      - name: Build libplacebo 7.387 with OpenGL
+        if: inputs.runtime_profile != 'stock'
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 ships libplacebo 6.x; mpv 0.42 requires 7.387 and the
+          # gpu-next render API needs libplacebo's OpenGL backend.
+          git clone --depth 1 --branch v7.387.0 --recurse-submodules \
+            --shallow-submodules https://github.com/haasn/libplacebo.git
+          meson setup libplacebo-build libplacebo \
+            --buildtype=release \
+            --prefix="$PWD/lp-prefix" \
+            -Dopengl=enabled \
+            -Dvulkan=disabled \
+            -Dd3d11=disabled \
+            -Ddemos=false \
+            -Dtests=false \
+            -Dglslang=disabled \
+            -Dshaderc=disabled
+          ninja -C libplacebo-build install
+          PKG_CONFIG_PATH="$PWD/lp-prefix/lib/pkgconfig" pkg-config --modversion libplacebo
+
       - name: Check out mpv
         run: |
           set -euo pipefail
+          ref="${{ inputs.mpv_ref }}"
+          if [ -z "$ref" ] && [ "${{ inputs.runtime_profile }}" != "stock" ]; then
+            ref=v0.42.0
+          fi
           git clone --filter=tree:0 "${{ inputs.mpv_repository }}" mpv
-          if [ -n "${{ inputs.mpv_ref }}" ]; then
-            git -C mpv checkout --detach "${{ inputs.mpv_ref }}"
+          if [ -n "$ref" ]; then
+            git -C mpv checkout --detach "$ref"
           fi
           git -C mpv --no-pager log -1 --format='building mpv %h %s'
 
-      - name: Apply the omniphony patch
+      - name: Apply the runtime patch
+        if: inputs.runtime_profile != 'stock'
         run: |
           set -euo pipefail
-          patch=.github/patches/mpv-omniphony.patch
+          profile="${{ inputs.runtime_profile }}"
+          if [ "$profile" = "gpu-next" ]; then
+            patch=.github/patches/mpv-gpu-next-opengl.patch
+          else
+            patch=.github/patches/mpv-omniphony.patch
+          fi
           git -C mpv apply --3way --verbose "$GITHUB_WORKSPACE/$patch"
 
       - name: Build libmpv
@@ -271,15 +326,24 @@ jobs:
           # aligned stack spills cannot fault on a 16-byte aligned stack.
           CFLAGS: -O2 -march=${{ inputs.gcc_arch }} -Wa,-muse-unaligned-vector-move
           CXXFLAGS: -O2 -march=${{ inputs.gcc_arch }} -Wa,-muse-unaligned-vector-move
+          PKG_CONFIG_PATH: ${{ github.workspace }}/lp-prefix/lib/pkgconfig
+          LD_LIBRARY_PATH: ${{ github.workspace }}/lp-prefix/lib
         run: |
           set -euo pipefail
+          extra=""
+          if [ "${{ inputs.runtime_profile }}" = "omniphony" ]; then
+            extra="$extra -Dorender=enabled"
+          fi
+          if [ "${{ inputs.runtime_profile }}" != "stock" ]; then
+            extra="$extra -Dvulkan=disabled"
+          fi
           meson setup build \
             --buildtype=release \
             --prefix=/usr \
             -Dlibmpv=true \
-            -Dorender=enabled \
             -Dcplayer=false \
             -Dtests=false \
+            $extra \
             ${{ inputs.extra_meson_args }}
           meson compile -C build
 
@@ -292,13 +356,26 @@ jobs:
         run: |
           set -euo pipefail
           version=$(git -C mpv describe --tags --always)
+          profile="${{ inputs.runtime_profile }}"
           stage=libmpv-linux-x86_64
           mkdir -p "$stage/lib" "$stage/include/mpv"
           cp -a mpv/build/libmpv.so* "$stage/lib/"
           cp mpv/include/mpv/*.h "$stage/include/mpv/"
           cp mpv/LICENSE.GPL mpv/LICENSE.LGPL "$stage/"
-          printf 'mpv %s\nmarch=%s\nbuilt with -Wa,-muse-unaligned-vector-move + omniphony patch (-Dorender=enabled)\n' \
-            "$version" "${{ inputs.gcc_arch }}" > "$stage/SOURCE.txt"
+          if [ "$profile" != "stock" ]; then
+            cp -a lp-prefix/lib/libplacebo.so* "$stage/lib/"
+            patchelf --set-rpath '$ORIGIN' "$(readlink -f "$stage/lib/libmpv.so.2")"
+            patchelf --set-rpath '$ORIGIN' "$(readlink -f "$stage/lib/libplacebo.so.387")"
+            if [ "$profile" = "gpu-next" ]; then
+              built="gpu-next patch (opengl-next) + libplacebo v7.387.0"
+            else
+              built="$profile patch (-Dorender=enabled) + libplacebo v7.387.0"
+            fi
+          else
+            built="stock sources (no runtime patch)"
+          fi
+          printf 'mpv %s\nmarch=%s\nbuilt with -Wa,-muse-unaligned-vector-move, %s\n' \
+            "$version" "${{ inputs.gcc_arch }}" "$built" > "$stage/SOURCE.txt"
           tar -caf "$stage-$version.tar.zst" "$stage"
           {
             echo "### Linux libmpv (${{ inputs.gcc_arch }})"

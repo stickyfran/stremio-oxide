@@ -66,6 +66,7 @@
             "buildsystem": "meson",
             "config-opts": [
                 "-Dvulkan=enabled",
+                "-Dopengl=enabled",
                 "-Ddemos=false"
             ],
             "cleanup": [
@@ -127,6 +128,10 @@
                     "type": "archive",
                     "url": "https://github.com/mpv-player/mpv/archive/v0.42.0.tar.gz",
                     "sha256": "bcfebbfa2b65a6d88dc97ea18117831072373e38b5785a2afb874ed4df5070dd"
+                },
+                {
+                    "type": "patch",
+                    "path": "../.github/patches/mpv-gpu-next-opengl.patch"
                 }
             ]
         },

@@ -189,7 +189,7 @@ export component MainWindow inherits Window {
     min-width: root.player-pip-active ? 120px : 1000px;
     min-height: root.player-pip-active ? 68px : 600px;
     no-frame: root.player-pip-active;
-    background: Theme.background;
+    background: player-hdr-plane-active ? transparent : Theme.background;
     default-font-family: Theme.font-family;
     default-font-size: Theme.root-font-size;
     forward-focus: app-shortcuts;
@@ -800,12 +800,14 @@ export component MainWindow inherits Window {
     in-out property <int> player-hdr-mode: 0;
     in-out property <bool> player-hdr-content: false;
     in-out property <bool> player-hdr-passthrough-available: false;
+    in-out property <bool> player-hdr-plane-active: false;
     in-out property <bool> player-pip-active: false;
     in-out property <string> player-video-format: "";
     in-out property <string> player-audio-format: "";
     in-out property <string> player-file-format: "";
     in-out property <string> player-hwdec: "";
     in-out property <string> player-render-api: "";
+    in-out property <string> player-performance: "";
     in-out property <float> player-buffered-percent: 0.0;
     in-out property <string> player-download-speed: "";
     in-out property <string> player-upload-speed: "";
@@ -2755,12 +2757,14 @@ export component MainWindow inherits Window {
             hdr-mode: player-hdr-mode;
             hdr-content: player-hdr-content;
             hdr-passthrough-available: player-hdr-passthrough-available;
+            hdr-plane-active: player-hdr-plane-active;
             pip-active: player-pip-active;
             video-format: player-video-format;
             audio-format: player-audio-format;
             file-format: player-file-format;
             hardware-decoder: player-hwdec;
             render-api: player-render-api;
+            performance: player-performance;
             buffered-percent: player-buffered-percent;
             download-speed: player-download-speed;
             upload-speed: player-upload-speed;

@@ -267,6 +267,12 @@ pub struct PlaybackState {
     pub hardware_decoder: Option<String>,
     pub video_dw: Option<u32>,
     pub video_dh: Option<u32>,
+    pub dropped_frames: u64,
+    pub decoder_dropped_frames: u64,
+    pub delayed_frames: u64,
+    pub avsync: f64,
+    pub estimated_fps: f64,
+    pub display_fps: f64,
 }
 
 impl Default for PlaybackState {
@@ -307,6 +313,12 @@ impl Default for PlaybackState {
             hardware_decoder: None,
             video_dw: None,
             video_dh: None,
+            dropped_frames: 0,
+            decoder_dropped_frames: 0,
+            delayed_frames: 0,
+            avsync: 0.0,
+            estimated_fps: 0.0,
+            display_fps: 0.0,
         }
     }
 }
@@ -591,12 +603,24 @@ impl PlaybackRuntime {
         client.set_option("video-timing-offset", "0")?;
         client.set_option("idle", "yes")?;
         client.set_option("keep-open", "no")?;
-        client.set_option("cache", "no")?;
+        client.set_option("cache", "auto")?;
         client.set_option("cache-pause", "yes")?;
         client.set_option("cache-pause-initial", "no")?;
         client.set_option("cache-secs", "30")?;
         client.set_option("demuxer-max-bytes", "67108864")?; // 64 MiB
         client.set_option("demuxer-max-back-bytes", "33554432")?; // 32 MiB
+        // Built-in GL/GLES scalers: no user shaders required, so these also
+        // work on the GLES 3.x context that Slint gives us on Wayland.
+        client.set_option("scale", "lanczos")?;
+        client.set_option("dscale", "mitchell")?;
+        client.set_option("cscale", "bicubic")?;
+        client.set_option("correct-downscaling", "yes")?;
+        client.set_option("linear-downscaling", "yes")?;
+        client.set_option("deband", "yes")?;
+        client.set_option("deband-iterations", "2")?;
+        client.set_option("deband-threshold", "48")?;
+        client.set_option("deband-range", "16")?;
+        client.set_option("deband-grain", "32")?;
         client.set_option("hr-seek", "yes")?;
         client.set_option("ad-lavc-threads", "0")?;
         client.set_option("audio-fallback-to-null", "yes")?;
@@ -1237,9 +1261,19 @@ fn observe_properties(client: &MpvClient) -> Result<(), MpvError> {
         (23, "video-params/gamma", FORMAT_STRING),
         (24, "video-params/dw", FORMAT_INT64),
         (25, "video-params/dh", FORMAT_INT64),
+        (26, "frame-drop-count", FORMAT_INT64),
+        (27, "decoder-frame-drop-count", FORMAT_INT64),
+        (28, "vo-delayed-frame-count", FORMAT_INT64),
+        (29, "avsync", FORMAT_DOUBLE),
+        (30, "estimated-vf-fps", FORMAT_DOUBLE),
+        (31, "display-fps", FORMAT_DOUBLE),
     ];
     for (id, name, format) in properties {
-        client.observe(id, name, format)?;
+        // Older runtimes may not expose every statistic property. A missing
+        // counter must degrade telemetry, not prevent playback from starting.
+        if let Err(error) = client.observe(id, name, format) {
+            tracing::debug!(%error, property = name, "could not observe MPV property");
+        }
     }
     Ok(())
 }
@@ -1632,17 +1666,36 @@ fn apply_hdr_mode(client: &MpvClient, requested: HdrMode) -> (HdrMode, bool, Res
 }
 
 fn configure_hdr_mode(client: &MpvClient, mode: HdrMode) -> Result<(), MpvError> {
-    let (target_hint, tone_mapping, compute_peak) = hdr_properties(mode);
-    client
-        .set_flag("target-colorspace-hint", target_hint)
-        .and_then(|()| client.set_string("tone-mapping", tone_mapping))
-        .and_then(|()| client.set_flag("hdr-compute-peak", compute_peak))
+    let (target_hint, tone_mapping, compute_peak, gamut_mapping) = hdr_properties(mode);
+    let options = [
+        ("target-colorspace-hint", target_hint.to_string()),
+        ("tone-mapping", tone_mapping.to_owned()),
+        ("gamut-mapping-mode", gamut_mapping.to_owned()),
+        ("hdr-compute-peak", if compute_peak { "yes" } else { "no" }.to_owned()),
+        // The shared Slint FBO is always composed as 8-bit sRGB/BT.709. Telling
+        // MPV the real target avoids guessing and lets libplacebo/gpu do a
+        // better HDR->SDR mapping, including dithering down to 8 bits.
+        ("target-trc", "srgb".to_owned()),
+        ("target-prim", "bt.709".to_owned()),
+        ("dither-depth", "8".to_owned()),
+    ];
+    for (name, value) in options {
+        if let Err(error) = client.set_string(name, &value) {
+            // Cosmetic color options must never prevent playback from starting
+            // on an older libmpv that renamed one of them.
+            tracing::debug!(%error, option = name, "could not apply HDR/output option");
+        }
+    }
+    Ok(())
 }
 
-fn hdr_properties(mode: HdrMode) -> (bool, &'static str, bool) {
+fn hdr_properties(mode: HdrMode) -> (bool, &'static str, bool, &'static str) {
     match mode {
-        HdrMode::Auto | HdrMode::ToneMap | HdrMode::Passthrough => (false, "auto", true),
-        HdrMode::Disabled => (false, "clip", false),
+        HdrMode::Auto | HdrMode::ToneMap => (false, "bt.2390", true, "auto"),
+        // Declipping without metadata: still mapped to SDR, just no dynamic
+        // peak detection and no extra gamut roll-off.
+        HdrMode::Passthrough => (false, "bt.2390", true, "auto"),
+        HdrMode::Disabled => (false, "clip", false, "clip"),
     }
 }
 
@@ -1891,6 +1944,36 @@ fn update_property(event: &MpvEvent, state: &mut PlaybackState) -> PropertyUpdat
                 .filter(|&v| v > 0)
                 .map(|v| v as u32);
             return PropertyUpdate::StateOnly;
+        }
+        "frame-drop-count" => {
+            state.dropped_frames = property_int64(property)
+                .and_then(|value| u64::try_from(value).ok())
+                .unwrap_or(state.dropped_frames)
+        }
+        "decoder-frame-drop-count" => {
+            state.decoder_dropped_frames = property_int64(property)
+                .and_then(|value| u64::try_from(value).ok())
+                .unwrap_or(state.decoder_dropped_frames)
+        }
+        "vo-delayed-frame-count" => {
+            state.delayed_frames = property_int64(property)
+                .and_then(|value| u64::try_from(value).ok())
+                .unwrap_or(state.delayed_frames)
+        }
+        "avsync" => {
+            state.avsync = property_double(property)
+                .filter(|value| value.is_finite())
+                .unwrap_or(state.avsync)
+        }
+        "estimated-vf-fps" => {
+            state.estimated_fps = property_double(property)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(state.estimated_fps)
+        }
+        "display-fps" => {
+            state.display_fps = property_double(property)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .unwrap_or(state.display_fps)
         }
         "track-list" => {
             if let Some(node) = property_node(property) {
@@ -2301,6 +2384,9 @@ mod logic_tests {
 
     #[test]
     fn hdr_properties_should_disable_passthrough_for_tone_mapping() {
-        assert_eq!(hdr_properties(HdrMode::ToneMap), (false, "auto", true));
+        assert_eq!(
+            hdr_properties(HdrMode::ToneMap),
+            (false, "bt.2390", true, "auto")
+        );
     }
 }

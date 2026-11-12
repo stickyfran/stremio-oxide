@@ -1,6 +1,6 @@
 diff --git a/.github/workflows/build-windows-asio.yml b/.github/workflows/build-windows-asio.yml
 new file mode 100644
-index 0000000..4b64303
+index 000000000..4b6430311
 --- /dev/null
 +++ b/.github/workflows/build-windows-asio.yml
 @@ -0,0 +1,113 @@
@@ -119,7 +119,7 @@ index 0000000..4b64303
 +            _build/libmpv-2.dll
 diff --git a/audio/decode/ad_orender.c b/audio/decode/ad_orender.c
 new file mode 100644
-index 0000000..9e8b739
+index 000000000..9e8b739da
 --- /dev/null
 +++ b/audio/decode/ad_orender.c
 @@ -0,0 +1,864 @@
@@ -989,7 +989,7 @@ index 0000000..9e8b739
 +};
 diff --git a/audio/decode/ad_orender.h b/audio/decode/ad_orender.h
 new file mode 100644
-index 0000000..d9db0d6
+index 000000000..d9db0d616
 --- /dev/null
 +++ b/audio/decode/ad_orender.h
 @@ -0,0 +1,39 @@
@@ -1033,7 +1033,7 @@ index 0000000..d9db0d6
 +
 +#endif
 diff --git a/audio/out/ao.c b/audio/out/ao.c
-index 4e5e9e3..1c11006 100644
+index 4e5e9e3df..1c110064d 100644
 --- a/audio/out/ao.c
 +++ b/audio/out/ao.c
 @@ -51,6 +51,7 @@ extern const struct ao_driver audio_out_opensles;
@@ -1056,7 +1056,7 @@ index 4e5e9e3..1c11006 100644
  #endif
 diff --git a/audio/out/ao_asio.c b/audio/out/ao_asio.c
 new file mode 100644
-index 0000000..c215e10
+index 000000000..c215e1033
 --- /dev/null
 +++ b/audio/out/ao_asio.c
 @@ -0,0 +1,874 @@
@@ -1936,7 +1936,7 @@ index 0000000..c215e10
 +};
 diff --git a/audio/out/ao_asio.h b/audio/out/ao_asio.h
 new file mode 100644
-index 0000000..52640a3
+index 000000000..52640a3b6
 --- /dev/null
 +++ b/audio/out/ao_asio.h
 @@ -0,0 +1,242 @@
@@ -2183,10 +2183,10 @@ index 0000000..52640a3
 +
 +#endif /* MP_AO_ASIO_H_ */
 diff --git a/audio/out/ao_wasapi_utils.c b/audio/out/ao_wasapi_utils.c
-index 1c89e10..81d6777 100644
+index 8914e3e0c..4428ef8f6 100644
 --- a/audio/out/ao_wasapi_utils.c
 +++ b/audio/out/ao_wasapi_utils.c
-@@ -435,7 +435,12 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
+@@ -444,7 +444,12 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
      struct wasapi_state *state = ao->priv;
      struct mp_chmap_sel chmap_sel = {.tmp = state};
      struct mp_chmap entry;
@@ -2200,7 +2200,7 @@ index 1c89e10..81d6777 100644
      char *channel_layouts[] =
          {"stereo", "5.1", "7.1", "6.1", "mono", "2.1", "4.0", "5.0",
           "3.0", "3.0(back)",
-@@ -443,7 +448,13 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
+@@ -452,7 +457,13 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
           "5.0(side)", "4.1",
           "5.1(side)", "6.0", "6.0(front)", "hexagonal",
           "6.1(back)", "6.1(front)", "7.0", "7.0(front)",
@@ -2215,7 +2215,7 @@ index 1c89e10..81d6777 100644
  
      wformat->Format.nSamplesPerSec = 0;
      for (int j = 0; channel_layouts[j]; j++) {
-@@ -458,6 +469,28 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
+@@ -467,6 +478,28 @@ static bool search_channels(struct ao *ao, WAVEFORMATEXTENSIBLE *wformat)
          }
      }
  
@@ -2246,7 +2246,7 @@ index 1c89e10..81d6777 100644
          change_waveformat_channels(wformat, &entry);
 diff --git a/common/orender_abi.h b/common/orender_abi.h
 new file mode 100644
-index 0000000..a29e268
+index 000000000..a29e268da
 --- /dev/null
 +++ b/common/orender_abi.h
 @@ -0,0 +1,325 @@
@@ -2577,7 +2577,7 @@ index 0000000..a29e268
 +#endif  /* ORENDER_H */
 diff --git a/common/orender_dl.c b/common/orender_dl.c
 new file mode 100644
-index 0000000..1eae97b
+index 000000000..1eae97b12
 --- /dev/null
 +++ b/common/orender_dl.c
 @@ -0,0 +1,423 @@
@@ -3006,7 +3006,7 @@ index 0000000..1eae97b
 +}
 diff --git a/common/orender_dl.h b/common/orender_dl.h
 new file mode 100644
-index 0000000..385aef3
+index 000000000..385aef3be
 --- /dev/null
 +++ b/common/orender_dl.h
 @@ -0,0 +1,104 @@
@@ -3115,7 +3115,7 @@ index 0000000..385aef3
 +
 +#endif
 diff --git a/filters/f_decoder_wrapper.c b/filters/f_decoder_wrapper.c
-index 5e2e8d7..5760516 100644
+index 4a2a3e4a1..a7a3df1b5 100644
 --- a/filters/f_decoder_wrapper.c
 +++ b/filters/f_decoder_wrapper.c
 @@ -26,6 +26,7 @@
@@ -3126,7 +3126,7 @@ index 5e2e8d7..5760516 100644
  #include "options/options.h"
  #include "common/msg.h"
  #include "options/m_config.h"
-@@ -395,6 +396,26 @@ struct mp_decoder_list *audio_decoder_list(void)
+@@ -421,6 +422,26 @@ struct mp_decoder_list *audio_decoder_list(void)
      return list;
  }
  
@@ -3153,8 +3153,8 @@ index 5e2e8d7..5760516 100644
  static bool reinit_decoder(struct priv *p)
  {
      if (p->decoder)
-@@ -432,6 +453,33 @@ static bool reinit_decoder(struct priv *p)
-                 talloc_free(spdif);
+@@ -466,6 +487,33 @@ static bool reinit_decoder(struct priv *p)
+                 }
              }
          }
 +
@@ -3187,7 +3187,7 @@ index 5e2e8d7..5760516 100644
      }
  
      if (!driver)
-@@ -1019,8 +1067,9 @@ static void read_frame(struct priv *p)
+@@ -1105,8 +1153,9 @@ static void read_frame(struct priv *p)
      p->reverse_queue_complete = false;
  
      frame = mp_pin_out_read(p->decoder->f->pins[1]);
@@ -3199,13 +3199,13 @@ index 5e2e8d7..5760516 100644
      mp_mutex_lock(&p->cache_lock);
      if (p->attached_picture && frame.type == MP_FRAME_VIDEO)
 diff --git a/filters/f_decoder_wrapper.h b/filters/f_decoder_wrapper.h
-index a352dc0..53f336d 100644
+index b39d3f5f2..6c89b1917 100644
 --- a/filters/f_decoder_wrapper.h
 +++ b/filters/f_decoder_wrapper.h
-@@ -106,6 +106,9 @@ struct mp_decoder_fns {
- extern const struct mp_decoder_fns vd_lavc;
+@@ -113,6 +113,9 @@ extern const struct mp_decoder_fns vd_lavc;
  extern const struct mp_decoder_fns ad_lavc;
  extern const struct mp_decoder_fns ad_spdif;
+ extern const struct mp_decoder_fns ad_dsd;
 +#if HAVE_ORENDER
 +extern const struct mp_decoder_fns ad_orender;
 +#endif
@@ -3213,10 +3213,10 @@ index a352dc0..53f336d 100644
  // Convenience wrapper for lavc based decoders. Treat lavc_state as private;
  // init to all-0 on init and resets.
 diff --git a/meson.build b/meson.build
-index fb10be5..a635217 100644
+index b15f31030..313a433ec 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -672,6 +672,16 @@ if features['libarchive']
+@@ -717,6 +717,16 @@ if features['libarchive']
                       'stream/stream_libarchive.c')
  endif
  
@@ -3233,7 +3233,7 @@ index fb10be5..a635217 100644
  libavdevice = dependency('libavdevice', version: '>= 60.3.100', required: get_option('libavdevice'))
  features += {'libavdevice': libavdevice.found()}
  if features['libavdevice']
-@@ -931,6 +941,14 @@ if features['wasapi']
+@@ -975,6 +985,14 @@ if features['wasapi']
                       'audio/out/ao_wasapi_utils.c')
  endif
  
@@ -3249,31 +3249,31 @@ index fb10be5..a635217 100644
  # video output dependencies
  caca_opt = get_option('caca').require(
 diff --git a/meson.options b/meson.options
-index 52782f7..c23bec1 100644
+index 32110828f..dae12de3c 100644
 --- a/meson.options
 +++ b/meson.options
-@@ -18,6 +18,7 @@ option('jpeg', type: 'feature', value: 'auto', description: 'libjpeg image write
+@@ -19,6 +19,7 @@ option('jpeg', type: 'feature', value: 'auto', description: 'libjpeg image write
  option('lcms2', type: 'feature', value: 'auto', description: 'LCMS2 support')
  option('libarchive', type: 'feature', value: 'auto', description: 'libarchive wrapper for reading zip files and more')
  option('libavdevice', type: 'feature', value: 'auto', description: 'libavdevice')
 +option('orender', type: 'feature', value: 'auto', description: 'Spatial audio decoder via the orender (liborender) library, loaded at runtime (dlopen); no build-time dependency')
  option('libbluray', type: 'feature', value: 'auto', description: 'Bluray support')
+ option('libcurl', type: 'feature', value: 'auto', description: 'libcurl-based stream backend')
  option('lua',
-     type: 'combo',
-@@ -54,6 +55,7 @@ option('pulse', type: 'feature', value: 'auto', description: 'PulseAudio audio o
+@@ -57,6 +58,7 @@ option('pulse', type: 'feature', value: 'auto', description: 'PulseAudio audio o
  option('sdl2-audio', type: 'feature', value: 'disabled', description: 'SDL2 audio output')
  option('sndio', type: 'feature', value: 'auto', description: 'sndio audio output')
  option('wasapi', type: 'feature', value: 'auto', description: 'WASAPI audio output')
 +option('asio', type: 'feature', value: 'auto', description: 'Steinberg ASIO audio output (Windows)')
  
  # video output features
- option('caca', type: 'feature', value: 'auto', description: 'CACA')
+ option('amf', type: 'feature', value: 'auto', description: 'AMD AMF')
 diff --git a/options/options.c b/options/options.c
-index 716c3e6..1c653a0 100644
+index a43241455..639f9e327 100644
 --- a/options/options.c
 +++ b/options/options.c
-@@ -72,6 +72,9 @@ extern const struct m_sub_options demux_lavf_conf;
- extern const struct m_sub_options demux_mkv_conf;
+@@ -75,6 +75,9 @@ extern const struct m_sub_options demux_sbr_conf;
+ #endif
  extern const struct m_sub_options vd_lavc_conf;
  extern const struct m_sub_options ad_lavc_conf;
 +#if HAVE_ORENDER
@@ -3282,7 +3282,7 @@ index 716c3e6..1c653a0 100644
  extern const struct m_sub_options hwdec_conf;
  extern const struct m_sub_options input_config;
  extern const struct m_sub_options encode_config;
-@@ -695,6 +698,9 @@ static const m_option_t mp_opts[] = {
+@@ -712,6 +715,9 @@ static const m_option_t mp_opts[] = {
      {"", OPT_SUBSTRUCT(dec_wrapper, dec_wrapper_conf)},
      {"", OPT_SUBSTRUCT(vd_lavc_params, vd_lavc_conf)},
      {"ad-lavc", OPT_SUBSTRUCT(ad_lavc_params, ad_lavc_conf)},
@@ -3293,10 +3293,10 @@ index 716c3e6..1c653a0 100644
      {"", OPT_SUBSTRUCT(hwdec_opts, hwdec_conf)},
  
 diff --git a/options/options.h b/options/options.h
-index 12dafea..9ef62c6 100644
+index 1f8e7cb09..6712b3121 100644
 --- a/options/options.h
 +++ b/options/options.h
-@@ -380,6 +380,9 @@ typedef struct MPOpts {
+@@ -398,6 +398,9 @@ typedef struct MPOpts {
  
      struct vd_lavc_params *vd_lavc_params;
      struct ad_lavc_params *ad_lavc_params;
@@ -3307,10 +3307,10 @@ index 12dafea..9ef62c6 100644
      struct hwdec_opts *hwdec_opts;
  
 diff --git a/player/core.h b/player/core.h
-index eb7f508..df38755 100644
+index f0124c7fe..1e9cf2490 100644
 --- a/player/core.h
 +++ b/player/core.h
-@@ -652,6 +652,9 @@ bool mp_load_scripts(struct MPContext *mpctx);
+@@ -669,6 +669,9 @@ bool mp_load_scripts(struct MPContext *mpctx);
  void mp_load_builtin_scripts(struct MPContext *mpctx);
  int64_t mp_load_user_script(struct MPContext *mpctx, const char *fname);
  
@@ -3321,10 +3321,10 @@ index eb7f508..df38755 100644
  void redraw_subs(struct MPContext *mpctx);
  void reset_subtitle_state(struct MPContext *mpctx);
 diff --git a/player/main.c b/player/main.c
-index 37eb6b1..1202daf 100644
+index 2fbb19d60..b75625efc 100644
 --- a/player/main.c
 +++ b/player/main.c
-@@ -431,6 +431,10 @@ int mp_initialize(struct MPContext *mpctx, char **options)
+@@ -440,6 +440,10 @@ int mp_initialize(struct MPContext *mpctx, char **options)
  
      mp_load_scripts(mpctx);
  
@@ -3337,10 +3337,10 @@ index 37eb6b1..1202daf 100644
  
 diff --git a/player/orender_overlay.c b/player/orender_overlay.c
 new file mode 100644
-index 0000000..b22742e
+index 000000000..3c8f8c5e9
 --- /dev/null
 +++ b/player/orender_overlay.c
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,399 @@
 +/*
 + * Built-in client that drives liborender's spatial object overlay.
 + *
@@ -3710,12 +3710,11 @@ index 0000000..b22742e
 +
 +    /* Created before the thread so a destroyed MPContext can't race the
 +     * client creation (same pattern as scripting.c). */
-+    mpv_handle *client = mp_new_client(mpctx->clients, "omniphony_overlay");
++    mpv_handle *client = mp_new_weak_client(mpctx->clients, "omniphony_overlay");
 +    if (!client) {
 +        MP_ERR(mpctx, "orender overlay: failed to create client\n");
 +        return;
 +    }
-+    mp_client_set_weak(client);
 +
 +    struct overlay_ctx *ctx = talloc_zero(NULL, struct overlay_ctx);
 +    ctx->log = mp_client_get_log(client);
