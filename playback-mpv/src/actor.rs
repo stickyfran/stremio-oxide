@@ -593,7 +593,8 @@ impl PlaybackRuntime {
         if let Err(error) = client.set_option("ytdl-raw-options", YTDL_RAW_OPTIONS) {
             tracing::warn!(%error, "could not apply ytdl raw options");
         }
-        client.set_option("terminal", "no")?;
+        client.set_option("terminal", "yes")?;
+        client.set_option("msg-level", "all=info,vo/gpu=v,vo/libmpv=v")?;
         client.set_option("input-default-bindings", "no")?;
         client.set_option("input-vo-keyboard", "no")?;
         client.set_option("osc", "no")?;
@@ -609,18 +610,6 @@ impl PlaybackRuntime {
         client.set_option("cache-secs", "30")?;
         client.set_option("demuxer-max-bytes", "67108864")?; // 64 MiB
         client.set_option("demuxer-max-back-bytes", "33554432")?; // 32 MiB
-        // Built-in GL/GLES scalers: no user shaders required, so these also
-        // work on the GLES 3.x context that Slint gives us on Wayland.
-        client.set_option("scale", "lanczos")?;
-        client.set_option("dscale", "mitchell")?;
-        client.set_option("cscale", "bicubic")?;
-        client.set_option("correct-downscaling", "yes")?;
-        client.set_option("linear-downscaling", "yes")?;
-        client.set_option("deband", "yes")?;
-        client.set_option("deband-iterations", "2")?;
-        client.set_option("deband-threshold", "48")?;
-        client.set_option("deband-range", "16")?;
-        client.set_option("deband-grain", "32")?;
         client.set_option("hr-seek", "yes")?;
         client.set_option("ad-lavc-threads", "0")?;
         client.set_option("audio-fallback-to-null", "yes")?;

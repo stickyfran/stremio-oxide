@@ -5115,6 +5115,17 @@ fn install_renderer(
                             "player is visible but the MPV render context is unavailable"
                         );
                     }
+                    if player_visible && preview_context.is_some() {
+                        // Two libmpv render contexts (main + preview) share
+                        // Slint's GL context. Release the preview one before
+                        // starting main playback so VA-API interop and frame
+                        // presentation are not contended by both clients.
+                        tracing::info!(
+                            "dropping trailer preview render context before main playback"
+                        );
+                        preview_context = None;
+                        preview_context_attempted = false;
+                    }
                     if !player_visible {
                         if let Some(context) = context.as_mut()
                             && let Err(error) = context.process_updates(false)
@@ -5488,6 +5499,9 @@ fn render_preview_frame(
     let Some(player) = crate::preview_player::global() else {
         return;
     };
+    if ui.get_show_player() {
+        return;
+    }
     if !player.render_active() {
         if let Some(context) = preview_context.as_mut()
             && let Err(error) = context.process_updates(false)
