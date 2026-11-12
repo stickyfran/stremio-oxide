@@ -1657,7 +1657,10 @@ fn apply_hdr_mode(client: &MpvClient, requested: HdrMode) -> (HdrMode, bool, Res
 fn configure_hdr_mode(client: &MpvClient, mode: HdrMode) -> Result<(), MpvError> {
     let (target_hint, tone_mapping, compute_peak, gamut_mapping) = hdr_properties(mode);
     let options = [
-        ("target-colorspace-hint", target_hint.to_string()),
+        (
+            "target-colorspace-hint",
+            if target_hint { "yes" } else { "no" }.to_owned(),
+        ),
         ("tone-mapping", tone_mapping.to_owned()),
         ("gamut-mapping-mode", gamut_mapping.to_owned()),
         ("hdr-compute-peak", if compute_peak { "yes" } else { "no" }.to_owned()),
