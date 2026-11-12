@@ -328,7 +328,6 @@ mod linux {
             queue
                 .roundtrip(&mut state)
                 .map_err(|error| format!("wl_registry roundtrip: {error:?}"))?;
-            registry.destroy();
             tracing::info!("native HDR plane: Wayland globals bound");
             let compositor = state
                 .compositor
