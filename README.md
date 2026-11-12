@@ -77,13 +77,19 @@ The next releases focus on refining the native experience, visual consistency, a
 - **Integrated Fullscreen Trailer Overlay**: Redesign the Details view to embed trailers into an immersive backdrop and full-viewport presentation mode with instant playback controls.
 - **Spatial Utilization**: Enhance screen real estate usage in movie and series detail views so promotional media and synopses feel dynamic rather than constrained to small side panels.
 
-### 4. End-to-End Download Manager & Batch Ingestion
-- **Source Selection & Torrent/Debrid Ingestion**: Introduce an interactive stream picker when initiating downloads (direct torrent stream via rqbit or HTTP Debrid source).
-- **Single Episode, Movie & Full Season Batching**: Allow users to queue an entire season of a series with one click, automatically resolving episode streams and verifying disk quotas.
-- **Actionable Downloads View with Visual Telemetry**:
-  - Real-time progress bars, download speed, peer health, and estimated time of completion (ETA).
-  - Explicit file management (pause, resume, delete, verify integrity, open containing folder).
-  - Native background execution with system notification on download completion.
+### 4. End-to-End Download Manager & Offline Library
+- **Already in place**:
+  - Interactive source picker before enqueueing a download (direct HTTP, torrent via the local streaming server, or Debrid resolution).
+  - Movies, single episodes, complete seasons (`scope = season`) and complete series (`scope = series`) queued in one action, including multi-file torrent packs split per episode.
+  - Automatic subtitle downloads next to every video, using the selected stream subtitles plus OpenSubtitles, matching the user's preferred language, the app subtitle setting and the OS locale.
+  - Real-time progress bars, download speed, ETA, pause/resume/delete, storage quota checks and background execution with completion notifications.
+- **Still missing for a true offline library**:
+  - **Subtitle management per download**: choose target languages explicitly in the download dialog, download multiple languages, and re-fetch subtitles later from the Downloads view.
+  - **Offline playback wiring**: guarantee the player prefers the local subtitle sidecars (and embedded tracks) when the video is opened from the local library, with no network dependency.
+  - **Full-series orchestration as a first-class flow**: resolve every missing episode stream before enqueueing, show aggregate progress for the whole series, and retry failed episodes individually.
+  - **Season/series pack verification**: detect when a torrent pack is missing an episode (or contains extras) and surface it instead of silently skipping files.
+  - **Integrity and repair**: post-download hash verification, resume after app restart, and automatic re-download of corrupted `.part` files.
+  - **Disk lifecycle controls**: per-title storage usage, configurable retention, and safe bulk cleanup of watched content.
 
 ### 5. Video Stack Refinements & Future Roadmap
 - **Fase 0 — Telemetría y Línea Base de Rendimiento**:
@@ -96,6 +102,18 @@ The next releases focus on refining the native experience, visual consistency, a
 - **Fase 6 — Evaluación Continua de `gpu-next` en libmpv**:
   - Monitoreo de cabeceras de libmpv (`render.h`) para soporte formal de selector de backend (`MPV_RENDER_PARAM_BACKEND`).
   - Preservar `vo=libmpv` con tone mapping automático a SDR hasta que exista soporte de renderizado directo / subsuperficies nativas con composición HDR de 10/16 bits en Slint.
+
+### 6. Keyboard & Gamepad Navigation
+- **Already in place**:
+  - `Tab` / `Shift+Tab` walk the focus chain of interactive components and move the visible focus ring.
+  - `Enter` activates the focused `ButtonSurface` / `FocusScope` (cards, playback controls, dialogs); `Esc` closes overlays and restores focus to the global shortcut scope.
+  - Native global and player hotkeys are dispatched in `shortcuts.rs` (playback, seek, volume, subtitles, speed, fullscreen, next episode).
+  - Settings toggle and help modal for gamepad controls already exist in the UI.
+- **Still missing**:
+  - **Spatial (D-pad) navigation**: arrow keys currently do not move focus geometrically between cards or controls, so a 10-foot layout is not yet usable without a pointer.
+  - **Real gamepad backend**: no `gilrs` polling or event mapping exists yet; the toggle and dialog are UI-only. Plan: normalize axes/buttons to the same intents as keyboard (up/down/left/right/accept/back/menu), add a radial deadzone and repeat timing.
+  - **Focus restoration**: keep track of the last focused element per page/surface so returning from details, player or a modal lands on a predictable control.
+  - **Accessibility**: announce focused items and on-screen keyboard support for search input.
 
 ## Agradecimientos y Componentes de Terceros
 

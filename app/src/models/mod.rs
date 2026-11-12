@@ -663,6 +663,13 @@ pub(crate) fn refresh_cached_media_images(ui: &MainWindow, urls: &[String]) -> u
         ui.set_detail_background(background.clone());
         updated += 1;
     }
+    let detail_trailer_thumbnail_url = ui.get_detail_trailer_thumbnail_url();
+    if let Some(thumbnail) =
+        lookup_image(&thumbnail_images, detail_trailer_thumbnail_url.as_str())
+    {
+        ui.set_detail_trailer_thumbnail(thumbnail.clone());
+        updated += 1;
+    }
     let discover_preview_poster_url = ui.get_discover_preview_poster_url();
     if let Some(poster) = lookup_image(&images, discover_preview_poster_url.as_str()) {
         ui.set_discover_preview_poster(poster.clone());

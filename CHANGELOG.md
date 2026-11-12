@@ -2,6 +2,16 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.98 - 2026-11-12
+
+### Details trailer
+- Trailer thumbnail now refreshes automatically when the background image download finishes instead of staying on the fallback poster until the details page is reopened.
+- Split the trailer mini-player state properties onto separate declarations to keep the Slint page well-formed and easier to extend.
+
+### Documentation
+- Roadmap now reflects the download manager already implemented (movies, episodes, seasons, full series and automatic subtitles) and lists what is still required for a complete offline library.
+- Added a keyboard/gamepad navigation section documenting working Tab/Enter/Esc behavior and the remaining spatial-focus and `gilrs` backend work.
+
 ## 0.99.93 - 2026-11-08
 
 ### Volume Slider & Snapping
