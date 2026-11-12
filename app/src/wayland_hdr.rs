@@ -97,12 +97,24 @@ impl HdrPlaneState {
         };
         match context.render_external(&targets[index], 10) {
             Ok(true) => {
-                if let Some(plane) = self.plane.as_mut() {
-                    plane.present(targets[index].texture_id(), width as u32, height as u32);
+                if let Some(plane) = self.plane.as_mut()
+                    && let Err(error) =
+                        plane.present(targets[index].texture_id(), width as u32, height as u32)
+                {
+                    tracing::warn!(%error, "native HDR plane presentation failed");
+                    plane.hide();
+                    self.failed = true;
+                    self.active = false;
+                    self.passthrough = false;
+                    let _ = context.set_hdr_passthrough(false);
+                    ui.set_player_hdr_plane_active(false);
+                    ui.set_player_hdr_passthrough_available(false);
+                    return false;
                 }
                 self.index = (index + 1) % PLANE_TARGETS;
                 if !self.active {
                     self.active = true;
+                    tracing::info!("native HDR plane active");
                     ui.set_player_hdr_plane_active(true);
                     ui.set_player_hdr_passthrough_available(true);
                     ui.set_player_has_video_frame(true);
@@ -194,7 +206,14 @@ impl HdrPlane {
         Err("native HDR plane is only implemented on Linux/Wayland".to_owned())
     }
 
-    fn present(&mut self, _texture: std::num::NonZeroU32, _width: u32, _height: u32) {}
+    fn present(
+        &mut self,
+        _texture: std::num::NonZeroU32,
+        _width: u32,
+        _height: u32,
+    ) -> Result<(), String> {
+        Err("native HDR plane is only implemented on Linux/Wayland".to_owned())
+    }
 
     fn hide(&mut self) {}
 
@@ -398,7 +417,7 @@ mod linux {
             texture: std::num::NonZeroU32,
             width: u32,
             height: u32,
-        ) {
+        ) -> Result<(), String> {
             if (width, height) != (self.width, self.height) {
                 self.resize(width, height);
             }
@@ -410,12 +429,12 @@ mod linux {
                     }
                     Err(error) => {
                         tracing::error!(%error, "could not export HDR frame as DMA-BUF");
-                        return;
+                        return Err(error);
                     }
                 }
             }
             let Some(buffer) = self.buffers.get(&key) else {
-                return;
+                return Err(format!("no DMA-BUF buffer for texture {key}"));
             };
             self.child.attach(Some(&buffer.buffer), 0, 0);
             if self.child.version() >= 4 {
@@ -428,6 +447,7 @@ mod linux {
             let _ = self.connection.flush();
             let _ = self.queue.dispatch_pending(&mut self.state);
             self.visible = true;
+            Ok(())
         }
 
         pub(super) fn hide(&mut self) {
