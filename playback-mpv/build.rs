@@ -12,8 +12,10 @@ use sha2::{Digest, Sha256};
 const WINDOWS_ARTIFACT: &str = "windows-x86_64-v3-dynamic";
 const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
 const WINDOWS_CPU_BASELINE: &str = "x86-64-v3";
+// Client API of the runtime pinned in `mpv.lock.json` (mpv 0.42). The runtime
+// compatibility floor is lower (`pinned.rs`), so system libmpv 0.41 still works.
 const CLIENT_API_MAJOR: u32 = 2;
-const CLIENT_API_MINOR: u32 = 5;
+const CLIENT_API_MINOR: u32 = 6;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

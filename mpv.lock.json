@@ -2,32 +2,32 @@
   "schemaVersion": 3,
   "channel": "git",
   "linkage": "dynamic",
-  "release": "20260610",
+  "release": "20261111",
   "mpv": {
-    "version": "v0.41.0-744-g304426c39",
-    "revision": "304426c390901436fb1d4a63efbd582ae80c88f4",
+    "version": "v0.42.0-38-gbcde6b93c",
+    "revision": "bcde6b93cca4d128d84e1a60d1a6db2cd81c889e",
     "repository": "https://github.com/mpv-player/mpv"
   },
   "clientApi": {
     "major": 2,
-    "minor": 5
+    "minor": 6
   },
   "distribution": {
     "provider": "shinchiro/mpv-winbuild-cmake",
     "repository": "https://github.com/shinchiro/mpv-winbuild-cmake",
-    "release": "20260610",
-    "asset": "mpv-dev-x86_64-v3-20260610-git-304426c.7z",
-    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-dev-x86_64-v3-20260610-git-304426c.7z",
-    "sha256": "d4b3d6df9fdb33d5591c4ece7d0cc24d2f7822b298f6a1528595e0ccff7424a6"
+    "release": "20261111",
+    "asset": "mpv-dev-x86_64-v3-20261111-git-bcde6b93cc.7z",
+    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261111/mpv-dev-x86_64-v3-20261111-git-bcde6b93cc.7z",
+    "sha256": "19d9bb4c5f8249f48c2413a0b7c473116552b8cf55404a67a5a568b2d8b09bcb"
   },
   "headers": {
     "client.h": {
       "file": "include/mpv/client.h",
-      "sha256": "1acf99ee77c8c2a6f1d1993bd81bbc8a91d27fb5924e80171670e6139a4bd353"
+      "sha256": "3da9b8c61c3fb4e2d76bd248cebf72f3ee830331411b71a76adbd5e05660cc50"
     },
     "render.h": {
       "file": "include/mpv/render.h",
-      "sha256": "192691941602052f00df0587f126246c48785a1cf21de68d22a92ea1908d1c55"
+      "sha256": "f2550aa29b2e9b20988bd954b4383e9fa05fd9e40d1669fbc6edf2afac603f15"
     },
     "render_gl.h": {
       "file": "include/mpv/render_gl.h",
@@ -40,11 +40,11 @@
   },
   "licenses": {
     "LICENSE.GPL": {
-      "url": "https://raw.githubusercontent.com/mpv-player/mpv/304426c390901436fb1d4a63efbd582ae80c88f4/LICENSE.GPL",
+      "url": "https://raw.githubusercontent.com/mpv-player/mpv/bcde6b93cca4d128d84e1a60d1a6db2cd81c889e/LICENSE.GPL",
       "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
     },
     "LICENSE.LGPL": {
-      "url": "https://raw.githubusercontent.com/mpv-player/mpv/304426c390901436fb1d4a63efbd582ae80c88f4/LICENSE.LGPL",
+      "url": "https://raw.githubusercontent.com/mpv-player/mpv/bcde6b93cca4d128d84e1a60d1a6db2cd81c889e/LICENSE.LGPL",
       "sha256": "72b672113d642cbb8ef5dcc76938db801983c56e50b1400ab930f1a64d6dc8d9"
     }
   },
@@ -57,21 +57,13 @@
       "linkName": "mpv",
       "runtimeLibrary": {
         "file": "bin/libmpv-2.dll",
-        "sha256": "ade5cac46cfc397a3d5cd356a968cda7acf0debffb705a16509dafdf93029f5e"
+        "sha256": "fd80c3f48015a6956b8b13c05fa1599a8e3df2d3c76e1d58ee19ccc2cdb56ce4"
       },
       "importLibrary": {
         "file": "lib/mpv.lib",
         "sha256": "bef1b89f534bc86b33135e1f04fa2d5064b9d48b5de8bc9866665bbf43def793"
-      },
-      "sdkManifest": {
-        "file": "runtime-sdk.json",
-        "sha256": "a8d7ae7ee127ff32d32ff87e70c845ff74574ab7985ccb2f503565a2cb8c4b92"
-      },
-      "sourceNotice": {
-        "file": "SOURCE.txt",
-        "sha256": "ed0b1e9487d96943926b2143d332d260eba112343729121990ee6caf0bd32993"
       }
     }
   },
-  "verifiedAt": "2026-07-17"
+  "verifiedAt": "2026-11-12"
 }

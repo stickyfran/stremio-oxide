@@ -95,12 +95,14 @@ The next releases focus on refining the native experience, visual consistency, a
 - **Fase 0 — Telemetría y Línea Base de Rendimiento**:
   - Instrumentar métricas continuas del pipeline de video (`frame-drop-count`, `decoder-frame-drop-count`, `vo-delayed-frame-count`, `avsync`, `estimated-vf-fps`, `display-fps`).
   - Benchmarks automatizados de consumo de CPU/GPU en perfiles de prueba estándar (1080p SDR, 4K HEVC 10-bit y 4K HDR10).
-- **Fase 4.5 — Actualización a libmpv 0.42+**:
-  - Bump del runtime fijado en `mpv.lock.json` a `v0.42.0` (upstream cmake build para Windows / libmpv del sistema para Linux).
-  - Adaptación al nuevo stack de red basado en libcurl (HTTP/2, HTTP/3 y pool de conexiones persistentes).
-  - Verificación de políticas `--tls-verify=yes` con proveedores debrid y streams de addons.
+- **Fase 4.5 — libmpv 0.42 (completado)**:
+  - Runtime Windows fijado a `v0.42.0-38-gbcde6b93c` (API cliente 2.6) en `mpv.lock.json`; Flatpak actualizado a `v0.42.0` con libplacebo `v7.387.0`.
+  - El piso de compatibilidad se mantiene en la API 2.5 para que sistemas con libmpv 0.41 sigan funcionando; no se usan entry points exclusivos de 2.6.
+  - Nuevo stack de red basado en libcurl con HTTP/2, HTTP/3 y pool de conexiones persistentes.
+  - `--tls-verify` pasa a estar activado por defecto en mpv 0.42; se mantiene la verificación TLS con proveedores debrid y addons.
 - **Fase 6 — Evaluación Continua de `gpu-next` en libmpv**:
-  - Monitoreo de cabeceras de libmpv (`render.h`) para soporte formal de selector de backend (`MPV_RENDER_PARAM_BACKEND`).
+  - En mpv 0.42 la render API de libmpv sigue exponiendo solo los backends `gpu` y `sw`; `gpu-next` todavía no se puede usar con `vo=libmpv`.
+  - Monitorear las cabeceras de libmpv (`render.h`) para un futuro selector de backend (`MPV_RENDER_PARAM_BACKEND`).
   - Preservar `vo=libmpv` con tone mapping automático a SDR hasta que exista soporte de renderizado directo / subsuperficies nativas con composición HDR de 10/16 bits en Slint.
 
 ### 6. Keyboard & Gamepad Navigation

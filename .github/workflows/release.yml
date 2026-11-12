@@ -141,7 +141,7 @@ jobs:
             $archiveUrl = $asset.browser_download_url
           } catch {
             Write-Output "Falling back to release URL"
-            $archiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261021/mpv-dev-x86_64-v3-20261021-git-e471496c56.7z'
+            $archiveUrl = 'https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261111/mpv-dev-x86_64-v3-20261111-git-bcde6b93cc.7z'
           }
           Write-Output "Downloading mpv x64 dev archive from $archiveUrl"
           Invoke-WebRequest -Uri $archiveUrl -OutFile 'mpv-x64.7z'
@@ -348,7 +348,7 @@ jobs:
             $archiveUrl = $asset.browser_download_url
           } catch {
             Write-Output "Falling back to release URL"
-            $archiveUrl = 'https://github.com/zhongfly/mpv-winbuild/releases/download/20260419-git-8cfefef/mpv-dev-aarch64-20260419-git-8cfefef.7z'
+            $archiveUrl = 'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-11-11-bcde6b93cc/mpv-dev-aarch64-20261111-git-bcde6b93cc.7z'
           }
           Write-Output "Downloading mpv ARM64 dev archive from $archiveUrl"
           Invoke-WebRequest -Uri $archiveUrl -OutFile 'mpv-arm64.7z'

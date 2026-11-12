@@ -2,6 +2,23 @@
 
 This file records notable changes to Stremio Native relative to the initial source snapshot.
 
+## 0.99.99 - 2026-11-12
+
+### libmpv 0.42
+
+- Pinned the Windows libmpv runtime to `v0.42.0-38-gbcde6b93c` (client API 2.6), including archive, header and license hashes in `mpv.lock.json`.
+- Updated the bundled flatpak build to mpv `v0.42.0` and libplacebo `v7.387.0`, which is the minimum version required by mpv 0.42.
+- Updated the Windows CI fallback assets to the `20261111` 0.42 builds for x86_64 and ARM64.
+- Kept the runtime compatibility floor at client API 2.5 so systems still shipping libmpv 0.41 keep working; no 2.6-only entry point is used.
+- Documented that the libmpv render API in 0.42 still only exposes the `gpu` and `sw` backends, so `gpu-next` remains unavailable with `vo=libmpv`.
+
+### Video stack audit
+
+- Verified the main player composites the libmpv FBO texture directly through Slint's OpenGL renderer, without a CPU readback.
+- Confirmed the trailer preview still performs a GPU-to-CPU `glReadPixels` plus a Slint pixel-buffer copy, and that the fullscreen trailer is capped at 1280×720.
+- Confirmed HDR content is always tone-mapped to SDR in an 8-bit RGBA8 render target.
+- Confirmed Anime4K/FSR shader presets are rejected on OpenGL ES, which is the renderer used on the tested Wayland/Mesa setup.
+
 ## 0.99.98 - 2026-11-12
 
 ### Details trailer
