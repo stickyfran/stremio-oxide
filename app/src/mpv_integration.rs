@@ -1093,12 +1093,6 @@ impl NativePlayback {
                 }
             }
         });
-        // Start early so the GUI thread can create the preview render context
-        // during renderer setup, before the first hover requests a trailer.
-        // The preview player still starts lazily if both features are off.
-        if app_config.hover_trailer_previews_enabled || app_config.trailer_autoplay {
-            previews.ensure_started();
-        }
         let desired_shader_preset =
             crate::shaders::preset_from_config(app_config.active_shader_preset);
         let shader_coordinator = Arc::new(Mutex::new(
@@ -5145,7 +5139,8 @@ fn install_renderer(
                     let window_width = i32::try_from(window_size.width).unwrap_or(i32::MAX);
                     let window_height = i32::try_from(window_size.height).unwrap_or(i32::MAX);
                     let state_snapshot = read_state(&playback_state);
-                    let hdr_wanted = state_snapshot.hdr_content
+                    let hdr_wanted = crate::wayland_hdr::hdr_plane_enabled()
+                        && state_snapshot.hdr_content
                         && state_snapshot.hdr_mode == HdrMode::Passthrough
                         && !ui.get_player_pip_active();
                     if let Some(context) = context.as_mut()

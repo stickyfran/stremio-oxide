@@ -43,7 +43,7 @@ This file records notable changes to Stremio Native relative to the initial sour
 - Video color is signalled as BT.2020/ST.2084 (PQ) through `wp_color_manager_v1`, while Slint keeps drawing controls, subtitles and overlays in SDR above the plane. No 10-bit swapchain is required from Slint.
 - `RenderContext` gained `create_rgb10_target`, `render_external` (with `MPV_RENDER_PARAM_DEPTH=10` and a flipped output for DMA-BUF scanout), `delete_external_target` and `set_hdr_passthrough` to switch MPV between PQ/BT.2020 and the regular 8-bit sRGB target.
 - The main window is now created with a transparent Winit surface; the player page exposes a transparent video hole when `player-hdr-plane-active` is set. If color management, DMA-BUF export or the protocol is unavailable, the app logs once and falls back to the proven SDR texture path.
-- This path is opt-in: it only activates with HDR content plus the Passthrough mode, and it is disabled for PiP.
+- This path is opt-in via `STREMIO_HDR_PLANE=1` (or the `stremio-native-gpu-next` wrapper), because a transparent Winit surface changes the EGL configuration. It also requires HDR content plus the Passthrough mode and is disabled for PiP. Without the variable the window stays opaque and the proven SDR path is used.
 
 ## 0.100.0 - 2026-11-12
 

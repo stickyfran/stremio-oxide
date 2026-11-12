@@ -19,6 +19,14 @@ use playback_mpv::{ExternalVideoTarget, RenderContext};
 /// Maximum number of frames between the compositor and our renderer.
 const PLANE_TARGETS: usize = 2;
 
+/// The native HDR plane is opt-in because it changes the window's EGL
+/// configuration (transparent surface) and bypasses Slint's texture path.
+pub fn hdr_plane_enabled() -> bool {
+    std::env::var_os("STREMIO_HDR_PLANE").is_some_and(|value| {
+        value == std::ffi::OsStr::new("1") || value == std::ffi::OsStr::new("true")
+    })
+}
+
 /// Owns the optional native HDR plane and its two 10-bit render targets.
 #[derive(Default)]
 pub struct HdrPlaneState {
@@ -44,7 +52,7 @@ impl HdrPlaneState {
         width: i32,
         height: i32,
     ) -> bool {
-        if !wanted {
+        if !wanted || !hdr_plane_enabled() {
             self.deactivate(ui, context);
             return false;
         }

@@ -182,13 +182,18 @@ async fn run_app(
         listener_task,
     } = primary_instance;
 
-    slint::BackendSelector::new()
+    let mut backend_selector = slint::BackendSelector::new()
         .backend_name("winit".into())
-        .renderer_name("femtovg".into())
+        .renderer_name("femtovg".into());
+    if crate::wayland_hdr::hdr_plane_enabled() {
         // The optional native HDR video plane is composited by the Wayland
         // compositor below Slint's surface, so the player page needs a
-        // transparent hole. Opaque pages keep their own backgrounds.
-        .with_winit_window_attributes_hook(|attributes| attributes.with_transparent(true))
+        // transparent hole. This is opt-in because a transparent Winit surface
+        // changes the EGL configuration even when HDR is not active.
+        backend_selector = backend_selector
+            .with_winit_window_attributes_hook(|attributes| attributes.with_transparent(true));
+    }
+    backend_selector
         .select()
         .context("could not select Slint's FemtoVG renderer")?;
     tracing::info!(
