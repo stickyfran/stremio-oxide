@@ -5149,10 +5149,17 @@ fn install_renderer(
                     let window_size = ui.window().size();
                     let window_width = i32::try_from(window_size.width).unwrap_or(i32::MAX);
                     let window_height = i32::try_from(window_size.height).unwrap_or(i32::MAX);
-                    let state_snapshot = read_state(&playback_state);
+                    // Copy the two flags and drop the read guard immediately.
+                    // Holding an RwLock read guard across `context.render()`
+                    // blocks the background state writer, which can deadlock
+                    // the actor and leave MPV without a render call.
+                    let (hdr_content, hdr_mode) = {
+                        let snapshot = read_state(&playback_state);
+                        (snapshot.hdr_content, snapshot.hdr_mode)
+                    };
                     let hdr_wanted = crate::wayland_hdr::hdr_plane_enabled()
-                        && state_snapshot.hdr_content
-                        && state_snapshot.hdr_mode == HdrMode::Passthrough
+                        && hdr_content
+                        && hdr_mode == HdrMode::Passthrough
                         && !ui.get_player_pip_active();
                     if let Some(context) = context.as_mut()
                         && hdr_plane.render(
