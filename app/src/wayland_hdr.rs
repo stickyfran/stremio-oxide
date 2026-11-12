@@ -204,13 +204,17 @@ mod linux {
         os::fd::{AsFd, FromRawFd, OwnedFd},
     };
 
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use raw_window_handle::{
+        HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+    };
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle,
         backend::{Backend, ObjectId},
+        globals::{GlobalListContents, registry_queue_init},
         protocol::{
             wl_buffer::WlBuffer,
             wl_compositor::WlCompositor,
+            wl_registry::WlRegistry,
             wl_subcompositor::WlSubcompositor,
             wl_subsurface::WlSubsurface,
             wl_surface::WlSurface,
@@ -265,15 +269,22 @@ mod linux {
             height: u32,
         ) -> Result<Self, String> {
             let window_handle = ui.window().window_handle();
-            let raw_handle = window_handle
+            let display_raw = window_handle
+                .display_handle()
+                .map_err(|error| format!("no raw display handle: {error}"))?
+                .as_raw();
+            let RawDisplayHandle::Wayland(display_handle) = display_raw else {
+                return Err("window is not on Wayland".to_owned());
+            };
+            let window_raw = window_handle
                 .window_handle()
                 .map_err(|error| format!("no raw window handle: {error}"))?
                 .as_raw();
-            let RawWindowHandle::Wayland(raw) = raw_handle else {
+            let RawWindowHandle::Wayland(window) = window_raw else {
                 return Err("window is not a Wayland surface".to_owned());
             };
-            let display = raw.display.as_ptr();
-            let surface = raw.surface.as_ptr();
+            let display = display_handle.display.as_ptr();
+            let surface = window.surface.as_ptr();
 
             // SAFETY: the raw display pointer belongs to Winit/Slint and stays
             // alive for the whole process; `from_foreign_display` does not
@@ -576,7 +587,7 @@ mod linux {
                     state.description_ready = true;
                 }
                 wp_image_description_v1::Event::Failed { cause, msg } => {
-                    tracing::warn!(cause, %msg, "HDR image description failed");
+                    tracing::warn!(cause = ?cause, %msg, "HDR image description failed");
                 }
                 _ => {}
             }
