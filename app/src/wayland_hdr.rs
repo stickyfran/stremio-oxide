@@ -756,9 +756,12 @@ mod linux {
             let export =
                 load_egl_proc::<EglExportImage>("eglExportDMABUFImageMESA")?;
 
+            // EGL_GL_TEXTURE_2D_KHR requires the current GL context; passing
+            // EGL_NO_CONTEXT crashes Mesa's eglCreateImageKHR with a null
+            // pointer dereference.
             let image = create(
                 display,
-                std::ptr::null_mut(),
+                context,
                 EGL_GL_TEXTURE_2D_KHR,
                 texture as usize as *mut c_void,
                 std::ptr::null(),
