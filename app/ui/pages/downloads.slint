@@ -300,11 +300,9 @@ export component DownloadsPage inherits Rectangle {
                 for item in root.items : card := Rectangle {
                     property <bool> is-expanded: root.expanded-id == item.id;
                     property <string> hovered-ep-info: "";
-                    height: item.is-series
-                        ? (12.2 * root.unit
-                            + (self.is-expanded ? max(1, item.all-seasons.length) : max(0, item.downloaded-seasons.length)) * 3.8 * root.unit
-                            + (self.is-expanded ? 3.8 * root.unit : 0px))
-                        : 10.8 * root.unit;
+                    // Auto-size to the real content: collapsed/expanded lists and
+                    // movie cards no longer rely on a hand-computed height.
+                    height: card-content.preferred-height;
                     border-radius: Theme.border-radius;
                     border-width: 1px;
                     border-color: row-area.has-hover ? Theme.primary-accent.with-alpha(0.4) : Theme.card-border;
@@ -344,11 +342,10 @@ export component DownloadsPage inherits Rectangle {
                         }
                     }
 
-                    VerticalLayout {
+                    card-content := VerticalLayout {
                         x: 0px;
                         y: 0px;
                         width: 100%;
-                        height: 100%;
                         padding-left: 1.4 * root.unit;
                         padding-right: 1.4 * root.unit;
                         padding-top: 1.2 * root.unit;
