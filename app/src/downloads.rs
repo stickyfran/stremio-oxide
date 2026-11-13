@@ -613,7 +613,7 @@ pub fn setup_ui_callbacks(
                 if let Some(job) = job {
                     let dest = job.destination.clone();
                     let title = job.title.clone();
-                    let watch_id = job.video_id.clone();
+                    let watch_id = job.video_id.clone().or_else(|| job.meta_id.clone());
                     let _ = slint::invoke_from_event_loop(move || {
                         if let (Some(ui), Some(playback)) = (weak.upgrade(), playback) {
                             playback.play_local_file(

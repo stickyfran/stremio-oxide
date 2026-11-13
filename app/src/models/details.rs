@@ -1422,6 +1422,24 @@ pub fn sync(
         ui.set_detail_directors(slint::ModelRc::new(slint::VecModel::from(directors)));
         ui.set_detail_has_trailer(!meta_item.preview.trailer_streams.is_empty());
 
+        let movie_selected = meta_details
+            .selected
+            .as_ref()
+            .is_some_and(|selected| selected.meta_path.r#type != "series");
+        if movie_selected {
+            let watched = meta_details
+                .library_item
+                .as_ref()
+                .map(|item| item.watched())
+                .unwrap_or(false);
+            let progress = meta_details
+                .library_item
+                .as_ref()
+                .map(|item| item.progress() as f32 / 100.0)
+                .unwrap_or(0.0);
+            persist_watch_updates(vec![(meta_item.preview.id.clone(), watched, progress)]);
+        }
+
         // Sync library details
         ui.set_detail_is_in_library(is_in_library);
         ui.set_detail_is_watched(
@@ -1588,6 +1606,7 @@ pub fn sync(
         let mut slint_episodes = Vec::new();
         let mut episode_fingerprint = Fingerprint::new();
         let mut videos_for_active_season = Vec::new();
+        let mut watch_updates: Vec<(String, bool, f32)> = Vec::new();
         if is_series {
             let meta_id_val = meta_item.preview.id.clone();
             let eps: Vec<crate::downloads::CachedEpisode> = meta_item
@@ -1691,6 +1710,7 @@ pub fn sync(
                 episode_fingerprint.bool(is_watched);
                 episode_fingerprint.bool(is_scheduled);
                 episode_fingerprint.u64(u64::from(progress.to_bits()));
+                watch_updates.push((video.id.clone(), is_watched, progress / 100.0));
 
                 slint_episodes.push(EpisodeItem {
                     id: video.id.as_str().into(),
@@ -1713,6 +1733,8 @@ pub fn sync(
                 });
             }
         }
+
+        persist_watch_updates(watch_updates);
 
         let episode_fingerprint = episode_fingerprint.finish();
         let episodes_changed = LAST_SYNCED_EPISODES.with(|cache| {
@@ -1781,4 +1803,43 @@ mod tests {
         assert_eq!(adjacent_series_season(&seasons, 0, 1), 0);
         assert_eq!(adjacent_series_season(&seasons, 1, -1), 1);
     }
+}
+
+
+/// Persists watched/progress state known by stremio-core into the downloads
+/// table, so existing watched episodes/movies get their checkmark/progress
+/// even when the play happened before the Downloads tracking existed.
+fn persist_watch_updates(updates: Vec<(String, bool, f32)>) {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, (bool, u8)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut changed = Vec::new();
+    {
+        let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (video_id, watched, progress) in updates {
+            if video_id.is_empty() {
+                continue;
+            }
+            let progress = progress.clamp(0.0, 1.0);
+            let quantized = (progress * 100.0).round() as u8;
+            if cache.get(&video_id) != Some(&(watched, quantized)) {
+                cache.insert(video_id.clone(), (watched, quantized));
+                changed.push((video_id, watched, progress));
+            }
+        }
+    }
+    if changed.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        for (video_id, watched, progress) in changed {
+            if watched {
+                crate::downloads::mark_video_watched(&video_id, true).await;
+            } else if progress > 0.0 {
+                crate::downloads::mark_video_progress(&video_id, progress).await;
+            }
+        }
+    });
 }
