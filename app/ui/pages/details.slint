@@ -171,19 +171,8 @@ export component DetailsPage inherits Rectangle {
     background: Theme.modal-background;
     clip: true;
 
-    private property <float> page-fade-opacity: 0.0;
-    private property <bool> page-fade-in-pending: true;
     private property <bool> streams-revealed: false;
     private property <bool> episodes-revealed: false;
-
-    function trigger-page-fade() {
-        root.page-fade-opacity = 0.0;
-        root.page-fade-in-pending = true;
-    }
-
-    init => {
-        root.trigger-page-fade();
-    }
 
     changed item-title => {
         root.streams-revealed = false;
@@ -236,22 +225,6 @@ export component DetailsPage inherits Rectangle {
             self.stop();
             root.streams-revealed = true;
         }
-    }
-
-    Timer {
-        interval: 16ms;
-        running: root.page-fade-in-pending;
-        triggered => {
-            self.stop();
-            root.page-fade-in-pending = false;
-            root.page-fade-opacity = 1.0;
-        }
-    }
-
-    opacity: root.page-fade-opacity;
-    animate opacity {
-        duration: Theme.motion-fade-in;
-        easing: ease-in-out;
     }
 
     private property <image> backdrop-source: root.background-image.width > 0
@@ -637,33 +610,13 @@ export component DetailsPage inherits Rectangle {
                 }
             }
 
-            if (root.is-series && !root.in-stream-view) : episodes-area := Rectangle {
+            if (root.is-series && !root.in-stream-view) : episodes-list := ListView {
                 vertical-stretch: 1;
-                clip: true;
-                background: transparent;
-
-                Rectangle {
-                    x: 0px;
-                    y: 0px;
-                    width: parent.width;
-                    height: root.episodes-revealed ? episodes-area.height : 0px;
-                    clip: true;
-                    background: transparent;
-                    animate height {
-                        duration: Theme.motion-panel;
-                        easing: cubic-bezier(0.22, 1.0, 0.36, 1.0);
-                    }
-
-                    episodes-list := ListView {
-                        x: 0px;
-                        y: 0px;
-                        width: parent.width;
-                        height: episodes-area.height;
-                        opacity: root.episodes-revealed ? 1.0 : 0.0;
-                        animate opacity {
-                            duration: Theme.motion-control;
-                            easing: ease-out;
-                        }
+                opacity: root.episodes-revealed ? 1.0 : 0.0;
+                animate opacity {
+                    duration: Theme.motion-fade-in;
+                    easing: ease-in-out;
+                }
 
                 for episode[index] in root.episodes : Video {
                     width: parent.width;
@@ -683,8 +636,6 @@ export component DetailsPage inherits Rectangle {
                         root.in-stream-view = true;
                     }
                     toggle-watched => { root.toggle-episode-watched(episode.id); }
-                }
-                    }
                 }
             }
 
@@ -807,34 +758,14 @@ export component DetailsPage inherits Rectangle {
             // =========================================================================
             // FASE 3: LISTA DE STREAMS DISPONIBLES (Progresiva)
             // =========================================================================
-            if ((!root.is-series || root.in-stream-view) && root.streams.length > 0) : streams-area := Rectangle {
+            if ((!root.is-series || root.in-stream-view) && root.streams.length > 0) : ListView {
                 vertical-stretch: 1;
-                clip: true;
-                background: transparent;
-
-                Rectangle {
-                    x: 0px;
-                    y: 0px;
-                    width: parent.width;
-                    height: root.streams-revealed ? streams-area.height : 0px;
-                    clip: true;
-                    background: transparent;
-                    animate height {
-                        duration: Theme.motion-panel;
-                        easing: cubic-bezier(0.22, 1.0, 0.36, 1.0);
-                    }
-
-                    ListView {
-                        x: 0px;
-                        y: 0px;
-                        width: parent.width;
-                        height: streams-area.height;
-                        opacity: root.streams-revealed ? 1.0 : 0.0;
-                        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                        animate opacity {
-                            duration: Theme.motion-control;
-                            easing: ease-out;
-                        }
+                opacity: root.streams-revealed ? 1.0 : 0.0;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                animate opacity {
+                    duration: Theme.motion-fade-in;
+                    easing: ease-in-out;
+                }
 
                 for stream in root.streams : stream-delegate := Rectangle {
                     private property <bool> matches-provider:
@@ -875,8 +806,6 @@ export component DetailsPage inherits Rectangle {
                         }
                     }
                 }
-            }
-            }
             }
 
             // =========================================================================
