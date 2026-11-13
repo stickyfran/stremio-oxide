@@ -358,6 +358,10 @@ export component PlayerPage inherits Rectangle {
     in property <string> series-runtime: "";
     in property <string> series-release-year: "";
     in property <string> series-description: "";
+    in property <string> media-rating: "";
+    in property <string> media-genres-text: "";
+    in property <string> media-cast-text: "";
+    in property <string> media-directors-text: "";
     in property <image> series-logo;
     in property <bool> active-season-watched: false;
     in property <image> next-episode-poster;
@@ -1178,7 +1182,7 @@ export component PlayerPage inherits Rectangle {
         x: parent.width - 56px;
         y: (parent.height - self.height) / 2;
         drawer-open: root.show-playlist-drawer;
-        z: 173;
+        z: 240;
         clicked => {
             root.toggle-player-side-drawer();
             root.activity();
@@ -1257,26 +1261,48 @@ export component PlayerPage inherits Rectangle {
             // and a four-line synopsis. Desktop closes via the backdrop,
             // Episodes button, or Escape; the explicit chevron is phone-only.
             Rectangle {
-                height: 218px;
+                height: 300px;
                 background: transparent;
+
+                ButtonSurface {
+                    x: parent.width - 118px;
+                    y: 0px;
+                    width: 118px;
+                    height: 30px;
+                    border-radius: 15px;
+                    background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
+                    accessible-name: @tr("VIEW_DETAILS" => "Ver detalles");
+                    clicked => { root.return-to-details(); }
+
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: @tr("VIEW_DETAILS" => "Ver detalles");
+                        color: Theme.primary-foreground;
+                        font-size: 13px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
 
                 if (root.series-logo.width > 0) : Image {
                     x: 0px;
-                    y: 0px;
+                    y: 30px;
                     width: parent.width;
-                    height: 96px;
+                    height: 76px;
                     source: root.series-logo;
                     image-fit: contain;
                 }
 
                 if (root.series-logo.width == 0) : Text {
                     x: 0px;
-                    y: 0px;
+                    y: 30px;
                     width: parent.width;
-                    height: 96px;
+                    height: 76px;
                     text: root.series-name != "" ? root.series-name : root.item-title;
                     color: Theme.surface-light;
-                    font-size: 27px;
+                    font-size: 25px;
                     font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -1286,40 +1312,94 @@ export component PlayerPage inherits Rectangle {
 
                 HorizontalLayout {
                     x: 0px;
-                    y: 104px;
+                    y: 112px;
                     width: parent.width;
-                    height: 28px;
+                    height: 26px;
                     spacing: 12px;
                     alignment: center;
 
                     Text {
                         text: root.series-runtime;
                         color: Theme.surface-light;
-                        font-size: 15px;
+                        font-size: 14px;
                         font-weight: 600;
                         vertical-alignment: center;
                     }
                     Text {
                         text: root.series-release-year;
                         color: Theme.surface-light;
-                        font-size: 15px;
+                        font-size: 14px;
                         font-weight: 600;
                         vertical-alignment: center;
                     }
+                    if (root.media-rating != "") : Rectangle {
+                        height: 22px;
+                        border-radius: 11px;
+                        background: #caa53d;
+
+                        Text {
+                            x: 8px;
+                            width: parent.width - 16px;
+                            height: parent.height;
+                            text: @tr("IMDB_RATING" => "IMDb") + " " + root.media-rating;
+                            color: #141414;
+                            font-size: 12px;
+                            font-weight: 750;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if (root.media-genres-text != "") : Text {
+                    x: 0px;
+                    y: 140px;
+                    width: parent.width;
+                    height: 20px;
+                    text: root.media-genres-text;
+                    color: Theme.surface-light;
+                    font-size: 12px;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    vertical-alignment: center;
                 }
 
                 Text {
                     x: 0px;
-                    y: 142px;
+                    y: 164px;
                     width: parent.width;
-                    height: 72px;
+                    height: 62px;
                     text: root.series-description;
                     color: Theme.primary-foreground;
-                    font-size: 14px;
+                    font-size: 13px;
                     font-weight: 400;
                     wrap: word-wrap;
                     overflow: elide;
                     opacity: 0.9;
+                }
+
+                if (root.media-cast-text != "") : Text {
+                    x: 0px;
+                    y: 230px;
+                    width: parent.width;
+                    height: 20px;
+                    text: @tr("CAST_LABEL" => "Reparto: ") + root.media-cast-text;
+                    color: Theme.text-secondary;
+                    font-size: 12px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                if (root.media-directors-text != "") : Text {
+                    x: 0px;
+                    y: 252px;
+                    width: parent.width;
+                    height: 20px;
+                    text: @tr("DIRECTOR_LABEL" => "Dirección: ") + root.media-directors-text;
+                    color: Theme.text-secondary;
+                    font-size: 12px;
+                    overflow: elide;
+                    vertical-alignment: center;
                 }
             }
 

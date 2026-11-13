@@ -1404,11 +1404,21 @@ pub fn sync(
         ui.set_detail_logo(logo);
 
         let genres = projected_links(meta_item, &["genre", "genres"]);
+        ui.set_detail_genres_text(genres.join(" · ").into());
         ui.set_detail_genres(slint::ModelRc::new(slint::VecModel::from(genres)));
 
         let cast = projected_links(meta_item, &["actor", "actors", "cast"]);
+        ui.set_detail_cast_text(
+            cast.iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+                .into(),
+        );
         ui.set_detail_cast(slint::ModelRc::new(slint::VecModel::from(cast)));
         let directors = projected_links(meta_item, &["director", "directors"]);
+        ui.set_detail_directors_text(directors.join(", ").into());
         ui.set_detail_directors(slint::ModelRc::new(slint::VecModel::from(directors)));
         ui.set_detail_has_trailer(!meta_item.preview.trailer_streams.is_empty());
 

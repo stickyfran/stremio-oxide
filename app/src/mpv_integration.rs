@@ -4253,6 +4253,12 @@ fn dispatch_state_to_core(
     let mut paused_action = None;
     let mut time_action = None;
     let mut video_params_action = None;
+    let mut progress_update: Option<(String, f32)> = None;
+    let streamed_video_id = core
+        .model()
+        .ok()
+        .map(|model| selected_player_video_id(&model.player))
+        .filter(|id| !id.is_empty());
     let skip_button_state;
     {
         let mut current = lock_session(session);
@@ -4286,6 +4292,17 @@ fn dispatch_state_to_core(
                 duration: duration_secs.max(0) as u64,
                 device: PLAYER_DEVICE.to_owned(),
             });
+            if duration_secs > 0 && time > 0 {
+                let video_id = current
+                    .local_watch_target
+                    .as_ref()
+                    .map(|(id, _)| id.clone())
+                    .or_else(|| streamed_video_id.clone());
+                if let Some(video_id) = video_id {
+                    progress_update =
+                        Some((video_id, (time as f64 / duration_secs as f64).clamp(0.0, 1.0) as f32));
+                }
+            }
         }
 
         if let (Some(dw), Some(dh)) = (state.video_dw, state.video_dh) {
@@ -4337,6 +4354,12 @@ fn dispatch_state_to_core(
         if skip_button_state.is_some() {
             current.last_skip_button_state = Some(next_skip_button_state);
         }
+    }
+
+    if let Some((video_id, progress)) = progress_update {
+        tokio::spawn(async move {
+            crate::downloads::mark_video_progress(&video_id, progress).await;
+        });
     }
 
     if let Some(action) = paused_action {

@@ -130,7 +130,6 @@ export component MediaPreviewDrawer inherits Rectangle {
         interval: 16ms;
         running: root.content-fade-in-pending;
         triggered => {
-            self.stop();
             root.content-fade-in-pending = false;
             root.content-fade-opacity = 1.0;
         }

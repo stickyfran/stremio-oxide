@@ -13,6 +13,7 @@ export struct DownloadEpisodeChip {
     is-downloaded: bool,
     is-downloading: bool,
     watched: bool,
+    watch-progress: float,
     progress: float,
 }
 
@@ -37,6 +38,7 @@ export struct DownloadEpisodeItem {
     can-play: bool,
     can-delete: bool,
     watched: bool,
+    watch-progress: float,
 }
 
 export struct DownloadItem {
@@ -58,6 +60,7 @@ export struct DownloadItem {
     can-play: bool,
     can-delete: bool,
     watched: bool,
+    watch-progress: float,
     downloaded-seasons: [DownloadSeasonGroup],
     all-seasons: [DownloadSeasonGroup],
     episodes: [DownloadEpisodeItem],
@@ -69,6 +72,10 @@ export component DownloadsPage inherits Rectangle {
     in property <bool> loading: false;
     in property <string> error: "";
     in property <string> disk-usage-text: "";
+    in property <int> active-count: 0;
+    in property <string> speed-text: "";
+    in property <string> current-text: "";
+    in property <string> eta-text: "";
     in-out property <string> expanded-id: "";
 
     in-out property <bool> prompt-download-open: false;
@@ -150,6 +157,52 @@ export component DownloadsPage inherits Rectangle {
                 font-size: 2 * root.unit;
                 font-weight: 700;
                 vertical-alignment: center;
+            }
+
+            if (root.active-count > 0) : Rectangle {
+                height: 2.8 * root.unit;
+                border-radius: Theme.border-radius;
+                background: Theme.primary-accent.with-alpha(0.16);
+                border-width: 1px;
+                border-color: Theme.primary-accent.with-alpha(0.45);
+
+                HorizontalLayout {
+                    padding-left: 1 * root.unit;
+                    padding-right: 1.2 * root.unit;
+                    spacing: 0.8 * root.unit;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 0.8 * root.unit;
+                        height: 0.8 * root.unit;
+                        border-radius: self.height / 2;
+                        background: Theme.accent;
+                        opacity: 0.35 + 0.65 * abs(sin(animation-tick() / 600ms * 180deg));
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 0.1 * root.unit;
+
+                        Text {
+                            text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
+                                + (root.eta-text != "" ? " · " + root.eta-text : "");
+                            color: Theme.primary-foreground;
+                            font-size: 0.82 * root.unit;
+                            font-weight: 650;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        if (root.current-text != "") : Text {
+                            text: root.current-text;
+                            color: Theme.text-secondary;
+                            font-size: 0.72 * root.unit;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
             }
 
             if (root.disk-usage-text != "") : Rectangle {
@@ -417,10 +470,28 @@ export component DownloadsPage inherits Rectangle {
                                         // Downloaded episode chips - squircle sin borde
                                         for ep in ds.episodes : Rectangle {
                                             height: 2.3 * root.unit;
-                                            width: 4.5 * root.unit;
+                                            width: ep-strip-touch.has-hover && ep.title != ""
+                                                ? min(22 * root.unit, 4.5 * root.unit + ep-title-measure.preferred-width + 1.2 * root.unit)
+                                                : 4.5 * root.unit;
                                             horizontal-stretch: 0;
                                             border-radius: 4px;
+                                            clip: true;
                                             background: ep-strip-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.28);
+                                            animate width { duration: Theme.motion-panel; easing: ease-out; }
+
+                                            if (ep.watch-progress > 0) : Rectangle {
+                                                x: 0px;
+                                                y: 0px;
+                                                width: parent.width * min(1.0, ep.watch-progress);
+                                                height: parent.height;
+                                                background: Theme.primary-accent.with-alpha(0.55);
+                                            }
+
+                                            ep-title-measure := Text {
+                                                visible: false;
+                                                text: ep.title;
+                                                font-size: 0.78 * root.unit;
+                                            }
 
                                             ep-strip-touch := TouchArea {
                                                 mouse-cursor: MouseCursor.pointer;
@@ -485,6 +556,17 @@ export component DownloadsPage inherits Rectangle {
                                                     font-weight: 750;
                                                     vertical-alignment: center;
                                                 }
+
+                                                if (ep-strip-touch.has-hover && ep.title != "") : Text {
+                                                    horizontal-stretch: 1;
+                                                    height: parent.height;
+                                                    text: ep.title;
+                                                    color: Theme.primary-foreground;
+                                                    font-size: 0.78 * root.unit;
+                                                    font-weight: 500;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
                                             }
                                         }
                                     }
@@ -548,6 +630,20 @@ export component DownloadsPage inherits Rectangle {
                                                 font-weight: 650;
                                                 vertical-alignment: center;
                                             }
+                                        }
+                                    }
+
+                                    if (!item.is-series && item.watch-progress > 0 && !item.watched) : Rectangle {
+                                        width: 5 * root.unit;
+                                        height: 0.35 * root.unit;
+                                        border-radius: self.height / 2;
+                                        background: Theme.control-background;
+
+                                        Rectangle {
+                                            width: parent.width * min(1.0, item.watch-progress);
+                                            height: parent.height;
+                                            border-radius: self.height / 2;
+                                            background: Theme.accent;
                                         }
                                     }
 
@@ -770,9 +866,18 @@ export component DownloadsPage inherits Rectangle {
                                         horizontal-stretch: 0;
                                         border-radius: 6px;
                                         // ILUMINADOS (descargados) vs EN GRIS (no descargados) - squircle sin borde
+                                        clip: true;
                                         background: ep.is-downloaded
                                             ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
                                             : (ep-grid-touch.has-hover ? #28283c : #181824);
+
+                                        if (ep.watch-progress > 0) : Rectangle {
+                                            x: 0px;
+                                            y: parent.height - 3px;
+                                            width: parent.width * min(1.0, ep.watch-progress);
+                                            height: 3px;
+                                            background: Theme.accent;
+                                        }
 
                                         ep-grid-touch := TouchArea {
                                             mouse-cursor: MouseCursor.pointer;

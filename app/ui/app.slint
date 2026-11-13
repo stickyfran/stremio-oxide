@@ -459,6 +459,10 @@ export component MainWindow inherits Window {
     in-out property <bool> downloads-loading: false;
     in-out property <string> downloads-error: "";
     in-out property <string> downloads-disk-usage: "";
+    in-out property <int> downloads-active-count: 0;
+    in-out property <string> downloads-speed-text: "";
+    in-out property <string> downloads-current-text: "";
+    in-out property <string> downloads-eta-text: "";
 
     // Filters lists & values for Discover
     in property <[string]> discover-types: [];
@@ -682,6 +686,9 @@ export component MainWindow inherits Window {
     in-out property <[string]> detail-genres: [];
     in-out property <[string]> detail-cast: [];
     in-out property <[string]> detail-directors: [];
+    in-out property <string> detail-genres-text: "";
+    in-out property <string> detail-cast-text: "";
+    in-out property <string> detail-directors-text: "";
     in-out property <string> detail-enrichment-id: "";
     in-out property <string> detail-enrichment-summary: "";
     in-out property <string> detail-enrichment-attribution-url: "";
@@ -2421,6 +2428,10 @@ export component MainWindow inherits Window {
                         loading: root.downloads-loading;
                         error: root.downloads-error;
                         disk-usage-text: root.downloads-disk-usage;
+                        active-count: root.downloads-active-count;
+                        speed-text: root.downloads-speed-text;
+                        current-text: root.downloads-current-text;
+                        eta-text: root.downloads-eta-text;
                         pause(id) => { root.downloads-pause(id); }
                         resume(id) => { root.downloads-resume(id); }
                         cancel(id) => { root.downloads-cancel(id); }
@@ -2739,6 +2750,10 @@ export component MainWindow inherits Window {
             series-name: root.player-series-name != "" ? root.player-series-name : (root.detail-title != "" ? root.detail-title : (root.discover-preview-title != "" ? root.discover-preview-title : (root.library-preview-title != "" ? root.library-preview-title : root.player-title)));
             next-series-name: root.player-next-series-name != "" ? root.player-next-series-name : (root.detail-title != "" ? root.detail-title : (root.discover-preview-title != "" ? root.discover-preview-title : (root.library-preview-title != "" ? root.library-preview-title : root.player-title)));
             series-runtime: root.player-series-runtime != "" ? root.player-series-runtime : (root.detail-runtime != "" ? root.detail-runtime : (root.discover-preview-runtime != "" ? root.discover-preview-runtime : root.library-preview-runtime));
+            media-rating: root.detail-rating;
+            media-genres-text: root.detail-genres-text;
+            media-cast-text: root.detail-cast-text;
+            media-directors-text: root.detail-directors-text;
             series-release-year: root.player-series-release-year != "" ? root.player-series-release-year : (root.detail-year != "" ? root.detail-year : (root.discover-preview-year != "" ? root.discover-preview-year : root.library-preview-year));
             series-description: root.player-series-description != "" ? root.player-series-description : (root.detail-description != "" ? root.detail-description : (root.discover-preview-description != "" ? root.discover-preview-description : root.library-preview-description));
             series-logo: root.player-series-logo.width > 0 ? root.player-series-logo : (root.detail-logo.width > 0 ? root.detail-logo : (root.discover-preview-logo.width > 0 ? root.discover-preview-logo : root.library-preview-logo));

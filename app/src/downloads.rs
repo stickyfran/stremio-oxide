@@ -195,32 +195,69 @@ pub async fn mark_video_watched(video_id: &str, watched: bool) {
         return;
     };
     let watched_value = if watched { 1i64 } else { 0i64 };
+    let progress_value = if watched { 1.0f64 } else { 0.0f64 };
     let _ = conn
         .execute(
-            "INSERT INTO download_watched(video_id, watched) VALUES (?, ?)
-             ON CONFLICT(video_id) DO UPDATE SET watched = excluded.watched",
-            (video_id.to_string(), watched_value),
+            "INSERT INTO download_watched(video_id, watched, progress) VALUES (?, ?, ?)
+             ON CONFLICT(video_id) DO UPDATE SET
+                watched = excluded.watched,
+                progress = excluded.progress",
+            (video_id.to_string(), watched_value, progress_value),
         )
         .await;
 }
 
-async fn watched_video_ids() -> std::collections::HashSet<String> {
-    let mut watched = std::collections::HashSet::new();
+#[derive(Clone, Copy, Debug, Default)]
+struct WatchState {
+    watched: bool,
+    progress: f32,
+}
+
+async fn watched_states() -> std::collections::HashMap<String, WatchState> {
+    let mut states = std::collections::HashMap::new();
     let Ok(conn) = crate::db::get_conn().await else {
-        return watched;
+        return states;
     };
     let Ok(mut rows) = conn
-        .query("SELECT video_id FROM download_watched WHERE watched = 1", ())
+        .query("SELECT video_id, watched, progress FROM download_watched", ())
         .await
     else {
-        return watched;
+        return states;
     };
     while let Ok(Some(row)) = rows.next().await {
         if let Ok(id) = row.get::<String>(0) {
-            watched.insert(id);
+            states.insert(
+                id,
+                WatchState {
+                    watched: row.get::<i64>(1).unwrap_or(0) != 0,
+                    progress: row.get::<f64>(2).unwrap_or(0.0).clamp(0.0, 1.0) as f32,
+                },
+            );
         }
     }
-    watched
+    states
+}
+
+/// Stores how much of a video has been watched so the Downloads page can
+/// illuminate the episode/movie indicator. Reaching 95% also marks it watched.
+pub async fn mark_video_progress(video_id: &str, progress: f32) {
+    if video_id.is_empty() {
+        return;
+    }
+    let progress = progress.clamp(0.0, 1.0) as f64;
+    let Ok(conn) = crate::db::get_conn().await else {
+        return;
+    };
+    let watched = i64::from(progress >= 0.95);
+    let _ = conn
+        .execute(
+            "INSERT INTO download_watched(video_id, watched, progress) VALUES (?, ?, ?)
+             ON CONFLICT(video_id) DO UPDATE SET
+                progress = excluded.progress,
+                watched = CASE WHEN excluded.progress >= 0.95 THEN 1 ELSE download_watched.watched END",
+            (video_id.to_string(), watched, progress),
+        )
+        .await;
 }
 
 pub fn parse_season_episode_from_filename(filename: &str) -> Option<(i32, i32)> {
@@ -653,6 +690,7 @@ pub struct SendEpisodeChip {
     pub is_downloaded: bool,
     pub is_downloading: bool,
     pub watched: bool,
+    pub watch_progress: f32,
     pub progress: f32,
 }
 
@@ -679,6 +717,7 @@ struct SendEpisodeItem {
     can_play: bool,
     can_delete: bool,
     watched: bool,
+    watch_progress: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -700,12 +739,116 @@ struct SendDownloadGroup {
     can_play: bool,
     can_delete: bool,
     watched: bool,
+    watch_progress: f32,
     downloaded_seasons: Vec<SendSeasonGroup>,
     all_seasons: Vec<SendSeasonGroup>,
     episodes: Vec<SendEpisodeItem>,
 }
 
-static GLOBAL_DOWNLOAD_MANAGER: std::sync::OnceLock<Arc<DownloadManager>> = std::sync::OnceLock::new();
+static GLOBAL_DOWNLOAD_MANAGER: std::sync::OnceLock<Arc<DownloadManager>> =
+    std::sync::OnceLock::new();
+
+#[derive(Default)]
+struct DownloadActivity {
+    count: usize,
+    speed_text: String,
+    current_text: String,
+    eta_text: String,
+}
+
+static ACTIVITY_SAMPLE: std::sync::OnceLock<std::sync::Mutex<Option<(std::time::Instant, u64, f32)>>> =
+    std::sync::OnceLock::new();
+
+fn compute_activity(jobs: &[DownloadJob]) -> DownloadActivity {
+    let active: Vec<&DownloadJob> = jobs
+        .iter()
+        .filter(|job| {
+            matches!(
+                job.state,
+                DownloadState::Downloading | DownloadState::Resolving | DownloadState::Queued
+            )
+        })
+        .collect();
+    if active.is_empty() {
+        if let Some(sample) = ACTIVITY_SAMPLE.get() {
+            *sample.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        }
+        return DownloadActivity::default();
+    }
+
+    let downloading: Vec<&DownloadJob> = active
+        .iter()
+        .copied()
+        .filter(|job| job.state == DownloadState::Downloading)
+        .collect();
+    let moved: u64 = downloading.iter().map(|job| job.bytes_downloaded).sum();
+    let remaining: u64 = downloading
+        .iter()
+        .filter_map(|job| job.bytes_total.map(|total| total.saturating_sub(job.bytes_downloaded)))
+        .sum();
+
+    let now = std::time::Instant::now();
+    let sample_lock = ACTIVITY_SAMPLE.get_or_init(|| std::sync::Mutex::new(None));
+    let mut sample = sample_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let speed = if let Some((last_at, last_bytes, last_speed)) = *sample {
+        let elapsed = now.saturating_duration_since(last_at).as_secs_f32();
+        let instant = if elapsed >= 0.25 {
+            (moved.saturating_sub(last_bytes)) as f32 / elapsed
+        } else {
+            last_speed
+        };
+        let smoothed = if last_speed > 0.0 {
+            last_speed * 0.55 + instant * 0.45
+        } else {
+            instant
+        };
+        *sample = Some((now, moved, smoothed));
+        smoothed
+    } else {
+        *sample = Some((now, moved, 0.0));
+        0.0
+    };
+
+    let current = active
+        .iter()
+        .find(|job| job.state == DownloadState::Downloading)
+        .or_else(|| active.first())
+        .copied();
+    let current_text = current
+        .map(|job| match (job.season, job.episode) {
+            (Some(season), Some(episode)) if season > 0 && episode > 0 => {
+                format!("T{season}E{episode} · {}", job.title)
+            }
+            _ => job.title.clone(),
+        })
+        .unwrap_or_default();
+    let speed_text = if speed >= 1024.0 {
+        format!("{}/s", format_bytes(speed as u64))
+    } else {
+        String::new()
+    };
+    let eta_text = if speed >= 1024.0 && remaining > 0 {
+        let seconds = (remaining as f32 / speed).round().max(1.0) as u64;
+        if seconds >= 3600 {
+            format!("{}h {}m", seconds / 3600, (seconds % 3600) / 60)
+        } else if seconds >= 60 {
+            format!("{}m {}s", seconds / 60, seconds % 60)
+        } else {
+            format!("{seconds}s")
+        }
+    } else {
+        String::new()
+    };
+
+    DownloadActivity {
+        count: active.len(),
+        speed_text,
+        current_text,
+        eta_text,
+    }
+}
 static BACKFILLED_JOBS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     std::sync::OnceLock::new();
 
@@ -809,7 +952,7 @@ pub async fn project_active_profile_with_manager(
     if let Some(ref mgr) = manager {
         let _ = GLOBAL_DOWNLOAD_MANAGER.set(mgr.clone());
     }
-    let watched_ids = watched_video_ids().await;
+    let watch_states = watched_states().await;
     let result = async {
         let profile_id = crate::profiles::active_profile_id()
             .await
@@ -827,7 +970,7 @@ pub async fn project_active_profile_with_manager(
         .and_then(|val| val.parse::<u64>().ok())
         .unwrap_or(0);
 
-    let (items, disk_text, error) = match result {
+    let (items, disk_text, error, activity) = match result {
         Ok(all_jobs) => {
             let used_bytes: u64 = all_jobs.iter().map(|j| j.bytes_downloaded).sum();
             let disk_usage = if limit_gb > 0 {
@@ -912,13 +1055,13 @@ pub async fn project_active_profile_with_manager(
             let mut groups: Vec<(String, Vec<DownloadJob>)> = Vec::new();
             let mut group_indices: HashMap<String, usize> = HashMap::new();
 
-            for job in video_jobs {
+            for job in &video_jobs {
                 let key = job.meta_id.clone().unwrap_or_else(|| job.id.clone());
                 if let Some(&idx) = group_indices.get(&key) {
-                    groups[idx].1.push(job);
+                    groups[idx].1.push(job.clone());
                 } else {
                     group_indices.insert(key.clone(), groups.len());
-                    groups.push((key, vec![job]));
+                    groups.push((key, vec![job.clone()]));
                 }
             }
 
@@ -1012,6 +1155,12 @@ pub async fn project_active_profile_with_manager(
                             .filter(|tot| *tot > 0)
                             .map(|tot| (j.bytes_downloaded as f32 / tot as f32).clamp(0.0, 1.0))
                             .unwrap_or(0.0);
+                        let ws = j
+                            .video_id
+                            .as_deref()
+                            .and_then(|id| watch_states.get(id))
+                            .copied()
+                            .unwrap_or_default();
                         SendEpisodeItem {
                             id: j.id.clone(),
                             title: j.title.clone(),
@@ -1024,10 +1173,8 @@ pub async fn project_active_profile_with_manager(
                             can_resume: matches!(j.state, DownloadState::Paused | DownloadState::Failed | DownloadState::Cancelled),
                             can_play: j.state == DownloadState::Completed,
                             can_delete: true,
-                            watched: j
-                                .video_id
-                                .as_deref()
-                                .is_some_and(|id| watched_ids.contains(id)),
+                            watched: ws.watched,
+                            watch_progress: ws.progress,
                         }
                     })
                     .collect();
@@ -1050,6 +1197,12 @@ pub async fn project_active_profile_with_manager(
                                 .find(|ce| ce.season == s && ce.episode == e && !ce.title.is_empty())
                                 .map(|ce| ce.title.clone())
                                 .unwrap_or_else(|| j.title.clone());
+                            let ws = j
+                                .video_id
+                                .as_deref()
+                                .and_then(|id| watch_states.get(id))
+                                .copied()
+                                .unwrap_or_default();
                             dl_by_season.entry(s).or_default().push(SendEpisodeChip {
                                 id: j.id.clone(),
                                 season: s,
@@ -1057,10 +1210,8 @@ pub async fn project_active_profile_with_manager(
                                 title: clean_title,
                                 is_downloaded: true,
                                 is_downloading: false,
-                                watched: j
-                                    .video_id
-                                    .as_deref()
-                                    .is_some_and(|id| watched_ids.contains(id)),
+                                watched: ws.watched,
+                                watch_progress: ws.progress,
                                 progress: 1.0,
                             });
                         }
@@ -1104,6 +1255,16 @@ pub async fn project_active_profile_with_manager(
                             None => (false, false, 0.0, ep.id.clone()),
                         };
 
+                        let ws = watch_states
+                            .get(&ep.id)
+                            .copied()
+                            .or_else(|| {
+                                matching_job
+                                    .and_then(|j| j.video_id.as_deref())
+                                    .and_then(|id| watch_states.get(id))
+                                    .copied()
+                            })
+                            .unwrap_or_default();
                         matrix_by_season.entry(ep.season).or_default().push(SendEpisodeChip {
                             id: chip_id,
                             season: ep.season,
@@ -1111,7 +1272,8 @@ pub async fn project_active_profile_with_manager(
                             title: ep.title.clone(),
                             is_downloaded,
                             is_downloading,
-                            watched: watched_ids.contains(&ep.id),
+                            watched: ws.watched,
+                            watch_progress: ws.progress,
                             progress,
                         });
                     }
@@ -1161,17 +1323,35 @@ pub async fn project_active_profile_with_manager(
                         j.video_id
                             .as_deref()
                             .or(j.meta_id.as_deref())
-                            .is_some_and(|id| watched_ids.contains(id))
+                            .and_then(|id| watch_states.get(id))
+                            .is_some_and(|state| state.watched)
                     }),
+                    watch_progress: if !is_series {
+                        first
+                            .video_id
+                            .as_deref()
+                            .or(first.meta_id.as_deref())
+                            .and_then(|id| watch_states.get(id))
+                            .map(|state| state.progress)
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    },
                     downloaded_seasons,
                     all_seasons,
                     episodes: group_episodes,
                 });
             }
 
-            (mapped_items, disk_usage, None)
+            let activity = compute_activity(&video_jobs);
+            (mapped_items, disk_usage, None, activity)
         }
-        Err(err) => (Vec::new(), String::new(), Some(err.to_string())),
+        Err(err) => (
+            Vec::new(),
+            String::new(),
+            Some(err.to_string()),
+            DownloadActivity::default(),
+        ),
     };
 
     let _ = slint::invoke_from_event_loop(move || {
@@ -1203,6 +1383,7 @@ pub async fn project_active_profile_with_manager(
                             can_play: e.can_play,
                             can_delete: e.can_delete,
                             watched: e.watched,
+                            watch_progress: e.watch_progress,
                         })
                         .collect();
 
@@ -1221,6 +1402,7 @@ pub async fn project_active_profile_with_manager(
                                         is_downloaded: c.is_downloaded,
                                         is_downloading: c.is_downloading,
                                         watched: c.watched,
+                                        watch_progress: c.watch_progress,
                                         progress: c.progress,
                                     })
                                     .collect();
@@ -1255,6 +1437,7 @@ pub async fn project_active_profile_with_manager(
                         can_play: g.can_play,
                         can_delete: g.can_delete,
                         watched: g.watched,
+                        watch_progress: g.watch_progress,
                         downloaded_seasons: map_season_groups(g.downloaded_seasons),
                         all_seasons: map_season_groups(g.all_seasons),
                         episodes: slint::ModelRc::new(slint::VecModel::from(eps)),
@@ -1265,6 +1448,10 @@ pub async fn project_active_profile_with_manager(
             ui.set_download_items(slint::ModelRc::new(slint::VecModel::from(slint_items)));
             ui.set_downloads_disk_usage(disk_text.into());
             ui.set_downloads_error(error.unwrap_or_default().into());
+            ui.set_downloads_active_count(activity.count as i32);
+            ui.set_downloads_speed_text(activity.speed_text.into());
+            ui.set_downloads_current_text(activity.current_text.into());
+            ui.set_downloads_eta_text(activity.eta_text.into());
             ui.set_downloads_loading(false);
         }
     });

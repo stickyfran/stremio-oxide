@@ -20,7 +20,7 @@ const DB_BUSY_TIMEOUT_MS: u64 = 1_000;
 const SHUTDOWN_CHECKPOINT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const MAX_LOG_ROWS: i64 = 10_000;
 const LOG_CLEANUP_INTERVAL: usize = 64;
-const LATEST_SCHEMA_VERSION: i64 = 5;
+const LATEST_SCHEMA_VERSION: i64 = 6;
 
 #[tracing::instrument(skip(database_path))]
 #[cfg_attr(feature = "profiling", hotpath::measure)]
@@ -199,6 +199,7 @@ async fn run_migrations(conn: &mut Connection) -> anyhow::Result<()> {
             3 => migrate_downloads_metadata(&transaction).await?,
             4 => migrate_series_episodes_cache(&transaction).await?,
             5 => migrate_download_watched(&transaction).await?,
+            6 => migrate_download_watched_progress(&transaction).await?,
             unsupported => {
                 return Err(anyhow::anyhow!(
                     "no database migration is registered for version {unsupported}"
@@ -321,6 +322,18 @@ async fn migrate_download_watched(
                 video_id TEXT PRIMARY KEY,
                 watched INTEGER NOT NULL DEFAULT 0
             );",
+        )
+        .await?;
+    Ok(())
+}
+
+async fn migrate_download_watched_progress(
+    transaction: &turso::transaction::Transaction<'_>,
+) -> anyhow::Result<()> {
+    transaction
+        .execute(
+            "ALTER TABLE download_watched ADD COLUMN progress REAL NOT NULL DEFAULT 0",
+            (),
         )
         .await?;
     Ok(())
