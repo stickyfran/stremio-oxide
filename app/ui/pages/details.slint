@@ -213,7 +213,6 @@ export component DetailsPage inherits Rectangle {
         running: root.is-series && !root.in-stream-view
             && root.episodes.length > 0 && !root.episodes-revealed;
         triggered => {
-            self.stop();
             root.episodes-revealed = true;
         }
     }
@@ -222,7 +221,6 @@ export component DetailsPage inherits Rectangle {
         interval: 16ms;
         running: (!root.is-series || root.in-stream-view) && root.streams.length > 0 && !root.streams-revealed;
         triggered => {
-            self.stop();
             root.streams-revealed = true;
         }
     }

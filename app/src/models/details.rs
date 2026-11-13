@@ -424,7 +424,14 @@ pub fn setup(
                     &ui_weak,
                     &runtime,
                     &navigation,
-                );                }
+                );
+                tracing::info!(
+                    season,
+                    episodes = slint::Model::row_count(&ui.get_detail_episodes()),
+                    active = ui.get_detail_active_season(),
+                    "season changed sync done"
+                );
+                }
             }
         }
     });
@@ -1606,6 +1613,11 @@ pub fn sync(
                 *season
             };
             videos_for_active_season = series_videos(meta_item, active_season);
+            tracing::info!(
+                active_season,
+                videos = videos_for_active_season.len(),
+                "details episode projection"
+            );
 
             let search_query = get_search_query()
                 .lock()
