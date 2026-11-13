@@ -479,6 +479,14 @@ pub fn setup_ui_callbacks(
         }
     });
 
+    ui.on_downloads_refresh_silent({
+        let weak = ui.as_weak();
+        let manager = manager.clone();
+        move || {
+            tokio::spawn(project_active_profile_with_manager(weak.clone(), Some(manager.clone())));
+        }
+    });
+
     ui.on_downloads_pause({
         let manager = manager.clone();
         let weak = ui.as_weak();

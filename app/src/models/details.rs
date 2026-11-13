@@ -1710,7 +1710,6 @@ pub fn sync(
                 episode_fingerprint.bool(is_watched);
                 episode_fingerprint.bool(is_scheduled);
                 episode_fingerprint.u64(u64::from(progress.to_bits()));
-                watch_updates.push((video.id.clone(), is_watched, progress / 100.0));
 
                 slint_episodes.push(EpisodeItem {
                     id: video.id.as_str().into(),
@@ -1734,6 +1733,22 @@ pub fn sync(
             }
         }
 
+        if is_series {
+            for video in &meta_item.videos {
+                let is_watched = meta_details
+                    .watched
+                    .as_ref()
+                    .map(|watched| watched.get_video(&video.id))
+                    .unwrap_or(false);
+                let progress = meta_details
+                    .library_item
+                    .as_ref()
+                    .filter(|item| item.state.video_id.as_deref() == Some(video.id.as_str()))
+                    .map(|item| item.progress() as f32 / 100.0)
+                    .unwrap_or(0.0);
+                watch_updates.push((video.id.clone(), is_watched, progress));
+            }
+        }
         persist_watch_updates(watch_updates);
 
         let episode_fingerprint = episode_fingerprint.finish();

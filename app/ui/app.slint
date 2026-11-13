@@ -1164,6 +1164,7 @@ export component MainWindow inherits Window {
     callback downloads-delete-item(string);
     callback downloads-open-folder();
     callback downloads-refresh();
+    callback downloads-refresh-silent();
     callback downloads-request-download-episode(string, int, int);
     callback onboarding-completed();
     callback play-url-magnet-from-clipboard();
@@ -1294,6 +1295,11 @@ export component MainWindow inherits Window {
             app-shortcuts.focus();
         } else {
             root.close-player-menus();
+            // Returning from the player: refresh Downloads quietly so watched
+            // progress recorded during playback appears immediately.
+            if (root.effective-active-tab == 7) {
+                root.downloads-refresh-silent();
+            }
         }
     }
 
