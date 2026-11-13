@@ -1,7 +1,7 @@
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, IconData } from "../theme.slint";
 import { ButtonSurface, ChevronTextButton, IconAction, MenuButton, PillButton } from "../components/button.slint";
-import { Video } from "../components/media_rows.slint";
+import { StreamRow, Video } from "../components/media_rows.slint";
 import { SeasonSelectField } from "../components/select.slint";
 import { Slider } from "../components/slider.slint";
 import {
@@ -530,6 +530,7 @@ export component PlayerPage inherits Rectangle {
     in-out property <bool> show-tools-menu: false;
     in-out property <bool> show-streams-menu: false;
     in property <[StreamLink]> available-streams: [];
+    in-out property <bool> show-episode-streams: false;
     in-out property <bool> show-cast-menu: false;
     in-out property <bool> show-playlist-drawer: false;
     in-out property <bool> season-menu-open: false;
@@ -1218,10 +1219,16 @@ export component PlayerPage inherits Rectangle {
         z: 175;
         private property <int> reveal-index: root.active-episode-idx;
         private property <int> reveal-season: root.active-season;
+        private property <bool> drawer-open: root.show-playlist-drawer;
 
         animate x { duration: 300ms; easing: ease-in-out; }
 
         init => { episode-reveal-timer.restart(); }
+        changed drawer-open => {
+            if (drawer-open) {
+                episode-reveal-timer.restart();
+            }
+        }
         changed reveal-index => { episode-reveal-timer.restart(); }
         changed reveal-season => {
             episode-list.viewport-y = 0px;
@@ -1369,8 +1376,75 @@ export component PlayerPage inherits Rectangle {
                 background: Theme.divider;
             }
 
+            if (root.show-episode-streams) : VerticalLayout {
+                vertical-stretch: 1;
+                spacing: 0.5 * Theme.root-font-size;
+
+                HorizontalLayout {
+                    height: 2.6 * Theme.root-font-size;
+                    spacing: 0.5 * Theme.root-font-size;
+
+                    ButtonSurface {
+                        width: 2.6 * Theme.root-font-size;
+                        height: 2.6 * Theme.root-font-size;
+                        border-radius: self.height / 2;
+                        background: self.has-hover ? Theme.overlay-hover : transparent;
+                        accessible-name: @tr("BACK_TO_EPISODES" => "Back to episodes");
+                        clicked => { root.show-episode-streams = false; }
+
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 1.4 * Theme.root-font-size;
+                            height: 1.4 * Theme.root-font-size;
+                            source: @image-url("../assets/images/icons/chevron-back.svg");
+                            colorize: Theme.primary-foreground;
+                            image-fit: contain;
+                        }
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: @tr("SOURCES_FOR_EPISODE" => "Fuentes del capítulo");
+                        color: Theme.text-primary;
+                        font-size: 1.05 * Theme.root-font-size;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                if (root.available-streams.length == 0) : Text {
+                    text: @tr("LOADING_SOURCES" => "Cargando fuentes…");
+                    color: Theme.text-secondary;
+                    font-size: 0.95 * Theme.root-font-size;
+                    horizontal-alignment: center;
+                }
+
+                streams-list := ListView {
+                    vertical-stretch: 1;
+                    horizontal-scrollbar-policy: always-off;
+
+                    for stream in root.available-streams : StreamRow {
+                        width: parent.width;
+                        unit: Theme.root-font-size;
+                        name: stream.name;
+                        description: stream.description;
+                        score-label: stream.score;
+                        score-details: stream.score-summary;
+                        filtered: stream.filtered;
+                        thumbnail: stream.thumbnail;
+                        progress: stream.progress;
+                        play => {
+                            root.show-episode-streams = false;
+                            root.switch-stream(stream.id);
+                        }
+                    }
+                }
+            }
+
             episode-list := ListView {
-                visible: root.is-series;
+                visible: root.is-series && !root.show-episode-streams;
                 vertical-stretch: 1;
                 horizontal-scrollbar-policy: always-off;
 
@@ -1394,7 +1468,15 @@ export component PlayerPage inherits Rectangle {
                     selected => {
                         root.active-episode-idx = idx;
                         root.active-video-id = episode.id;
-                        root.play-episode(idx, episode.id);
+                        // Episodes that already have a resolved stream switch
+                        // in place instead of kicking the user back to Details.
+                        if (episode.can-play) {
+                            root.show-episode-streams = false;
+                            root.play-saved-episode(episode.id);
+                        } else {
+                            root.show-episode-streams = true;
+                            root.play-episode(idx, episode.id);
+                        }
                     }
                     toggle-watched => { root.toggle-episode-watched(episode.id); }
                     toggle-season-watched => { root.mark-season-watched(root.active-season); }

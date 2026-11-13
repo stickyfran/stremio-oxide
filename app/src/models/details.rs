@@ -340,10 +340,23 @@ pub fn setup(
                 .and_then(|model| model.meta_details.library_item.clone())
                 .map(|item| item.watched())
                 .unwrap_or(false);
+            let meta_id = runtime.model().ok().and_then(|model| {
+                model
+                    .meta_details
+                    .selected
+                    .as_ref()
+                    .map(|selected| selected.meta_path.id.clone())
+            });
             runtime.dispatch(RuntimeAction {
                 field: None,
                 action: Action::MetaDetails(ActionMetaDetails::MarkAsWatched(!is_watched)),
             });
+            if let Some(meta_id) = meta_id {
+                let watched = !is_watched;
+                tokio::spawn(async move {
+                    crate::downloads::mark_video_watched(&meta_id, watched).await;
+                });
+            }
         }
     });
 
@@ -588,13 +601,18 @@ pub fn setup(
                         .unwrap_or(false);
                     drop(model);
 
+                    let new_watched = !is_watched;
+                    let watched_id = video.id.clone();
                     // Dispatch toggle watched action
                     rt.dispatch(RuntimeAction {
                         field: None,
                         action: Action::MetaDetails(ActionMetaDetails::MarkVideoAsWatched(
                             video,
-                            !is_watched,
+                            new_watched,
                         )),
+                    });
+                    tokio::spawn(async move {
+                        crate::downloads::mark_video_watched(&watched_id, new_watched).await;
                     });
                 }
             });
@@ -608,6 +626,7 @@ pub fn setup(
             let rt = runtime.clone();
             tokio::spawn(async move {
                 let model = rt.model().expect("model read failed");
+                let mut season_video_ids: Vec<String> = Vec::new();
                 let all_watched = model.meta_details.selected.as_ref().and_then(|selected| {
                     let meta =
                         model.meta_details.meta_items.iter().find_map(
@@ -626,17 +645,32 @@ pub fn setup(
                             .as_ref()
                             .is_some_and(|info| info.season as i32 == season)
                     };
-                    let has_videos = meta.videos.iter().any(|video| is_target_season(&video));
-                    has_videos.then(|| {
-                        model.meta_details.watched.as_ref().is_some_and(|watched| {
-                            meta.videos
-                                .iter()
-                                .filter(is_target_season)
-                                .all(|video| watched.get_video(&video.id))
-                        })
-                    })
+                    season_video_ids = meta
+                        .videos
+                        .iter()
+                        .filter(|video| is_target_season(video))
+                        .map(|video| video.id.clone())
+                        .collect();
+                    if season_video_ids.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            model.meta_details.watched.as_ref().is_some_and(|watched| {
+                                season_video_ids.iter().all(|id| watched.get_video(id))
+                            }),
+                        )
+                    }
                 });
                 drop(model);
+                if let Some(all_watched) = all_watched {
+                    let new_watched = !all_watched;
+                    let ids = season_video_ids.clone();
+                    tokio::spawn(async move {
+                        for video_id in ids {
+                            crate::downloads::mark_video_watched(&video_id, new_watched).await;
+                        }
+                    });
+                }
 
                 if let Some(all_watched) = all_watched {
                     rt.dispatch(RuntimeAction {

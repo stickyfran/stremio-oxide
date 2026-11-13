@@ -444,6 +444,7 @@ export component MainWindow inherits Window {
     in-out property <bool> addon-details-configurable: false;
     in-out property <bool> addon-details-configuration-required: false;
     in-out property <[StreamLink]> stream-links: [];
+    in-out property <bool> player-show-episode-streams: false;
     in-out property <[string]> detail-stream-providers: ["All"];
     in-out property <int> detail-stream-loading-count: 0;
     in-out property <string> detail-ranking-mode: "Smart";
@@ -636,7 +637,7 @@ export component MainWindow inherits Window {
     }
 
     tab-fade-timer := Timer {
-        interval: 60ms;
+        interval: 16ms;
         running: root.tab-fade-in-pending;
         triggered => {
             root.tab-fade-in-pending = false;
@@ -654,8 +655,6 @@ export component MainWindow inherits Window {
             if (root.effective-show-player) {
                 root.preview-drawer-close();
             }
-        } else {
-            root.trigger-tab-fade();
         }
     }
     changed effective-active-tab => {
@@ -699,6 +698,7 @@ export component MainWindow inherits Window {
     in-out property <int> detail-active-season: 1;
     in-out property <[string]> detail-episode-names: [];
     in-out property <int> detail-active-episode-idx: 0;
+    in-out property <string> detail-pending-download-scope: "";
     in-out property <bool> detail-is-in-library: false;
     in-out property <bool> detail-notifications-enabled: true;
     in-out property <image> detail-background;
@@ -1811,8 +1811,8 @@ export component MainWindow inherits Window {
                     clip: true;
                     opacity: root.tab-fade-opacity;
                     animate opacity {
-                        duration: root.tab-fade-in-pending ? 60ms : 230ms;
-                        easing: ease-out;
+                        duration: root.tab-fade-in-pending ? 0ms : Theme.motion-fade-in;
+                        easing: ease-in-out;
                     }
                     
                     if (root.effective-active-tab == 0) : BoardPage {
@@ -2615,6 +2615,7 @@ export component MainWindow inherits Window {
                 && root.debug-preview-state == "series-season-menu";
             episode-names: detail-episode-names;
             active-episode-idx <=> root.detail-active-episode-idx;
+            pending-download-scope <=> root.detail-pending-download-scope;
             episodes: detail-episodes;
             in-stream-view: root.debug-preview-enabled && root.debug-preview-page == 7
                 ? (root.debug-preview-state == "series-streams"
@@ -2787,6 +2788,7 @@ export component MainWindow inherits Window {
             show-tools-menu <=> root.player-show-tools-menu;
             show-streams-menu <=> root.player-show-streams-menu;
             available-streams: root.stream-links;
+            show-episode-streams <=> root.player-show-episode-streams;
             show-cast-menu <=> root.player-show-cast-menu;
             cast-devices: root.player-cast-devices;
             cast-devices-loading: root.player-cast-devices-loading;

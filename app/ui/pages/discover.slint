@@ -137,7 +137,6 @@ export component DiscoverPage inherits Rectangle {
 
     private property <float> grid-fade-opacity: 1.0;
     private property <bool> grid-fade-in-pending: false;
-    private property <int> has-rows-state: root.rows.length > 0 ? 1 : 0;
 
     function trigger-grid-fade() {
         root.grid-fade-opacity = 0.0;
@@ -145,10 +144,6 @@ export component DiscoverPage inherits Rectangle {
     }
 
     init => {
-        root.trigger-grid-fade();
-    }
-
-    changed loading => {
         root.trigger-grid-fade();
     }
 
@@ -164,14 +159,11 @@ export component DiscoverPage inherits Rectangle {
         root.trigger-grid-fade();
     }
 
-    changed has-rows-state => {
-        root.trigger-grid-fade();
-    }
-
     Timer {
-        interval: 60ms;
+        interval: 16ms;
         running: root.grid-fade-in-pending;
         triggered => {
+            self.stop();
             root.grid-fade-in-pending = false;
             root.grid-fade-opacity = 1.0;
         }
@@ -319,7 +311,7 @@ export component DiscoverPage inherits Rectangle {
                 card-height: root.card-height;
                 opacity: root.grid-fade-opacity;
                 animate opacity {
-                    duration: root.grid-fade-in-pending ? 60ms : 230ms;
+                    duration: root.grid-fade-in-pending ? 0ms : Theme.motion-control;
                     easing: ease-out;
                 }
             }
@@ -332,7 +324,7 @@ export component DiscoverPage inherits Rectangle {
                 message: @tr("Try changing the catalog filters.");
                 opacity: root.grid-fade-opacity;
                 animate opacity {
-                    duration: root.grid-fade-in-pending ? 60ms : 230ms;
+                    duration: root.grid-fade-in-pending ? 0ms : Theme.motion-control;
                     easing: ease-out;
                 }
             }
@@ -343,7 +335,7 @@ export component DiscoverPage inherits Rectangle {
                 clip: true;
                 opacity: root.grid-fade-opacity;
                 animate opacity {
-                    duration: root.grid-fade-in-pending ? 60ms : 230ms;
+                    duration: root.grid-fade-in-pending ? 0ms : Theme.motion-control;
                     easing: ease-out;
                 }
 

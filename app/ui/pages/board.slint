@@ -110,7 +110,6 @@ export component BoardPage inherits Rectangle {
 
     private property <float> content-fade-opacity: 1.0;
     private property <bool> content-fade-in-pending: false;
-    private property <int> has-sections-state: root.sections.length > 0 ? 1 : 0;
 
     function trigger-content-fade() {
         root.content-fade-opacity = 0.0;
@@ -121,18 +120,11 @@ export component BoardPage inherits Rectangle {
         root.trigger-content-fade();
     }
 
-    changed loading => {
-        root.trigger-content-fade();
-    }
-
-    changed has-sections-state => {
-        root.trigger-content-fade();
-    }
-
     Timer {
-        interval: 60ms;
+        interval: 16ms;
         running: root.content-fade-in-pending;
         triggered => {
+            self.stop();
             root.content-fade-in-pending = false;
             root.content-fade-opacity = 1.0;
         }
@@ -141,7 +133,7 @@ export component BoardPage inherits Rectangle {
     background: transparent;
     opacity: root.content-fade-opacity;
     animate opacity {
-        duration: root.content-fade-in-pending ? 60ms : 230ms;
+        duration: root.content-fade-in-pending ? 0ms : Theme.motion-control;
         easing: ease-out;
     }
 

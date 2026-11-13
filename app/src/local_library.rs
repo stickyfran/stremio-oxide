@@ -602,7 +602,7 @@ pub fn setup(
                 };
                 let _ = slint::invoke_from_event_loop(move || {
                     if let (Some(ui), Some(playback)) = (ui_weak.upgrade(), playback.as_ref()) {
-                        playback.play_local_file(&ui, &navigation, &item.path, &item.title);
+                        playback.play_local_file(&ui, &navigation, &item.path, &item.title, None);
                     }
                 });
             });

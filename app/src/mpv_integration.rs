@@ -421,6 +421,9 @@ struct SessionState {
     pending_pause_restore: Option<bool>,
     load_watchdog_task: Option<tokio::task::JoinHandle<()>>,
     audio_track_recorded: bool,
+    /// (video_id, url) of a local download being played, used to mark it as
+    /// watched when playback reaches the end.
+    local_watch_target: Option<(String, String)>,
 }
 
 impl SessionState {
@@ -1323,6 +1326,7 @@ impl NativePlaybackBridge {
         navigation: &NavigationController,
         path: &std::path::Path,
         title: &str,
+        watch_video_id: Option<String>,
     ) {
         let Some(url) = path.to_str().map(ToOwned::to_owned) else {
             ui.set_error_message("The local media path is not valid Unicode.".into());
@@ -1346,6 +1350,9 @@ impl NativePlaybackBridge {
             session.begin_subtitle_source();
             session.last_time = 0;
             session.last_paused = None;
+            session.local_watch_target = watch_video_id
+                .as_ref()
+                .map(|id| (id.clone(), url.clone()));
             session.load_requested_at = Some(Instant::now());
             session.recovery.reset_for_source();
             session.episode_selector_meta_id = None;
@@ -2654,7 +2661,11 @@ impl NativePlaybackBridge {
                     Some((video, !watched))
                 });
                 if let Some((video, watched)) = selection {
+                    let watched_id = video.id.clone();
                     dispatch_player(&core, ActionPlayer::MarkVideoAsWatched(video, watched));
+                    tokio::spawn(async move {
+                        crate::downloads::mark_video_watched(&watched_id, watched).await;
+                    });
                 }
             }
         });
@@ -2698,12 +2709,19 @@ impl NativePlaybackBridge {
                     Some((season_videos, !all_watched))
                 });
                 if let Some((videos, target_watched)) = selection {
+                    let watched_ids: Vec<String> =
+                        videos.iter().map(|video| video.id.clone()).collect();
                     for video in videos {
                         dispatch_player(
                             &core,
                             ActionPlayer::MarkVideoAsWatched(video, target_watched),
                         );
                     }
+                    tokio::spawn(async move {
+                        for video_id in watched_ids {
+                            crate::downloads::mark_video_watched(&video_id, target_watched).await;
+                        }
+                    });
                 }
             }
         });
@@ -3076,34 +3094,39 @@ impl NativePlaybackBridge {
                     return;
                 }
 
-                unload_player(
-                    &controller,
-                    &core,
-                    &statistics_poll,
-                    &session,
-                    &discord_rpc,
-                    &thumbnails,
-                );
                 if let Some(ui) = weak.upgrade() {
                     if !navigation.is_player_visible() {
                         return;
                     }
+                    // Series episode without a resolved stream: stay in the
+                    // player and load the episode's sources in the drawer.
+                    if meta_id.is_some() {
+                        if let Some(season) = season {
+                            ui.set_detail_active_season(season);
+                            ui.invoke_details_season_changed(season);
+                        }
+                        ui.set_player_active_episode_idx(index);
+                        ui.set_detail_active_episode_idx(index);
+                        ui.invoke_details_episode_changed(index, video_id.into());
+                        ui.set_player_show_episode_streams(true);
+                        return;
+                    }
+
+                    // No meta information to resolve sources from: fall back to
+                    // the details page.
+                    unload_player(
+                        &controller,
+                        &core,
+                        &statistics_poll,
+                        &session,
+                        &discord_rpc,
+                        &thumbnails,
+                    );
                     let _ = ui.window().with_winit_window(|window| {
                         pip_controller.borrow_mut().exit(window);
                     });
                     ui.set_player_pip_active(false);
-                    if let Some(season) = season {
-                        ui.set_detail_active_season(season);
-                        ui.invoke_details_season_changed(season);
-                    }
-                    if let Some(meta_id) = meta_id {
-                        navigation.dispatch_and_project(
-                            &ui,
-                            NavigationIntent::OpenDetails { media_id: meta_id },
-                        );
-                    } else {
-                        navigation.dispatch_and_project(&ui, NavigationIntent::Back);
-                    }
+                    navigation.dispatch_and_project(&ui, NavigationIntent::Back);
                     ui.set_player_active_episode_idx(index);
                     ui.set_detail_active_episode_idx(index);
                     ui.invoke_details_episode_changed(index, video_id.into());
@@ -3577,6 +3600,19 @@ fn handle_event(
             }
             tracing::info!(?reason, error = error.as_deref(), "MPV playback ended");
             if reason == EndReason::Eof {
+                let local_watched = {
+                    let mut session = lock_session(session);
+                    let current_url = session.url.clone();
+                    match session.local_watch_target.take() {
+                        Some((id, target_url)) if current_url.as_deref() == Some(target_url.as_str()) => Some(id),
+                        _ => None,
+                    }
+                };
+                if let Some(video_id) = local_watched {
+                    tokio::spawn(async move {
+                        crate::downloads::mark_video_watched(&video_id, true).await;
+                    });
+                }
                 dispatch_player(core, ActionPlayer::Ended);
                 if consume_end_sleep_timer(session) {
                     if let Some(controller) = controller.get() {

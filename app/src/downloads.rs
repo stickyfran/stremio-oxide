@@ -185,6 +185,44 @@ pub async fn job(job_id: &str) -> Result<DownloadJob, DownloadError> {
     load_job(job_id).await
 }
 
+/// Records the core "watched" state for a video so downloads can show a
+/// checkmark for episodes/movies the user already watched.
+pub async fn mark_video_watched(video_id: &str, watched: bool) {
+    if video_id.is_empty() {
+        return;
+    }
+    let Ok(conn) = crate::db::get_conn().await else {
+        return;
+    };
+    let watched_value = if watched { 1i64 } else { 0i64 };
+    let _ = conn
+        .execute(
+            "INSERT INTO download_watched(video_id, watched) VALUES (?, ?)
+             ON CONFLICT(video_id) DO UPDATE SET watched = excluded.watched",
+            (video_id.to_string(), watched_value),
+        )
+        .await;
+}
+
+async fn watched_video_ids() -> std::collections::HashSet<String> {
+    let mut watched = std::collections::HashSet::new();
+    let Ok(conn) = crate::db::get_conn().await else {
+        return watched;
+    };
+    let Ok(mut rows) = conn
+        .query("SELECT video_id FROM download_watched WHERE watched = 1", ())
+        .await
+    else {
+        return watched;
+    };
+    while let Ok(Some(row)) = rows.next().await {
+        if let Ok(id) = row.get::<String>(0) {
+            watched.insert(id);
+        }
+    }
+    watched
+}
+
 pub fn parse_season_episode_from_filename(filename: &str) -> Option<(i32, i32)> {
     let lower = filename.to_lowercase();
     let bytes = lower.as_bytes();
@@ -538,6 +576,7 @@ pub fn setup_ui_callbacks(
                 if let Some(job) = job {
                     let dest = job.destination.clone();
                     let title = job.title.clone();
+                    let watch_id = job.video_id.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let (Some(ui), Some(playback)) = (weak.upgrade(), playback) {
                             playback.play_local_file(
@@ -545,6 +584,7 @@ pub fn setup_ui_callbacks(
                                 &navigation,
                                 &dest,
                                 &title,
+                                watch_id,
                             );
                         }
                     });
@@ -569,6 +609,11 @@ pub fn setup_ui_callbacks(
                 );
                 let video_id = Some(format!("{meta_id}:{target_season}:{target_ep}"));
                 crate::models::details::open_details_route(&ui, &runtime, &navigation, &meta_id);
+                // A season request (episode == 0) opens the details download
+                // dialog directly in "season" scope instead of only episode 1.
+                ui.set_detail_pending_download_scope(
+                    if episode > 0 { "episode" } else { "season" }.into(),
+                );
                 crate::models::details::load_meta_details_for_video(
                     &runtime,
                     meta_id,
@@ -607,6 +652,7 @@ pub struct SendEpisodeChip {
     pub title: String,
     pub is_downloaded: bool,
     pub is_downloading: bool,
+    pub watched: bool,
     pub progress: f32,
 }
 
@@ -632,6 +678,7 @@ struct SendEpisodeItem {
     can_resume: bool,
     can_play: bool,
     can_delete: bool,
+    watched: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -652,6 +699,7 @@ struct SendDownloadGroup {
     can_resume: bool,
     can_play: bool,
     can_delete: bool,
+    watched: bool,
     downloaded_seasons: Vec<SendSeasonGroup>,
     all_seasons: Vec<SendSeasonGroup>,
     episodes: Vec<SendEpisodeItem>,
@@ -761,6 +809,7 @@ pub async fn project_active_profile_with_manager(
     if let Some(ref mgr) = manager {
         let _ = GLOBAL_DOWNLOAD_MANAGER.set(mgr.clone());
     }
+    let watched_ids = watched_video_ids().await;
     let result = async {
         let profile_id = crate::profiles::active_profile_id()
             .await
@@ -975,6 +1024,10 @@ pub async fn project_active_profile_with_manager(
                             can_resume: matches!(j.state, DownloadState::Paused | DownloadState::Failed | DownloadState::Cancelled),
                             can_play: j.state == DownloadState::Completed,
                             can_delete: true,
+                            watched: j
+                                .video_id
+                                .as_deref()
+                                .is_some_and(|id| watched_ids.contains(id)),
                         }
                     })
                     .collect();
@@ -1004,6 +1057,10 @@ pub async fn project_active_profile_with_manager(
                                 title: clean_title,
                                 is_downloaded: true,
                                 is_downloading: false,
+                                watched: j
+                                    .video_id
+                                    .as_deref()
+                                    .is_some_and(|id| watched_ids.contains(id)),
                                 progress: 1.0,
                             });
                         }
@@ -1054,6 +1111,7 @@ pub async fn project_active_profile_with_manager(
                             title: ep.title.clone(),
                             is_downloaded,
                             is_downloading,
+                            watched: watched_ids.contains(&ep.id),
                             progress,
                         });
                     }
@@ -1099,6 +1157,12 @@ pub async fn project_active_profile_with_manager(
                     can_resume: any_paused,
                     can_play: any_completed,
                     can_delete: true,
+                    watched: jobs.iter().all(|j| {
+                        j.video_id
+                            .as_deref()
+                            .or(j.meta_id.as_deref())
+                            .is_some_and(|id| watched_ids.contains(id))
+                    }),
                     downloaded_seasons,
                     all_seasons,
                     episodes: group_episodes,
@@ -1138,6 +1202,7 @@ pub async fn project_active_profile_with_manager(
                             can_resume: e.can_resume,
                             can_play: e.can_play,
                             can_delete: e.can_delete,
+                            watched: e.watched,
                         })
                         .collect();
 
@@ -1155,6 +1220,7 @@ pub async fn project_active_profile_with_manager(
                                         title: c.title.into(),
                                         is_downloaded: c.is_downloaded,
                                         is_downloading: c.is_downloading,
+                                        watched: c.watched,
                                         progress: c.progress,
                                     })
                                     .collect();
@@ -1188,6 +1254,7 @@ pub async fn project_active_profile_with_manager(
                         can_resume: g.can_resume,
                         can_play: g.can_play,
                         can_delete: g.can_delete,
+                        watched: g.watched,
                         downloaded_seasons: map_season_groups(g.downloaded_seasons),
                         all_seasons: map_season_groups(g.all_seasons),
                         episodes: slint::ModelRc::new(slint::VecModel::from(eps)),

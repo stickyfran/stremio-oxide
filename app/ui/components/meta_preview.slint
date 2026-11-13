@@ -24,6 +24,8 @@ export component MetaActionButton inherits ButtonSurface {
     border-color: root.emphasized ? Theme.secondary-accent : Theme.primary-foreground;
     accessible-name: root.label;
 
+    Tooltip { text: @markdown("\{root.label}"); }
+
     label-measure := Text {
         visible: false;
         text: root.label;
@@ -89,6 +91,8 @@ export component MetaLinkChip inherits ButtonSurface {
         ? Theme.surface-light-30
         : Theme.overlay-color;
     accessible-name: root.label;
+
+    Tooltip { text: @markdown("\{root.label}"); }
 
     label-measure := Text {
         visible: false;

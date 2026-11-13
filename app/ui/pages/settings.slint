@@ -403,9 +403,10 @@ export component SettingsPage inherits Rectangle {
     }
 
     Timer {
-        interval: 60ms;
+        interval: 16ms;
         running: root.content-fade-in-pending;
         triggered => {
+            self.stop();
             root.content-fade-in-pending = false;
             root.content-fade-opacity = 1.0;
         }
@@ -496,7 +497,7 @@ export component SettingsPage inherits Rectangle {
             horizontal-stretch: 1;
             opacity: root.content-fade-opacity;
             animate opacity {
-                duration: root.content-fade-in-pending ? 60ms : 220ms;
+                duration: root.content-fade-in-pending ? 0ms : Theme.motion-control;
                 easing: ease-out;
             }
             scrolled => {

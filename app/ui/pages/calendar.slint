@@ -171,9 +171,10 @@ export component CalendarPage inherits Rectangle {
     }
 
     Timer {
-        interval: 60ms;
+        interval: 16ms;
         running: root.grid-fade-in-pending;
         triggered => {
+            self.stop();
             root.grid-fade-in-pending = false;
             root.grid-fade-opacity = 1.0;
         }
@@ -276,7 +277,7 @@ export component CalendarPage inherits Rectangle {
             background: transparent;
             opacity: root.grid-fade-opacity;
             animate opacity {
-                duration: root.grid-fade-in-pending ? 60ms : 230ms;
+                duration: root.grid-fade-in-pending ? 0ms : Theme.motion-control;
                 easing: ease-out;
             }
 

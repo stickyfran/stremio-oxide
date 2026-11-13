@@ -105,6 +105,7 @@ export component DetailsPage inherits Rectangle {
     in-out property <string> download-modal-stream-name: "";
     in-out property <string> download-modal-stream-details: "";
     in-out property <string> download-modal-scope: "episode";
+    in-out property <string> pending-download-scope: "";
     in property <bool> is-series: false;
     in property <[int]> available-seasons: [];
     in-out property <int> active-season: 1;
@@ -172,18 +173,12 @@ export component DetailsPage inherits Rectangle {
 
     private property <float> page-fade-opacity: 0.0;
     private property <bool> page-fade-in-pending: true;
-    private property <float> content-fade-opacity: 1.0;
-    private property <bool> content-fade-in-pending: false;
-    private property <int> streams-ready-state: root.streams.length > 0 ? 1 : 0;
+    private property <bool> streams-revealed: false;
+    private property <bool> episodes-revealed: false;
 
     function trigger-page-fade() {
         root.page-fade-opacity = 0.0;
         root.page-fade-in-pending = true;
-    }
-
-    function trigger-content-fade() {
-        root.content-fade-opacity = 0.0;
-        root.content-fade-in-pending = true;
     }
 
     init => {
@@ -191,51 +186,72 @@ export component DetailsPage inherits Rectangle {
     }
 
     changed item-title => {
-        if (root.item-title != "") {
-            root.trigger-content-fade();
-        }
-    }
-
-    changed loading => {
-        root.trigger-content-fade();
+        root.streams-revealed = false;
     }
 
     changed in-stream-view => {
-        root.trigger-content-fade();
+        root.streams-revealed = false;
+        root.episodes-revealed = false;
     }
 
-    changed active-season => {
-        root.trigger-content-fade();
+    changed streams => {
+        if (root.streams.length == 0) {
+            root.streams-revealed = false;
+        }
     }
 
-    changed streams-ready-state => {
-        if (root.streams-ready-state == 1) {
-            root.trigger-content-fade();
+    pending-download-timer := Timer {
+        interval: 80ms;
+        running: root.pending-download-scope != ""
+            && root.streams.length > 0
+            && (!root.is-series || root.in-stream-view);
+        triggered => {
+            self.stop();
+            root.download-modal-scope = root.pending-download-scope;
+            root.download-modal-selection-id = "";
+            root.download-modal-open = true;
+            root.pending-download-scope = "";
+        }
+    }
+
+    changed active-season => { root.episodes-revealed = false; }
+    changed episodes => {
+        if (root.episodes.length == 0) { root.episodes-revealed = false; }
+    }
+
+    episodes-reveal-timer := Timer {
+        interval: 16ms;
+        running: root.is-series && !root.in-stream-view
+            && root.episodes.length > 0 && !root.episodes-revealed;
+        triggered => {
+            self.stop();
+            root.episodes-revealed = true;
+        }
+    }
+
+    streams-reveal-timer := Timer {
+        interval: 16ms;
+        running: (!root.is-series || root.in-stream-view) && root.streams.length > 0 && !root.streams-revealed;
+        triggered => {
+            self.stop();
+            root.streams-revealed = true;
         }
     }
 
     Timer {
-        interval: 25ms;
+        interval: 16ms;
         running: root.page-fade-in-pending;
         triggered => {
+            self.stop();
             root.page-fade-in-pending = false;
             root.page-fade-opacity = 1.0;
         }
     }
 
-    Timer {
-        interval: 65ms;
-        running: root.content-fade-in-pending;
-        triggered => {
-            root.content-fade-in-pending = false;
-            root.content-fade-opacity = 1.0;
-        }
-    }
-
     opacity: root.page-fade-opacity;
     animate opacity {
-        duration: 240ms;
-        easing: ease-out;
+        duration: Theme.motion-fade-in;
+        easing: ease-in-out;
     }
 
     private property <image> backdrop-source: root.background-image.width > 0
@@ -248,8 +264,8 @@ export component DetailsPage inherits Rectangle {
         source: root.backdrop-source;
         image-fit: cover;
         horizontal-alignment: center;
-        opacity: 0.38 * root.content-fade-opacity;
-        animate opacity { duration: 240ms; easing: ease-out; }
+        opacity: 0.38;
+        animate opacity { duration: Theme.motion-control; easing: ease-out; }
     }
 
     Rectangle {
@@ -321,11 +337,6 @@ export component DetailsPage inherits Rectangle {
         height: parent.height;
         background: transparent;
         clip: true;
-        opacity: root.content-fade-opacity;
-        animate opacity {
-            duration: root.content-fade-in-pending ? 65ms : 240ms;
-            easing: ease-out;
-        }
 
         MetaPreview {
             x: 4 * root.unit;
@@ -391,11 +402,6 @@ export component DetailsPage inherits Rectangle {
         border-radius: 1.25 * root.unit;
         background: self.has-hover ? Theme.overlay-hover : Theme.overlay-color;
         accessible-name: root.enrichment-summary;
-        opacity: root.content-fade-opacity;
-        animate opacity {
-            duration: root.content-fade-in-pending ? 65ms : 240ms;
-            easing: ease-out;
-        }
         clicked => {
             if (root.enrichment-attribution-url != "") {
                 root.open-attribution(root.enrichment-attribution-url);
@@ -426,11 +432,6 @@ export component DetailsPage inherits Rectangle {
         border-bottom-left-radius: Theme.border-radius;
         background: Theme.drawer-background;
         clip: true;
-        opacity: root.content-fade-opacity;
-        animate opacity {
-            duration: root.content-fade-in-pending ? 65ms : 240ms;
-            easing: ease-out;
-        }
 
         // Base inset is the web's 1rem, shared by `.videos-container`,
         // `.streams-container` and `.select-choices-wrapper`. Sections the web
@@ -636,8 +637,34 @@ export component DetailsPage inherits Rectangle {
                 }
             }
 
-            if (root.is-series && !root.in-stream-view) : ListView {
+            if (root.is-series && !root.in-stream-view) : episodes-area := Rectangle {
                 vertical-stretch: 1;
+                clip: true;
+                background: transparent;
+
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: root.episodes-revealed ? episodes-area.height : 0px;
+                    clip: true;
+                    background: transparent;
+                    animate height {
+                        duration: Theme.motion-panel;
+                        easing: cubic-bezier(0.22, 1.0, 0.36, 1.0);
+                    }
+
+                    episodes-list := ListView {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: episodes-area.height;
+                        opacity: root.episodes-revealed ? 1.0 : 0.0;
+                        animate opacity {
+                            duration: Theme.motion-control;
+                            easing: ease-out;
+                        }
+
                 for episode[index] in root.episodes : Video {
                     width: parent.width;
                     unit: root.unit;
@@ -656,6 +683,8 @@ export component DetailsPage inherits Rectangle {
                         root.in-stream-view = true;
                     }
                     toggle-watched => { root.toggle-episode-watched(episode.id); }
+                }
+                    }
                 }
             }
 
@@ -778,9 +807,34 @@ export component DetailsPage inherits Rectangle {
             // =========================================================================
             // FASE 3: LISTA DE STREAMS DISPONIBLES (Progresiva)
             // =========================================================================
-            if ((!root.is-series || root.in-stream-view) && root.streams.length > 0) : ListView {
+            if ((!root.is-series || root.in-stream-view) && root.streams.length > 0) : streams-area := Rectangle {
                 vertical-stretch: 1;
-                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                clip: true;
+                background: transparent;
+
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: root.streams-revealed ? streams-area.height : 0px;
+                    clip: true;
+                    background: transparent;
+                    animate height {
+                        duration: Theme.motion-panel;
+                        easing: cubic-bezier(0.22, 1.0, 0.36, 1.0);
+                    }
+
+                    ListView {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: streams-area.height;
+                        opacity: root.streams-revealed ? 1.0 : 0.0;
+                        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                        animate opacity {
+                            duration: Theme.motion-control;
+                            easing: ease-out;
+                        }
 
                 for stream in root.streams : stream-delegate := Rectangle {
                     private property <bool> matches-provider:
@@ -821,6 +875,8 @@ export component DetailsPage inherits Rectangle {
                         }
                     }
                 }
+            }
+            }
             }
 
             // =========================================================================
@@ -1051,17 +1107,30 @@ export component DetailsPage inherits Rectangle {
         dialog-width: 48 * root.unit;
         dialog-height: 40 * root.unit;
         close-requested => { root.download-modal-open = false; }
+        actions: [
+            { id: "cancel", label: @tr("CANCEL" => "Cancelar"), icon: @image-url("../assets/images/icons/close.svg"), has-icon: false, enabled: true, primary: false },
+            { id: "download", label: @tr("DOWNLOAD" => "Descargar"), icon: @image-url("../assets/images/icons/download.svg"), has-icon: false, enabled: root.streams.length > 0, primary: true },
+        ];
+        action-triggered(action) => {
+            if action == "cancel" {
+                root.download-modal-open = false;
+            } else if action == "download" && root.streams.length > 0 {
+                root.start-download(
+                    root.download-modal-selection-id != "" ? root.download-modal-selection-id : root.streams[0].id,
+                    root.download-modal-scope,
+                    root.active-season
+                );
+                root.download-modal-open = false;
+            }
+        }
 
         VerticalLayout {
-            padding: 1.2 * root.unit;
             spacing: 0.8 * root.unit;
 
             if (!root.is-series) : Rectangle {
                 height: 3.2 * root.unit;
                 border-radius: Theme.border-radius;
-                background: Theme.accent.with-alpha(0.18);
-                border-width: 1px;
-                border-color: Theme.accent;
+                background: Theme.overlay-color;
 
                 HorizontalLayout {
                     padding-left: 1.2 * root.unit;
@@ -1071,10 +1140,11 @@ export component DetailsPage inherits Rectangle {
                     Text {
                         horizontal-stretch: 1;
                         text: "Película completa · " + root.item-title;
-                        color: Theme.accent;
+                        color: Theme.primary-foreground;
                         font-size: 0.95 * root.unit;
-                        font-weight: 650;
+                        font-weight: 600;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
             }
@@ -1086,15 +1156,16 @@ export component DetailsPage inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                     border-radius: Theme.border-radius;
-                    background: root.download-modal-scope == "episode" ? Theme.accent.with-alpha(0.2) : Theme.control-background;
-                    border-width: 1px;
-                    border-color: root.download-modal-scope == "episode" ? Theme.accent : Theme.divider;
-                    TouchArea { clicked => { root.download-modal-scope = "episode"; } }
+                    background: root.download-modal-scope == "episode" ? Theme.overlay-hover : Theme.overlay-color;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.download-modal-scope = "episode"; }
+                    }
                     Text {
                         width: parent.width;
                         height: parent.height;
                         text: "Solo este capítulo";
-                        color: root.download-modal-scope == "episode" ? Theme.accent : Theme.text-primary;
+                        color: root.download-modal-scope == "episode" ? Theme.primary-foreground : Theme.text-secondary;
                         font-size: 0.88 * root.unit;
                         font-weight: 600;
                         horizontal-alignment: center;
@@ -1105,15 +1176,16 @@ export component DetailsPage inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                     border-radius: Theme.border-radius;
-                    background: root.download-modal-scope == "season" ? Theme.accent.with-alpha(0.2) : Theme.control-background;
-                    border-width: 1px;
-                    border-color: root.download-modal-scope == "season" ? Theme.accent : Theme.divider;
-                    TouchArea { clicked => { root.download-modal-scope = "season"; } }
+                    background: root.download-modal-scope == "season" ? Theme.overlay-hover : Theme.overlay-color;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.download-modal-scope = "season"; }
+                    }
                     Text {
                         width: parent.width;
                         height: parent.height;
                         text: "Temporada " + root.active-season;
-                        color: root.download-modal-scope == "season" ? Theme.accent : Theme.text-primary;
+                        color: root.download-modal-scope == "season" ? Theme.primary-foreground : Theme.text-secondary;
                         font-size: 0.88 * root.unit;
                         font-weight: 600;
                         horizontal-alignment: center;
@@ -1124,15 +1196,16 @@ export component DetailsPage inherits Rectangle {
                 Rectangle {
                     horizontal-stretch: 1;
                     border-radius: Theme.border-radius;
-                    background: root.download-modal-scope == "series" ? Theme.accent.with-alpha(0.2) : Theme.control-background;
-                    border-width: 1px;
-                    border-color: root.download-modal-scope == "series" ? Theme.accent : Theme.divider;
-                    TouchArea { clicked => { root.download-modal-scope = "series"; } }
+                    background: root.download-modal-scope == "series" ? Theme.overlay-hover : Theme.overlay-color;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.download-modal-scope = "series"; }
+                    }
                     Text {
                         width: parent.width;
                         height: parent.height;
                         text: "Toda la serie";
-                        color: root.download-modal-scope == "series" ? Theme.accent : Theme.text-primary;
+                        color: root.download-modal-scope == "series" ? Theme.primary-foreground : Theme.text-secondary;
                         font-size: 0.88 * root.unit;
                         font-weight: 600;
                         horizontal-alignment: center;
@@ -1149,22 +1222,20 @@ export component DetailsPage inherits Rectangle {
             }
 
             sources-scroll := ScrollView {
-                height: root.is-series ? 19.5 * root.unit : 22.5 * root.unit;
+                height: 22 * root.unit;
                 viewport-width: self.width;
 
                 VerticalLayout {
-                    spacing: 0.6 * root.unit;
+                    spacing: 0.4 * root.unit;
 
                     for stream in root.streams : source-item := Rectangle {
                         property <bool> is-selected: root.download-modal-selection-id == stream.id
                             || (root.download-modal-selection-id == "" && stream.id == root.streams[0].id);
                         height: 4.8 * root.unit;
                         border-radius: Theme.border-radius;
-                        background: self.is-selected
-                            ? Theme.accent.with-alpha(0.2)
-                            : (source-touch.has-hover ? Theme.overlay-hover : Theme.control-background);
-                        border-width: self.is-selected ? 1.5px : 1px;
-                        border-color: self.is-selected ? Theme.accent : Theme.divider;
+                        background: self.is-selected || source-touch.has-hover
+                            ? Theme.overlay-hover
+                            : transparent;
 
                         source-touch := TouchArea {
                             mouse-cursor: pointer;
@@ -1239,34 +1310,6 @@ export component DetailsPage inherits Rectangle {
                 }
             }
 
-            HorizontalLayout {
-                spacing: 1 * root.unit;
-                alignment: end;
-                padding-top: 0.4 * root.unit;
-
-                PillButton {
-                    width: 8.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("CANCEL" => "Cancelar");
-                    outlined: true;
-                    clicked => { root.download-modal-open = false; }
-                }
-
-                PillButton {
-                    width: 10 * root.unit;
-                    unit: root.unit;
-                    label: @tr("DOWNLOAD" => "Descargar");
-                    primary: true;
-                    clicked => {
-                        root.start-download(
-                            root.download-modal-selection-id != "" ? root.download-modal-selection-id : root.streams[0].id,
-                            root.download-modal-scope,
-                            root.active-season
-                        );
-                        root.download-modal-open = false;
-                    }
-                }
-            }
         }
     }
 
