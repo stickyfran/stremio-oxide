@@ -708,15 +708,24 @@ export component DownloadsPage inherits Rectangle {
                                     alignment: start;
 
                                     for ep in s.episodes : Rectangle {
-                                        width: 4.0 * root.unit;
+                                        width: ep-grid-touch.has-hover && ep.title != ""
+                                            ? min(22 * root.unit, 4.0 * root.unit + ep-title-measure.preferred-width + 1.4 * root.unit)
+                                            : 4.0 * root.unit;
                                         height: 2.8 * root.unit;
                                         horizontal-stretch: 0;
                                         border-radius: 6px;
                                         // ILUMINADOS (descargados) vs EN GRIS (no descargados) - squircle sin borde
                                         clip: true;
+                                        animate width { duration: Theme.motion-panel; easing: ease-out; }
                                         background: ep.is-downloaded
                                             ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
                                             : (ep-grid-touch.has-hover ? #28283c : #181824);
+
+                                        ep-title-measure := Text {
+                                            visible: false;
+                                            text: ep.title;
+                                            font-size: 0.78 * root.unit;
+                                        }
 
                                         if (ep.watch-progress > 0) : Rectangle {
                                             x: 0px;
@@ -820,6 +829,17 @@ export component DownloadsPage inherits Rectangle {
                                                 font-size: 0.88 * root.unit;
                                                 font-weight: ep.is-downloaded ? 750 : 550;
                                                 vertical-alignment: center;
+                                            }
+
+                                            if (ep-grid-touch.has-hover && ep.title != "") : Text {
+                                                horizontal-stretch: 1;
+                                                height: parent.height;
+                                                text: ep.title;
+                                                color: ep.is-downloaded ? Theme.primary-foreground : Theme.text-primary;
+                                                font-size: 0.76 * root.unit;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                                overflow: elide;
                                             }
                                         }
                                     }
