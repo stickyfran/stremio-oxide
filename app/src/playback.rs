@@ -45,6 +45,15 @@ pub struct StreamSelectionView {
     pub name: String,
     pub description: String,
     pub provider: String,
+    pub title: String,
+    pub resolution_label: String,
+    pub debrid_badge: String,
+    pub is_debrid_cached: bool,
+    pub is_debrid_uncached: bool,
+    pub source_badge: String,
+    pub size_label: String,
+    pub seeders_label: String,
+    pub tech_summary: String,
     pub thumbnail: Option<String>,
     pub progress: f32,
     pub score: i32,
@@ -149,6 +158,7 @@ impl PlaybackSelections {
         let mut next_entries = HashMap::new();
         let mut views = Vec::new();
         let mut rank_inputs = Vec::new();
+        let mut torrent_flags = HashMap::new();
         let provider_names: HashMap<&str, &str> = addons
             .iter()
             .map(|addon| (addon.transport_url.as_str(), addon.manifest.name.as_str()))
@@ -236,6 +246,21 @@ impl PlaybackSelections {
                 let size_bytes = stream
                     .behavior_hints
                     .video_size
+                    .filter(|&sz| sz > 0)
+                    .or_else(|| {
+                        stream
+                            .behavior_hints
+                            .other
+                            .get("videoSize")
+                            .or_else(|| stream.behavior_hints.other.get("size"))
+                            .or_else(|| stream.behavior_hints.other.get("fileSize"))
+                            .and_then(|val| {
+                                val.as_u64().filter(|&sz| sz > 0).or_else(|| {
+                                    val.as_str()
+                                        .and_then(stream_ranking::parse_size_bytes_from_text)
+                                })
+                            })
+                    })
                     .or_else(|| stream_ranking::parse_size_bytes_from_text(&description))
                     .or_else(|| stream_ranking::parse_size_bytes_from_text(&name));
                 let formatted_description = stream_ranking::format_stream_description(
@@ -244,6 +269,22 @@ impl PlaybackSelections {
                     size_bytes,
                     seeders,
                 );
+                let is_torrent = matches!(
+                    stream.source,
+                    stremio_core::types::resource::StreamSource::Torrent { .. }
+                );
+                torrent_flags.insert(id.clone(), is_torrent);
+                let provider_label = provider_names
+                    .get(resource.request.base.as_str())
+                    .map(|name| (*name).to_owned())
+                    .unwrap_or_else(|| {
+                        resource
+                            .request
+                            .base
+                            .host_str()
+                            .unwrap_or("Addon")
+                            .to_owned()
+                    });
 
                 next_entries.insert(
                     id.clone(),
@@ -260,6 +301,16 @@ impl PlaybackSelections {
                     id: id.clone(),
                     name: name.clone(),
                     description: formatted_description.clone(),
+                    provider: provider_label,
+                    title: String::new(),
+                    resolution_label: String::new(),
+                    debrid_badge: String::new(),
+                    is_debrid_cached: false,
+                    is_debrid_uncached: false,
+                    source_badge: String::new(),
+                    size_label: String::new(),
+                    seeders_label: String::new(),
+                    tech_summary: String::new(),
                     thumbnail: stream.thumbnail.clone(),
                     progress: stream
                         .behavior_hints
@@ -268,17 +319,6 @@ impl PlaybackSelections {
                         .and_then(serde_json::Value::as_f64)
                         .map(|progress| (progress / 100.0).clamp(0.0, 1.0) as f32)
                         .unwrap_or_default(),
-                    provider: provider_names
-                        .get(resource.request.base.as_str())
-                        .map(|name| (*name).to_owned())
-                        .unwrap_or_else(|| {
-                            resource
-                                .request
-                                .base
-                                .host_str()
-                                .unwrap_or("Addon")
-                                .to_owned()
-                        }),
                     score: 0,
                     score_reasons: Vec::new(),
                     filtered: false,
@@ -316,24 +356,43 @@ impl PlaybackSelections {
             .map(|(position, ranked)| {
                 let reasons = ranked
                     .reasons
-                    .into_iter()
+                    .iter()
                     .map(|reason| {
                         let prefix = if reason.points > 0 { "+" } else { "" };
                         format!("{prefix}{} {}", reason.points, reason.label)
                     })
                     .collect::<Vec<_>>();
+                let id = ranked.input.id.clone();
+                let is_torrent = torrent_flags.get(&id).copied().unwrap_or(false);
                 (
-                    ranked.input.id,
-                    (position, ranked.score, reasons, ranked.filtered),
+                    id,
+                    (position, ranked, reasons, is_torrent),
                 )
             })
             .collect::<HashMap<_, _>>();
         views.retain(|view| ranking.contains_key(&view.id));
         for view in &mut views {
-            if let Some((_, score, reasons, filtered)) = ranking.get(&view.id) {
-                view.score = *score;
+            if let Some((_, ranked, reasons, is_torrent)) = ranking.get(&view.id) {
+                view.score = ranked.score;
                 view.score_reasons.clone_from(reasons);
-                view.filtered = *filtered;
+                view.filtered = ranked.filtered;
+                let pres = stream_ranking::extract_stream_presentation(
+                    &ranked.input,
+                    &ranked.parsed,
+                    ranked.effective_size,
+                    ranked.effective_seeders,
+                    &view.provider,
+                    *is_torrent,
+                );
+                view.title = pres.title;
+                view.resolution_label = pres.resolution_label;
+                view.debrid_badge = pres.debrid_badge;
+                view.is_debrid_cached = pres.is_debrid_cached;
+                view.is_debrid_uncached = pres.is_debrid_uncached;
+                view.source_badge = pres.source_badge;
+                view.size_label = pres.size_label;
+                view.seeders_label = pres.seeders_label;
+                view.tech_summary = pres.tech_summary;
             }
         }
         views.sort_by_key(|view| {

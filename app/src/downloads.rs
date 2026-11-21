@@ -134,6 +134,10 @@ pub enum DownloadError {
     Database,
     #[error("download network operation failed")]
     Network,
+    #[error("remote server returned HTTP {0}")]
+    HttpStatus(u16),
+    #[error("download timed out")]
+    Timeout,
     #[error("server does not support safe download resumption")]
     RangeUnsupported,
     #[error("download filesystem operation failed")]
@@ -142,6 +146,8 @@ pub enum DownloadError {
     Missing,
     #[error("storage limit reached")]
     StorageLimitExceeded,
+    #[error("{0}")]
+    Reason(String),
 }
 
 struct ActiveDownload {
@@ -512,21 +518,55 @@ pub fn setup_ui_callbacks(
     ui.on_downloads_resume({
         let manager = manager.clone();
         let weak = ui.as_weak();
+        let runtime = runtime.clone();
         move |target_id| {
             let manager = manager.clone();
             let weak = weak.clone();
+            let runtime = runtime.clone();
             let target_id = target_id.to_string();
             tokio::spawn(async move {
-                let profile_id = crate::profiles::active_profile_id().await.map(|p| p.as_str().to_string()).unwrap_or_else(|_| "default".to_string());
+                let profile_id = crate::profiles::active_profile_id()
+                    .await
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_else(|_| "default".to_string());
                 let jobs = list_jobs(&profile_id).await.unwrap_or_default();
+                let mut smart_retry_jobs = Vec::new();
                 for job in jobs {
                     if (job.meta_id.as_deref() == Some(&target_id) || job.id == target_id)
-                        && matches!(job.state, DownloadState::Paused | DownloadState::Failed | DownloadState::Cancelled)
+                        && matches!(
+                            job.state,
+                            DownloadState::Paused | DownloadState::Failed | DownloadState::Cancelled
+                        )
                     {
-                        let _ = manager.resume(&job.id).await;
+                        if manager.has_stored_source(&job).await {
+                            let _ = manager.resume(&job.id).await;
+                        } else if job.kind == "video" && job.meta_id.is_some() {
+                            smart_retry_jobs.push(job);
+                        }
                     }
                 }
-                project_active_profile(weak).await;
+                project_active_profile(weak.clone()).await;
+                if !smart_retry_jobs.is_empty() {
+                    let (installed_addons, streaming_server_url, settings) = match runtime.model() {
+                        Ok(model) => (
+                            model.ctx.profile.addons.clone(),
+                            model.streaming_server.base_url.clone(),
+                            model.ctx.profile.settings.clone(),
+                        ),
+                        Err(_) => return,
+                    };
+                    for job in smart_retry_jobs {
+                        retry_resolve_job_with_smart_search(
+                            &manager,
+                            &job,
+                            &installed_addons,
+                            &streaming_server_url,
+                            &settings,
+                            weak.clone(),
+                        )
+                        .await;
+                    }
+                }
             });
         }
     });
@@ -644,27 +684,83 @@ pub fn setup_ui_callbacks(
         let navigation = navigation.clone();
         move |meta_id, season, episode| {
             let meta_id = meta_id.to_string();
-            if let Some(ui) = weak.upgrade() {
-                let target_season = if season >= 0 { season } else { 1 };
-                let target_ep = if episode > 0 { episode } else { 1 };
-                crate::models::details::set_pending_target_episode(
-                    meta_id.clone(),
-                    target_season,
-                    target_ep,
-                );
-                let video_id = Some(format!("{meta_id}:{target_season}:{target_ep}"));
-                crate::models::details::open_details_route(&ui, &runtime, &navigation, &meta_id);
-                // A season request (episode == 0) opens the details download
-                // dialog directly in "season" scope instead of only episode 1.
-                ui.set_detail_pending_download_scope(
-                    if episode > 0 { "episode" } else { "season" }.into(),
-                );
-                crate::models::details::load_meta_details_for_video(
-                    &runtime,
-                    meta_id,
-                    Some("series".to_string()),
-                    video_id,
-                );
+            if season < 0 {
+                if let Some(ui) = weak.upgrade() {
+                    crate::models::details::open_details_route(&ui, &runtime, &navigation, &meta_id);
+                    ui.set_detail_pending_download_scope("movie".into());
+                    crate::models::details::load_meta_details_for_video(
+                        &runtime,
+                        meta_id,
+                        Some("movie".to_string()),
+                        None,
+                    );
+                }
+                return;
+            }
+
+            let target_season = if season >= 0 { season } else { 1 };
+            if episode > 0 {
+                if let Some(ui) = weak.upgrade() {
+                    crate::models::details::set_pending_target_episode(
+                        meta_id.clone(),
+                        target_season,
+                        episode,
+                    );
+                    let video_id = Some(format!("{meta_id}:{target_season}:{episode}"));
+                    crate::models::details::open_details_route(&ui, &runtime, &navigation, &meta_id);
+                    ui.set_detail_pending_download_scope("episode".into());
+                    crate::models::details::load_meta_details_for_video(
+                        &runtime,
+                        meta_id,
+                        Some("series".to_string()),
+                        video_id,
+                    );
+                }
+            } else {
+                let weak = weak.clone();
+                let runtime = runtime.clone();
+                let navigation = navigation.clone();
+                tokio::spawn(async move {
+                    let profile_id = crate::profiles::active_profile_id()
+                        .await
+                        .map(|p| p.as_str().to_string())
+                        .unwrap_or_else(|_| "default".to_string());
+                    let jobs = list_jobs(&profile_id).await.unwrap_or_default();
+                    let client = Client::builder()
+                        .timeout(Duration::from_secs(4))
+                        .user_agent("Stremio-Native/1")
+                        .build()
+                        .unwrap_or_default();
+                    let series_jobs: Vec<DownloadJob> = jobs
+                        .into_iter()
+                        .filter(|j| j.meta_id.as_deref() == Some(meta_id.as_str()))
+                        .collect();
+                    let all_eps = get_series_all_episodes(&client, &meta_id, &series_jobs).await;
+                    let target_ep = first_missing_aired_episode(&all_eps, &series_jobs, target_season);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak.upgrade() {
+                            crate::models::details::set_pending_target_episode(
+                                meta_id.clone(),
+                                target_season,
+                                target_ep,
+                            );
+                            let video_id = Some(format!("{meta_id}:{target_season}:{target_ep}"));
+                            crate::models::details::open_details_route(
+                                &ui,
+                                &runtime,
+                                &navigation,
+                                &meta_id,
+                            );
+                            ui.set_detail_pending_download_scope("season".into());
+                            crate::models::details::load_meta_details_for_video(
+                                &runtime,
+                                meta_id,
+                                Some("series".to_string()),
+                                video_id,
+                            );
+                        }
+                    });
+                });
             }
         }
     });
@@ -697,6 +793,8 @@ pub struct SendEpisodeChip {
     pub title: String,
     pub is_downloaded: bool,
     pub is_downloading: bool,
+    pub is_failed: bool,
+    pub error_message: String,
     pub watched: bool,
     pub watch_progress: f32,
     pub progress: f32,
@@ -708,6 +806,8 @@ pub struct SendSeasonGroup {
     pub season_label: String,
     pub season_year: String,
     pub has_downloaded: bool,
+    pub has_active: bool,
+    pub has_failed: bool,
     pub episodes: Vec<SendEpisodeChip>,
 }
 
@@ -742,6 +842,9 @@ struct SendDownloadGroup {
     size_formatted: String,
     subtitles_info: String,
     has_subtitles: bool,
+    is_downloading: bool,
+    has_failed: bool,
+    error_message: String,
     can_pause: bool,
     can_resume: bool,
     can_play: bool,
@@ -1110,6 +1213,8 @@ pub async fn project_active_profile_with_manager(
 
                 let any_downloading = jobs.iter().any(|j| matches!(j.state, DownloadState::Downloading | DownloadState::Resolving | DownloadState::Queued));
                 let any_paused = jobs.iter().any(|j| j.state == DownloadState::Paused);
+                let failed_jobs: Vec<&DownloadJob> = jobs.iter().filter(|j| j.state == DownloadState::Failed).collect();
+                let any_failed = !failed_jobs.is_empty();
                 let all_completed = jobs.iter().all(|j| j.state == DownloadState::Completed);
                 let any_completed = jobs.iter().any(|j| j.state == DownloadState::Completed);
 
@@ -1117,17 +1222,71 @@ pub async fn project_active_profile_with_manager(
                     format!("Completado · {}", format_bytes(total_downloaded))
                 } else if any_downloading {
                     let done_count = jobs.iter().filter(|j| j.state == DownloadState::Completed).count();
-                    format!(
-                        "Descargando ({}/{}) · {} / {}",
-                        done_count,
-                        jobs.len(),
-                        format_bytes(total_downloaded),
-                        format_bytes(total_expected)
-                    )
+                    if any_failed {
+                        format!(
+                            "Descargando ({}/{}) · {} con error · {}",
+                            done_count,
+                            jobs.len(),
+                            failed_jobs.len(),
+                            format_bytes(total_downloaded)
+                        )
+                    } else {
+                        format!(
+                            "Descargando ({}/{}) · {} / {}",
+                            done_count,
+                            jobs.len(),
+                            format_bytes(total_downloaded),
+                            format_bytes(total_expected)
+                        )
+                    }
                 } else if any_paused {
                     format!("Pausado · {}", format_bytes(total_downloaded))
+                } else if any_failed {
+                    if !is_series {
+                        "Error en la descarga".to_string()
+                    } else {
+                        let done_count = jobs.iter().filter(|j| j.state == DownloadState::Completed).count();
+                        if done_count > 0 {
+                            format!("{done_count}/{} completados · {} con error", jobs.len(), failed_jobs.len())
+                        } else {
+                            format!("Error en {} capítulo(s)", failed_jobs.len())
+                        }
+                    }
                 } else {
                     format_bytes(total_downloaded)
+                };
+
+                let error_message = if failed_jobs.is_empty() {
+                    String::new()
+                } else if failed_jobs.len() == 1 {
+                    let j = failed_jobs[0];
+                    let msg = humanize_error_code(j.error_code.as_deref().unwrap_or("Error desconocido"));
+                    match (is_series, j.season, j.episode) {
+                        (true, Some(s), Some(e)) => format!("T{s}E{e}: {msg}"),
+                        _ => msg,
+                    }
+                } else {
+                    let labels: Vec<String> = failed_jobs
+                        .iter()
+                        .take(5)
+                        .map(|j| match (j.season, j.episode) {
+                            (Some(s), Some(e)) => format!("T{s}E{e}"),
+                            _ => j.title.clone(),
+                        })
+                        .collect();
+                    let extra = failed_jobs.len().saturating_sub(5);
+                    let list_str = if extra > 0 {
+                        format!("{} (+{extra} más)", labels.join(", "))
+                    } else {
+                        labels.join(", ")
+                    };
+                    let sample_reason = humanize_error_code(
+                        failed_jobs[0].error_code.as_deref().unwrap_or("Error desconocido"),
+                    );
+                    format!(
+                        "{} capítulos con error ({list_str}): {sample_reason} Haz clic en un capítulo en rojo para elegir otra fuente o reintentar.",
+                        failed_jobs.len()
+                    )
                 };
 
                 let mut group_sub_langs: Vec<String> = Vec::new();
@@ -1156,7 +1315,10 @@ pub async fn project_active_profile_with_manager(
                             DownloadState::Downloading => format!("{} / {}", format_bytes(j.bytes_downloaded), j.bytes_total.map(format_bytes).unwrap_or_else(|| "…".into())),
                             DownloadState::Paused => "Pausado".to_string(),
                             DownloadState::Completed => "Completado".to_string(),
-                            DownloadState::Failed => format!("Error: {}", j.error_code.as_deref().unwrap_or("falló")),
+                            DownloadState::Failed => format!(
+                                "Error: {}",
+                                humanize_error_code(j.error_code.as_deref().unwrap_or("falló"))
+                            ),
                             DownloadState::Cancelled => "Cancelado".to_string(),
                         };
                         let ep_progress = j.bytes_total
@@ -1218,6 +1380,8 @@ pub async fn project_active_profile_with_manager(
                                 title: clean_title,
                                 is_downloaded: true,
                                 is_downloading: false,
+                                is_failed: false,
+                                error_message: String::new(),
                                 watched: ws.watched,
                                 watch_progress: ws.progress,
                                 progress: 1.0,
@@ -1239,6 +1403,8 @@ pub async fn project_active_profile_with_manager(
                             season_label,
                             season_year,
                             has_downloaded: true,
+                            has_active: false,
+                            has_failed: false,
                             episodes: eps,
                         });
                     }
@@ -1246,21 +1412,27 @@ pub async fn project_active_profile_with_manager(
                     let mut matrix_by_season: BTreeMap<i32, Vec<SendEpisodeChip>> = BTreeMap::new();
 
                     for ep in &all_eps {
-                        let matching_job = jobs.iter().find(|j| {
-                            j.kind == "video" && j.season == Some(ep.season) && j.episode == Some(ep.episode)
-                        });
+                        let matching_job = select_best_episode_job(&jobs, ep.season, ep.episode);
 
-                        let (is_downloaded, is_downloading, progress, chip_id) = match matching_job {
-                            Some(j) if j.state == DownloadState::Completed => (true, false, 1.0, j.id.clone()),
+                        let (is_downloaded, is_downloading, is_failed, error_message, progress, chip_id) = match matching_job {
+                            Some(j) if j.state == DownloadState::Completed => {
+                                (true, false, false, String::new(), 1.0, j.id.clone())
+                            }
                             Some(j) if matches!(j.state, DownloadState::Downloading | DownloadState::Resolving | DownloadState::Queued) => {
                                 let p = j.bytes_total
                                     .filter(|tot| *tot > 0)
                                     .map(|tot| (j.bytes_downloaded as f32 / tot as f32).clamp(0.0, 1.0))
                                     .unwrap_or(0.0);
-                                (false, true, p, j.id.clone())
+                                (false, true, false, String::new(), p, j.id.clone())
                             }
-                            Some(j) => (false, false, 0.0, j.id.clone()),
-                            None => (false, false, 0.0, ep.id.clone()),
+                            Some(j) if j.state == DownloadState::Failed => {
+                                let msg = humanize_error_code(
+                                    j.error_code.as_deref().unwrap_or("Error desconocido"),
+                                );
+                                (false, false, true, msg, 0.0, j.id.clone())
+                            }
+                            Some(j) => (false, false, false, String::new(), 0.0, j.id.clone()),
+                            None => (false, false, false, String::new(), 0.0, ep.id.clone()),
                         };
 
                         let ws = watch_states
@@ -1280,6 +1452,8 @@ pub async fn project_active_profile_with_manager(
                             title: ep.title.clone(),
                             is_downloaded,
                             is_downloading,
+                            is_failed,
+                            error_message,
                             watched: ws.watched,
                             watch_progress: ws.progress,
                             progress,
@@ -1296,11 +1470,15 @@ pub async fn project_active_profile_with_manager(
                         let season_label = if s == 0 { "Esp.".to_string() } else { format!("T{s}") };
                         let season_year = compute_season_year(&all_eps, s);
                         let has_downloaded = eps.iter().any(|e| e.is_downloaded);
+                        let has_active = eps.iter().any(|e| e.is_downloading);
+                        let has_failed = eps.iter().any(|e| e.is_failed);
                         full_seasons.push(SendSeasonGroup {
                             season: s,
                             season_label,
                             season_year,
                             has_downloaded,
+                            has_active,
+                            has_failed,
                             episodes: eps,
                         });
                     }
@@ -1323,8 +1501,11 @@ pub async fn project_active_profile_with_manager(
                     size_formatted: format_bytes(total_downloaded),
                     subtitles_info,
                     has_subtitles,
+                    is_downloading: any_downloading,
+                    has_failed: any_failed,
+                    error_message,
                     can_pause: any_downloading,
-                    can_resume: any_paused,
+                    can_resume: any_paused || any_failed,
                     can_play: any_completed,
                     can_delete: true,
                     watched: jobs.iter().all(|j| {
@@ -1409,6 +1590,8 @@ pub async fn project_active_profile_with_manager(
                                         title: c.title.into(),
                                         is_downloaded: c.is_downloaded,
                                         is_downloading: c.is_downloading,
+                                        is_failed: c.is_failed,
+                                        error_message: c.error_message.into(),
                                         watched: c.watched,
                                         watch_progress: c.watch_progress,
                                         progress: c.progress,
@@ -1419,6 +1602,8 @@ pub async fn project_active_profile_with_manager(
                                     season_label: sg.season_label.into(),
                                     season_year: sg.season_year.into(),
                                     has_downloaded: sg.has_downloaded,
+                                    has_active: sg.has_active,
+                                    has_failed: sg.has_failed,
                                     episodes: slint::ModelRc::new(slint::VecModel::from(chips)),
                                 }
                             })
@@ -1440,6 +1625,9 @@ pub async fn project_active_profile_with_manager(
                         size_formatted: g.size_formatted.into(),
                         subtitles_info: g.subtitles_info.into(),
                         has_subtitles: g.has_subtitles,
+                        is_downloading: g.is_downloading,
+                        has_failed: g.has_failed,
+                        error_message: g.error_message.into(),
                         can_pause: g.can_pause,
                         can_resume: g.can_resume,
                         can_play: g.can_play,
@@ -1455,7 +1643,9 @@ pub async fn project_active_profile_with_manager(
 
             ui.set_download_items(slint::ModelRc::new(slint::VecModel::from(slint_items)));
             ui.set_downloads_disk_usage(disk_text.into());
-            ui.set_downloads_error(error.unwrap_or_default().into());
+            if let Some(err) = error {
+                ui.set_downloads_error(err.into());
+            }
             ui.set_downloads_active_count(activity.count as i32);
             ui.set_downloads_speed_text(activity.speed_text.into());
             ui.set_downloads_current_text(activity.current_text.into());
@@ -1635,6 +1825,131 @@ impl DownloadManager {
         update_state(job_id, DownloadState::Paused, None).await
     }
 
+    pub async fn create_placeholder_job(
+        &self,
+        profile_id: &str,
+        title: &str,
+        suggested_filename: &str,
+        destination_dir: &Path,
+        state: DownloadState,
+        error_message: Option<&str>,
+        options: EnqueueOptions,
+    ) -> Result<DownloadJob, DownloadError> {
+        if !destination_dir.is_absolute() {
+            return Err(DownloadError::InvalidDestination);
+        }
+        tokio::fs::create_dir_all(destination_dir)
+            .await
+            .map_err(|_| DownloadError::Filesystem)?;
+        let filename = sanitize_filename(suggested_filename);
+        let destination = collision_safe_path(destination_dir, &filename).await;
+        let id = uuid::Uuid::new_v4().to_string();
+        let credential_ref = CredentialRef::new(format!("download-source/{id}"))?;
+        let now = chrono::Utc::now().timestamp();
+        let job = DownloadJob {
+            id,
+            profile_id: profile_id.to_owned(),
+            title: title.trim().chars().take(240).collect(),
+            filename,
+            destination,
+            state,
+            source_kind: DownloadSourceKind::DirectHttp,
+            credential_ref,
+            bytes_downloaded: 0,
+            bytes_total: None,
+            error_code: error_message.map(ToOwned::to_owned),
+            created_at: now,
+            updated_at: now,
+            meta_id: options.meta_id,
+            meta_type: options.meta_type,
+            series_name: options.series_name,
+            season: options.season,
+            episode: options.episode,
+            video_id: options.video_id,
+            poster_url: options.poster_url,
+            kind: options.kind.unwrap_or_else(|| "video".to_string()),
+            parent_job_id: options.parent_job_id,
+            lang: options.lang,
+        };
+        persist_new_job(&job).await?;
+        let _ = self.progress.send(Some(DownloadProgress {
+            job_id: job.id.clone(),
+            state: job.state,
+            bytes_downloaded: 0,
+            bytes_total: None,
+        }));
+        Ok(job)
+    }
+
+    pub async fn activate_placeholder_job(
+        &self,
+        job: &DownloadJob,
+        source: DownloadSource,
+        bytes_total_hint: Option<u64>,
+    ) -> Result<(), DownloadError> {
+        let url = url::Url::parse(&source.url).map_err(|_| DownloadError::InvalidSource)?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(DownloadError::InvalidSource);
+        }
+
+        if job.kind != "subtitle" {
+            let limit_gb = crate::db::get_setting("download_disk_limit_gb")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|val| val.parse::<u64>().ok())
+                .unwrap_or(0);
+            if limit_gb > 0 {
+                let limit_bytes = limit_gb * 1024 * 1024 * 1024;
+                if let Ok(all_jobs) = list_jobs(&job.profile_id).await {
+                    let used_bytes: u64 = all_jobs.iter().map(|j| j.bytes_downloaded).sum();
+                    if used_bytes >= limit_bytes {
+                        return Err(DownloadError::StorageLimitExceeded);
+                    }
+                }
+            }
+        }
+
+        let source_json = serde_json::to_vec(&source).map_err(|_| DownloadError::InvalidSource)?;
+        self.credentials
+            .put(
+                &job.credential_ref,
+                SecretKind::DownloadSource,
+                SecretValue::new(source_json),
+            )
+            .await?;
+
+        let mut updated = job.clone();
+        updated.state = DownloadState::Queued;
+        updated.error_code = None;
+        if let Some(total) = bytes_total_hint.filter(|&t| t > 0) {
+            updated.bytes_total = Some(total);
+        }
+        update_progress(
+            &updated.id,
+            DownloadState::Queued,
+            updated.bytes_downloaded,
+            updated.bytes_total,
+        )
+        .await?;
+        self.start(updated).await;
+        Ok(())
+    }
+
+    pub async fn mark_job_failed(&self, job_id: &str, message: &str) {
+        let _ = update_state(job_id, DownloadState::Failed, Some(message)).await;
+        let _ = self.progress.send(Some(DownloadProgress {
+            job_id: job_id.to_owned(),
+            state: DownloadState::Failed,
+            bytes_downloaded: 0,
+            bytes_total: None,
+        }));
+    }
+
+    pub async fn has_stored_source(&self, job: &DownloadJob) -> bool {
+        self.credentials.get(&job.credential_ref).await.is_ok()
+    }
+
     pub async fn resume(&self, job_id: &str) -> Result<(), DownloadError> {
         let mut job = load_job(job_id).await?;
         if job.state == DownloadState::Completed {
@@ -1686,7 +2001,7 @@ impl DownloadManager {
             }
             if let Err(error) = result {
                 let code = error_code(&error);
-                let _ = update_state(&job.id, DownloadState::Failed, Some(code)).await;
+                let _ = update_state(&job.id, DownloadState::Failed, Some(code.as_str())).await;
                 let _ = manager.progress.send(Some(DownloadProgress {
                     job_id: job.id.clone(),
                     state: DownloadState::Failed,
@@ -1730,7 +2045,7 @@ impl DownloadManager {
         }
         let response = request.send().await.map_err(|_| DownloadError::Network)?;
         if !response.status().is_success() {
-            return Err(DownloadError::Network);
+            return Err(DownloadError::HttpStatus(response.status().as_u16()));
         }
 
         let (file, downloaded, bytes_total) = if resume_from > 0
@@ -1813,7 +2128,7 @@ impl DownloadManager {
                 Err(_) => {
                     tracing::warn!(job_id = %job.id, "Download chunk read timed out after 45s of silence");
                     let _ = file.flush().await;
-                    return Err(DownloadError::Network);
+                    return Err(DownloadError::Timeout);
                 }
             };
 
@@ -1950,7 +2265,11 @@ pub async fn fetch_and_enqueue_subtitles(
             }
         });
         if has_subs_resource {
-            let base = addon.transport_url.as_str().trim_end_matches('/').to_string();
+            let trimmed = addon.transport_url.as_str().trim_end_matches('/');
+            let base = trimmed
+                .strip_suffix("/manifest.json")
+                .unwrap_or(trimmed)
+                .to_string();
             if !addon_bases.contains(&base) {
                 addon_bases.push(base);
             }
@@ -2073,6 +2392,7 @@ async fn persist_new_job(job: &DownloadJob) -> Result<(), DownloadError> {
         turso::Value::Text(job.credential_ref.expose_id().to_string()),
         turso::Value::Integer(job.bytes_downloaded as i64),
         job.bytes_total.map(|v| turso::Value::Integer(v as i64)).unwrap_or(turso::Value::Null),
+        job.error_code.as_ref().map(|s| turso::Value::Text(s.clone())).unwrap_or(turso::Value::Null),
         turso::Value::Integer(job.created_at),
         turso::Value::Integer(job.updated_at),
         job.meta_id.as_ref().map(|s| turso::Value::Text(s.clone())).unwrap_or(turso::Value::Null),
@@ -2089,10 +2409,10 @@ async fn persist_new_job(job: &DownloadJob) -> Result<(), DownloadError> {
     conn.execute(
         "INSERT INTO download_jobs(
             id, profile_id, title, filename, destination, state, source_kind,
-            credential_ref, bytes_downloaded, bytes_total, created_at, updated_at,
+            credential_ref, bytes_downloaded, bytes_total, error_code, created_at, updated_at,
             meta_id, meta_type, series_name, season, episode, video_id, poster_url,
             kind, parent_job_id, lang
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params,
     )
     .await
@@ -2288,18 +2608,496 @@ fn part_path(destination: &Path) -> PathBuf {
     destination.with_file_name(name)
 }
 
-fn error_code(error: &DownloadError) -> &'static str {
-    match error {
-        DownloadError::InvalidSource => "invalid-source",
-        DownloadError::InvalidDestination => "invalid-destination",
-        DownloadError::Credential(_) => "credential-unavailable",
-        DownloadError::Database => "database",
-        DownloadError::Network => "network",
-        DownloadError::RangeUnsupported => "range-unsupported",
-        DownloadError::Filesystem => "filesystem",
-        DownloadError::Missing => "missing",
-        DownloadError::StorageLimitExceeded => "storage-limit-exceeded",
+pub fn humanize_error_code(raw: &str) -> String {
+    match raw.trim() {
+        "network" => "Error de conexión durante la descarga. Reintentá o elegí otra fuente.".to_owned(),
+        "invalid-source" => "El enlace de descarga es inválido o no compatible.".to_owned(),
+        "invalid-destination" => "La carpeta de destino para descargas no es válida.".to_owned(),
+        "credential-unavailable" => "No se encontró el enlace guardado para reanudar. Elegí otra fuente.".to_owned(),
+        "database" => "Error al acceder a la base de datos de descargas.".to_owned(),
+        "range-unsupported" => "El servidor no permite reanudar la descarga parcial.".to_owned(),
+        "filesystem" => "Error al escribir en disco. Verificá espacio libre y permisos.".to_owned(),
+        "missing" => "La descarga ya no existe.".to_owned(),
+        "storage-limit-exceeded" => {
+            "Límite de almacenamiento alcanzado. Ajustá el límite o eliminá contenido.".to_owned()
+        }
+        other => other.to_owned(),
     }
+}
+
+fn error_code(error: &DownloadError) -> String {
+    match error {
+        DownloadError::InvalidSource => humanize_error_code("invalid-source"),
+        DownloadError::InvalidDestination => humanize_error_code("invalid-destination"),
+        DownloadError::Credential(_) => humanize_error_code("credential-unavailable"),
+        DownloadError::Database => humanize_error_code("database"),
+        DownloadError::Network => humanize_error_code("network"),
+        DownloadError::HttpStatus(401 | 403) => {
+            "Enlace rechazado o expirado (HTTP 403). Elegí otra fuente o reintentá.".to_owned()
+        }
+        DownloadError::HttpStatus(404 | 410) => {
+            "Archivo no disponible en el servidor (HTTP 404). Elegí otra fuente.".to_owned()
+        }
+        DownloadError::HttpStatus(429) => {
+            "Demasiadas solicitudes al proveedor (HTTP 429). Reintentá en unos segundos.".to_owned()
+        }
+        DownloadError::HttpStatus(code) if *code >= 500 => {
+            format!("Error del servidor remoto (HTTP {code}). Reintentá más tarde.")
+        }
+        DownloadError::HttpStatus(code) => format!("El servidor respondió HTTP {code}."),
+        DownloadError::Timeout => {
+            "Tiempo de espera agotado al descargar. Reintentá o elegí otra fuente.".to_owned()
+        }
+        DownloadError::RangeUnsupported => humanize_error_code("range-unsupported"),
+        DownloadError::Filesystem => humanize_error_code("filesystem"),
+        DownloadError::Missing => humanize_error_code("missing"),
+        DownloadError::StorageLimitExceeded => humanize_error_code("storage-limit-exceeded"),
+        DownloadError::Reason(msg) => msg.clone(),
+    }
+}
+
+pub fn select_best_episode_job<'a>(
+    jobs: &'a [DownloadJob],
+    season: i32,
+    episode: i32,
+) -> Option<&'a DownloadJob> {
+    fn state_priority(state: DownloadState) -> i32 {
+        match state {
+            DownloadState::Completed => 5,
+            DownloadState::Downloading => 4,
+            DownloadState::Resolving => 3,
+            DownloadState::Queued => 2,
+            DownloadState::Paused => 1,
+            DownloadState::Failed => 0,
+            DownloadState::Cancelled => -1,
+        }
+    }
+    jobs.iter()
+        .filter(|j| j.kind == "video" && j.season == Some(season) && j.episode == Some(episode))
+        .max_by_key(|j| (state_priority(j.state), j.updated_at))
+}
+
+pub fn first_missing_aired_episode(
+    all_eps: &[CachedEpisode],
+    jobs: &[DownloadJob],
+    season: i32,
+) -> i32 {
+    let mut season_eps: Vec<&CachedEpisode> =
+        all_eps.iter().filter(|e| e.season == season).collect();
+    season_eps.sort_by_key(|e| e.episode);
+    if let Some(missing) = season_eps.iter().find(|ep| {
+        !jobs.iter().any(|j| {
+            j.kind == "video"
+                && j.season == Some(season)
+                && j.episode == Some(ep.episode)
+                && matches!(
+                    j.state,
+                    DownloadState::Completed
+                        | DownloadState::Downloading
+                        | DownloadState::Resolving
+                        | DownloadState::Queued
+                )
+        })
+    }) {
+        missing.episode
+    } else {
+        season_eps.first().map(|e| e.episode).unwrap_or(1)
+    }
+}
+
+pub async fn delete_stale_episode_jobs(
+    manager: &DownloadManager,
+    profile_id: &str,
+    meta_id: Option<&str>,
+    season: Option<i32>,
+    episode: Option<i32>,
+) {
+    let Ok(jobs) = list_jobs(profile_id).await else {
+        return;
+    };
+    for job in jobs {
+        if job.kind == "video"
+            && job.meta_id.as_deref() == meta_id
+            && job.season == season
+            && job.episode == episode
+            && matches!(job.state, DownloadState::Failed | DownloadState::Cancelled)
+        {
+            let _ = delete_download_target(manager, profile_id, &job.id).await;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EpisodeTarget {
+    pub season: i32,
+    pub episode: i32,
+    pub video_id: String,
+    pub title: String,
+}
+
+pub fn collect_aired_episodes(
+    meta: &stremio_core::types::resource::MetaItem,
+    scope: &str,
+    target_season: i32,
+) -> Vec<EpisodeTarget> {
+    let now = chrono::Utc::now();
+    let matches_scope = |s: i32| -> bool {
+        if scope == "season" {
+            s == target_season
+        } else {
+            s > 0
+        }
+    };
+
+    let mut aired: Vec<EpisodeTarget> = meta
+        .videos
+        .iter()
+        .filter_map(|v| {
+            let info = v.series_info.as_ref()?;
+            let s = info.season as i32;
+            let e = info.episode as i32;
+            if !matches_scope(s) {
+                return None;
+            }
+            if v.released.is_some_and(|dt| dt > now) {
+                return None;
+            }
+            Some(EpisodeTarget {
+                season: s,
+                episode: e,
+                video_id: v.id.clone(),
+                title: v.title.clone(),
+            })
+        })
+        .collect();
+
+    if aired.is_empty() {
+        aired = meta
+            .videos
+            .iter()
+            .filter_map(|v| {
+                let info = v.series_info.as_ref()?;
+                let s = info.season as i32;
+                let e = info.episode as i32;
+                if scope == "season" && s != target_season {
+                    return None;
+                }
+                Some(EpisodeTarget {
+                    season: s,
+                    episode: e,
+                    video_id: v.id.clone(),
+                    title: v.title.clone(),
+                })
+            })
+            .collect();
+    }
+
+    aired.sort_by_key(|ep| (ep.season, ep.episode));
+    aired.dedup_by_key(|ep| (ep.season, ep.episode));
+    aired
+}
+
+async fn fetch_episode_streams_from_addon(
+    transport_url: &url::Url,
+    video_id: &str,
+) -> Vec<stremio_core::types::resource::Stream> {
+    use stremio_core::addon_transport::{AddonHTTPTransport, AddonTransport};
+    use stremio_core::types::addon::{ResourcePath, ResourceResponse};
+
+    let transport = AddonHTTPTransport::<core_env::DesktopEnv>::new(transport_url.clone());
+    let path = ResourcePath::without_extra("stream", "series", video_id);
+    match tokio::time::timeout(Duration::from_secs(10), transport.resource(&path)).await {
+        Ok(Ok(ResourceResponse::Streams { streams })) => streams,
+        _ => Vec::new(),
+    }
+}
+
+pub async fn find_and_rank_episode_candidates(
+    profile: &stream_ranking::StreamMatchProfile,
+    installed_addons: &[stremio_core::types::addon::Descriptor],
+    video_id: &str,
+) -> Vec<(
+    stremio_core::types::addon::Descriptor,
+    stremio_core::types::resource::Stream,
+)> {
+    use stremio_core::types::addon::ResourcePath;
+    use stremio_core::types::resource::StreamSource;
+
+    let path = ResourcePath::without_extra("stream", "series", video_id);
+    let mut capable: Vec<stremio_core::types::addon::Descriptor> = installed_addons
+        .iter()
+        .filter(|addon| addon.manifest.is_resource_supported(&path))
+        .cloned()
+        .collect();
+
+    if !profile.preferred_addon.is_empty()
+        && let Some(pos) = capable
+            .iter()
+            .position(|a| a.transport_url.as_str() == profile.preferred_addon)
+    {
+        let preferred = capable.remove(pos);
+        capable.insert(0, preferred);
+    }
+
+    let mut all_candidates: Vec<(
+        i32,
+        stremio_core::types::addon::Descriptor,
+        stremio_core::types::resource::Stream,
+    )> = Vec::new();
+
+    for (idx, addon) in capable.into_iter().enumerate() {
+        let streams = fetch_episode_streams_from_addon(&addon.transport_url, video_id).await;
+        if streams.is_empty() {
+            continue;
+        }
+        let mut rank_inputs = Vec::with_capacity(streams.len());
+        let mut torrent_flags = Vec::with_capacity(streams.len());
+        for (s_idx, s) in streams.iter().enumerate() {
+            let name = s.name.clone().unwrap_or_default();
+            let description = s.description.clone().unwrap_or_default();
+            let size_bytes = s
+                .behavior_hints
+                .video_size
+                .filter(|&sz| sz > 0)
+                .or_else(|| stream_ranking::parse_size_bytes_from_text(&description))
+                .or_else(|| stream_ranking::parse_size_bytes_from_text(&name));
+            let seeders = s
+                .behavior_hints
+                .other
+                .get("seeders")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .or_else(|| stream_ranking::parse_seeders_from_text(&description))
+                .or_else(|| stream_ranking::parse_seeders_from_text(&name));
+            let debrid = stream_ranking::parse_debrid_availability_from_text(&description)
+                .or_else(|| stream_ranking::parse_debrid_availability_from_text(&name));
+            torrent_flags.push(matches!(s.source, StreamSource::Torrent { .. }));
+            rank_inputs.push(stream_ranking::RankInput {
+                id: s_idx.to_string(),
+                name,
+                description,
+                addon: addon.transport_url.to_string(),
+                original_index: s_idx,
+                size_bytes,
+                seeders,
+                debrid,
+            });
+        }
+        let ranked =
+            stream_ranking::rank_streams(rank_inputs, stream_ranking::RankingMode::Smart, false);
+        let mut has_cached_from_preferred = false;
+        for r in ranked {
+            let s_idx = r.input.original_index;
+            let is_torrent = torrent_flags.get(s_idx).copied().unwrap_or(false);
+            let score = stream_ranking::score_episode_candidate(profile, &r, is_torrent);
+            if r.input.debrid == Some(stream_ranking::DebridAvailability::Cached) {
+                has_cached_from_preferred = true;
+            }
+            if let Some(stream) = streams.get(s_idx) {
+                all_candidates.push((score, addon.clone(), stream.clone()));
+            }
+        }
+
+        // Fast exit if the preferred addon already gave us a matching cached result.
+        if idx == 0
+            && !profile.preferred_addon.is_empty()
+            && addon.transport_url.as_str() == profile.preferred_addon
+            && (has_cached_from_preferred
+                || profile.preferred_debrid != Some(stream_ranking::DebridAvailability::Cached))
+            && !all_candidates.is_empty()
+        {
+            break;
+        }
+    }
+
+    all_candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    all_candidates
+        .into_iter()
+        .map(|(_, addon, stream)| (addon, stream))
+        .collect()
+}
+
+pub async fn resolve_stream_to_download_url(
+    stream: stremio_core::types::resource::Stream,
+    stream_request: Option<stremio_core::types::addon::ResourceRequest>,
+    meta_request: Option<stremio_core::types::addon::ResourceRequest>,
+    streaming_server_url: &Option<url::Url>,
+    settings: &stremio_core::types::profile::Settings,
+    client: &reqwest::Client,
+    prefer_cached_only: bool,
+) -> Option<(String, stremio_core::types::resource::Stream, Option<u64>)> {
+    use stremio_core::models::player::Selected;
+    use stremio_core::types::resource::StreamSource;
+
+    let selected = Selected {
+        stream,
+        stream_request,
+        meta_request,
+        subtitles_path: None,
+    };
+    let resolution = crate::integrations::resolve_explicit_selection(selected).await;
+    let final_stream = match resolution {
+        crate::integrations::DebridResolution::Resolved(res) => res.stream,
+        crate::integrations::DebridResolution::Uncached { selected, .. } => {
+            if prefer_cached_only {
+                return None;
+            }
+            selected.stream
+        }
+        crate::integrations::DebridResolution::Fallback(res) => res.stream,
+    };
+
+    let size_hint = final_stream
+        .behavior_hints
+        .video_size
+        .filter(|&sz| sz > 0)
+        .or_else(|| {
+            final_stream
+                .description
+                .as_deref()
+                .and_then(stream_ranking::parse_size_bytes_from_text)
+        })
+        .or_else(|| {
+            final_stream
+                .name
+                .as_deref()
+                .and_then(stream_ranking::parse_size_bytes_from_text)
+        });
+
+    let url = match &final_stream.source {
+        StreamSource::Url { url } => Some(url.to_string()),
+        StreamSource::Torrent {
+            info_hash,
+            file_idx,
+            ..
+        } => {
+            let server_base = streaming_server_url
+                .as_ref()
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| "http://127.0.0.1:11470/".into());
+            let server_trimmed = server_base.trim_end_matches('/');
+            let info_hash_hex = hex::encode(info_hash);
+            let create_url = format!("{server_trimmed}/{info_hash_hex}/create");
+            let _ = client
+                .post(&create_url)
+                .json(&serde_json::json!({}))
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await;
+
+            let sdl = stremio_core::deep_links::StreamDeepLinks::from((
+                &final_stream,
+                streaming_server_url.as_ref(),
+                settings,
+            ));
+            sdl.external_player
+                .download
+                .or(sdl.external_player.streaming)
+                .or_else(|| {
+                    let idx = file_idx
+                        .map(|i| i.to_string())
+                        .unwrap_or_else(|| "0".to_string());
+                    Some(format!("{server_trimmed}/{info_hash_hex}/{idx}"))
+                })
+        }
+        _ => None,
+    };
+
+    url.map(|u| (u, final_stream, size_hint))
+}
+
+pub async fn retry_resolve_job_with_smart_search(
+    manager: &DownloadManager,
+    job: &DownloadJob,
+    installed_addons: &[stremio_core::types::addon::Descriptor],
+    streaming_server_url: &Option<url::Url>,
+    settings: &stremio_core::types::profile::Settings,
+    ui_weak: slint::Weak<crate::MainWindow>,
+) {
+    use stremio_core::types::addon::{ResourcePath, ResourceRequest};
+
+    let _ = update_state(&job.id, DownloadState::Resolving, None).await;
+    project_active_profile(ui_weak.clone()).await;
+
+    let Some(video_id) = job.video_id.clone().or_else(|| {
+        match (&job.meta_id, job.season, job.episode) {
+            (Some(m), Some(s), Some(e)) => Some(format!("{m}:{s}:{e}")),
+            _ => None,
+        }
+    }) else {
+        manager
+            .mark_job_failed(
+                &job.id,
+                "Falta el identificador del capítulo. Elegí una fuente manualmente.",
+            )
+            .await;
+        project_active_profile(ui_weak).await;
+        return;
+    };
+
+    let profile = stream_ranking::StreamMatchProfile {
+        preferred_debrid: Some(stream_ranking::DebridAvailability::Cached),
+        quality_height: Some(1080),
+        ..Default::default()
+    };
+    let candidates = find_and_rank_episode_candidates(&profile, installed_addons, &video_id).await;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Stremio-Native/1")
+        .build()
+        .unwrap_or_default();
+
+    let mut activated = false;
+    for (addon, stream) in candidates.into_iter().take(3) {
+        let req = ResourceRequest {
+            base: addon.transport_url.clone(),
+            path: ResourcePath::without_extra("stream", "series", &video_id),
+        };
+        if let Some((url, _resolved_stream, size_hint)) = resolve_stream_to_download_url(
+            stream,
+            Some(req),
+            None,
+            streaming_server_url,
+            settings,
+            &client,
+            false,
+        )
+        .await
+        {
+            match manager
+                .activate_placeholder_job(
+                    job,
+                    DownloadSource {
+                        url,
+                        headers: Vec::new(),
+                        kind: DownloadSourceKind::DirectHttp,
+                    },
+                    size_hint,
+                )
+                .await
+            {
+                Ok(()) => {
+                    activated = true;
+                    break;
+                }
+                Err(err) => {
+                    manager.mark_job_failed(&job.id, &error_code(&err)).await;
+                    activated = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !activated {
+        manager
+            .mark_job_failed(
+                &job.id,
+                "No se encontraron fuentes disponibles en tus addons. Haz clic en el capítulo para elegir otra fuente.",
+            )
+            .await;
+    }
+    project_active_profile(ui_weak).await;
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -2353,5 +3151,89 @@ mod tests {
         assert_eq!(parse_season_episode_from_filename("Series 2x05 Episode.mp4"), Some((2, 5)));
         assert_eq!(parse_season_episode_from_filename("Show.s04e12.1080p.web-dl.mkv"), Some((4, 12)));
         assert_eq!(parse_season_episode_from_filename("Movie.2024.1080p.mp4"), None);
+    }
+
+    #[test]
+    fn test_humanize_error_code_translates_legacy_codes() {
+        assert!(humanize_error_code("network").contains("conexión"));
+        assert!(humanize_error_code("storage-limit-exceeded").contains("almacenamiento"));
+        assert_eq!(
+            humanize_error_code("Mensaje personalizado"),
+            "Mensaje personalizado"
+        );
+    }
+
+    #[test]
+    fn test_select_best_episode_job_prefers_active_over_failed() {
+        let base_cred = CredentialRef::new("download-source/test").unwrap();
+        let failed = DownloadJob {
+            id: "failed-1".into(),
+            profile_id: "p".into(),
+            title: "Ep 1".into(),
+            filename: "ep1.mp4".into(),
+            destination: PathBuf::from("/tmp/ep1.mp4"),
+            state: DownloadState::Failed,
+            source_kind: DownloadSourceKind::DirectHttp,
+            credential_ref: base_cred.clone(),
+            bytes_downloaded: 0,
+            bytes_total: None,
+            error_code: Some("network".into()),
+            created_at: 10,
+            updated_at: 20,
+            meta_id: Some("tt123".into()),
+            meta_type: Some("series".into()),
+            series_name: Some("Show".into()),
+            season: Some(1),
+            episode: Some(1),
+            video_id: Some("tt123:1:1".into()),
+            poster_url: None,
+            kind: "video".into(),
+            parent_job_id: None,
+            lang: None,
+        };
+        let mut completed = failed.clone();
+        completed.id = "done-1".into();
+        completed.state = DownloadState::Completed;
+        completed.updated_at = 15;
+
+        let jobs = vec![failed, completed];
+        let best = select_best_episode_job(&jobs, 1, 1).unwrap();
+        assert_eq!(best.id, "done-1");
+    }
+
+    #[test]
+    fn test_first_missing_aired_episode_skips_completed() {
+        let eps = vec![
+            CachedEpisode { id: "s1e1".into(), title: "E1".into(), season: 1, episode: 1, released: None },
+            CachedEpisode { id: "s1e2".into(), title: "E2".into(), season: 1, episode: 2, released: None },
+            CachedEpisode { id: "s1e3".into(), title: "E3".into(), season: 1, episode: 3, released: None },
+        ];
+        let base_cred = CredentialRef::new("download-source/test").unwrap();
+        let done_e1 = DownloadJob {
+            id: "j1".into(),
+            profile_id: "p".into(),
+            title: "E1".into(),
+            filename: "e1.mp4".into(),
+            destination: PathBuf::from("/tmp/e1.mp4"),
+            state: DownloadState::Completed,
+            source_kind: DownloadSourceKind::DirectHttp,
+            credential_ref: base_cred,
+            bytes_downloaded: 100,
+            bytes_total: Some(100),
+            error_code: None,
+            created_at: 1,
+            updated_at: 1,
+            meta_id: Some("tt1".into()),
+            meta_type: Some("series".into()),
+            series_name: None,
+            season: Some(1),
+            episode: Some(1),
+            video_id: None,
+            poster_url: None,
+            kind: "video".into(),
+            parent_job_id: None,
+            lang: None,
+        };
+        assert_eq!(first_missing_aired_episode(&eps, &[done_e1], 1), 2);
     }
 }

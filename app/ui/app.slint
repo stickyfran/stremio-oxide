@@ -2446,6 +2446,7 @@ export component MainWindow inherits Window {
                         delete-item(id) => { root.downloads-delete-item(id); }
                         open-downloads-folder => { root.downloads-open-folder(); }
                         retry => { root.downloads-refresh(); }
+                        dismiss-error => { root.downloads-error = ""; }
                         request-download-episode(meta-id, season, episode) => { root.downloads-request-download-episode(meta-id, season, episode); }
                     }
                 }
@@ -3865,22 +3866,22 @@ export component MainWindow inherits Window {
                 root.downloads-error = state == "downloads-error" ? "download database operation failed" : "";
                 if (state == "downloads-active") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "2.4 GB / 8.5 GB (14.2 MB/s)", progress: 0.28, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: true, can-resume: false, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "2.4 GB / 8.5 GB (14.2 MB/s)", progress: 0.28, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: true, has-failed: false, error-message: "", can-pause: true, can-resume: false, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-paused") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Paused", progress: 0.45, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: false, can-resume: true, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Paused", progress: 0.45, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, has-failed: false, error-message: "", can-pause: false, can-resume: true, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-completed") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Completed", progress: 1.0, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: false, can-resume: false, can-play: true, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Completed", progress: 1.0, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, has-failed: false, error-message: "", can-pause: false, can-resume: false, can-play: true, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-cancelled") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Cancelled", progress: 0.15, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, can-pause: false, can-resume: true, can-play: false, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Cancelled", progress: 0.15, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, has-failed: false, error-message: "", can-pause: false, can-resume: true, can-play: false, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-empty" || state == "downloads-loading" || state == "downloads-error") {

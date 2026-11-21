@@ -12,6 +12,8 @@ export struct DownloadEpisodeChip {
     title: string,
     is-downloaded: bool,
     is-downloading: bool,
+    is-failed: bool,
+    error-message: string,
     watched: bool,
     watch-progress: float,
     progress: float,
@@ -22,6 +24,8 @@ export struct DownloadSeasonGroup {
     season-label: string,
     season-year: string,
     has-downloaded: bool,
+    has-active: bool,
+    has-failed: bool,
     episodes: [DownloadEpisodeChip],
 }
 
@@ -55,6 +59,9 @@ export struct DownloadItem {
     size-formatted: string,
     subtitles-info: string,
     has-subtitles: bool,
+    is-downloading: bool,
+    has-failed: bool,
+    error-message: string,
     can-pause: bool,
     can-resume: bool,
     can-play: bool,
@@ -86,6 +93,8 @@ export component DownloadsPage inherits Rectangle {
     in-out property <string> prompt-download-ep-title: "";
     in-out property <string> prompt-download-job-id: "";
     in-out property <bool> prompt-download-is-downloaded: false;
+    in-out property <bool> prompt-download-is-failed: false;
+    in-out property <string> prompt-download-error: "";
     in-out property <bool> prompt-download-season-has-dl: false;
     in-out property <string> prompt-download-season-label: "";
     in-out property <string> prompt-download-season-year: "";
@@ -98,6 +107,7 @@ export component DownloadsPage inherits Rectangle {
     callback delete-item(string);
     callback open-downloads-folder;
     callback retry;
+    callback dismiss-error;
     callback request-download-episode(string, int, int);
 
     background: transparent;
@@ -161,6 +171,8 @@ export component DownloadsPage inherits Rectangle {
 
             if (root.active-count > 0) : Rectangle {
                 height: 2.8 * root.unit;
+                max-width: 22 * root.unit;
+                clip: true;
                 border-radius: Theme.border-radius;
                 background: Theme.primary-accent.with-alpha(0.16);
                 border-width: 1px;
@@ -207,6 +219,8 @@ export component DownloadsPage inherits Rectangle {
 
             if (root.disk-usage-text != "") : Rectangle {
                 height: 2.8 * root.unit;
+                max-width: 24 * root.unit;
+                clip: true;
                 border-radius: Theme.border-radius;
                 background: Theme.card-background;
                 border-width: 1px;
@@ -232,6 +246,7 @@ export component DownloadsPage inherits Rectangle {
                         color: Theme.text-secondary;
                         font-size: 0.9 * root.unit;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
             }
@@ -247,26 +262,43 @@ export component DownloadsPage inherits Rectangle {
         }
 
         if (root.error != "") : Rectangle {
-            height: 4 * root.unit;
+            height: error-banner-row.preferred-height;
             border-radius: Theme.border-radius;
             background: Theme.danger.with-alpha(0.16);
+            border-width: 1px;
+            border-color: Theme.danger.with-alpha(0.45);
 
-            Text {
-                x: root.unit;
-                width: parent.width - 10 * root.unit;
-                height: parent.height;
-                text: root.error;
-                color: Theme.text-primary;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            PillButton {
-                x: parent.width - 8 * root.unit;
-                y: 0.6 * root.unit;
-                width: 7 * root.unit;
-                unit: root.unit;
-                label: @tr("RETRY" => "Retry");
-                clicked => { root.retry(); }
+            error-banner-row := HorizontalLayout {
+                padding: 0.9 * root.unit;
+                spacing: 0.8 * root.unit;
+                alignment: start;
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.error;
+                    color: Theme.text-primary;
+                    font-size: 0.88 * root.unit;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+
+                PillButton {
+                    width: 8.5 * root.unit;
+                    height: 2.6 * root.unit;
+                    unit: root.unit;
+                    label: @tr("RETRY" => "Reintentar");
+                    label-font-size: 0.84 * root.unit;
+                    clicked => { root.retry(); }
+                }
+
+                PillButton {
+                    width: 2.8 * root.unit;
+                    height: 2.6 * root.unit;
+                    unit: root.unit;
+                    label: "×";
+                    outlined: true;
+                    clicked => { root.dismiss-error(); }
+                }
             }
         }
 
@@ -305,7 +337,11 @@ export component DownloadsPage inherits Rectangle {
                     height: card-content.preferred-height;
                     border-radius: Theme.border-radius;
                     border-width: 1px;
-                    border-color: row-area.has-hover ? Theme.primary-accent.with-alpha(0.4) : Theme.card-border;
+                    border-color: item.has-failed
+                        ? Theme.danger.with-alpha(0.55)
+                        : (item.is-downloading
+                            ? Theme.primary-accent.with-alpha(0.55)
+                            : (row-area.has-hover ? Theme.primary-accent.with-alpha(0.4) : Theme.card-border));
                     background: row-area.has-hover ? #1c1a2d : Theme.card-background;
                     clip: true;
 
@@ -334,6 +370,8 @@ export component DownloadsPage inherits Rectangle {
                                 root.prompt-download-ep-title = "";
                                 root.prompt-download-job-id = item.id;
                                 root.prompt-download-is-downloaded = true;
+                                root.prompt-download-is-failed = item.has-failed;
+                                root.prompt-download-error = item.error-message;
                                 root.prompt-download-season-has-dl = item.is-series;
                                 root.prompt-download-season-label = "";
                                 root.prompt-download-season-year = "";
@@ -398,6 +436,7 @@ export component DownloadsPage inherits Rectangle {
                                     alignment: start;
 
                                     Text {
+                                        horizontal-stretch: 1;
                                         text: item.title;
                                         color: Theme.text-primary;
                                         font-size: 1.35 * root.unit;
@@ -408,6 +447,7 @@ export component DownloadsPage inherits Rectangle {
 
                                     // Type text (sin recuadro/squircle ni bordes, alineado al mismo renglón, grisáceo e itálica)
                                     Text {
+                                        horizontal-stretch: 0;
                                         text: item.is-series ? "Serie" : "Película";
                                         color: Theme.text-muted;
                                         font-size: 0.92 * root.unit;
@@ -493,8 +533,11 @@ export component DownloadsPage inherits Rectangle {
                                     }
 
                                     Text {
+                                        horizontal-stretch: 1;
                                         text: card.hovered-ep-info != "" ? card.hovered-ep-info : item.status;
-                                        color: card.hovered-ep-info != "" ? #c4b5fd : Theme.text-secondary;
+                                        color: card.hovered-ep-info != ""
+                                            ? #c4b5fd
+                                            : (item.has-failed ? #fca5a5 : Theme.text-secondary);
                                         font-size: 0.88 * root.unit;
                                         font-weight: card.hovered-ep-info != "" ? 650 : 500;
                                         overflow: elide;
@@ -556,7 +599,7 @@ export component DownloadsPage inherits Rectangle {
                                         width: parent.width * item.progress.clamp(0, 1);
                                         height: parent.height;
                                         border-radius: parent.border-radius;
-                                        background: Theme.accent;
+                                        background: item.has-failed && !item.is-downloading ? Theme.danger : Theme.accent;
                                     }
                                 }
                             }
@@ -587,9 +630,18 @@ export component DownloadsPage inherits Rectangle {
                                     width: 8.5 * root.unit;
                                     height: 3.0 * root.unit;
                                     unit: root.unit;
-                                    label: @tr("RESUME" => "Reanudar");
+                                    label: item.has-failed ? @tr("RETRY" => "Reintentar") : @tr("RESUME" => "Reanudar");
                                     label-font-size: 0.9 * root.unit;
                                     clicked => { root.resume(item.id); }
+                                }
+                                if (!item.is-series && item.has-failed) : PillButton {
+                                    width: 10.8 * root.unit;
+                                    height: 3.0 * root.unit;
+                                    unit: root.unit;
+                                    label: "Cambiar fuente";
+                                    label-font-size: 0.88 * root.unit;
+                                    outlined: true;
+                                    clicked => { root.request-download-episode(item.meta-id, -1, -1); }
                                 }
                                 if (item.is-series) : PillButton {
                                     width: 10.8 * root.unit;
@@ -619,6 +671,30 @@ export component DownloadsPage inherits Rectangle {
                             }
                         }
 
+                        if (item.error-message != "") : Rectangle {
+                            height: card-error-layout.preferred-height;
+                            border-radius: 6px;
+                            background: Theme.danger.with-alpha(0.14);
+                            border-width: 1px;
+                            border-color: Theme.danger.with-alpha(0.38);
+
+                            card-error-layout := HorizontalLayout {
+                                padding-left: 0.9 * root.unit;
+                                padding-right: 0.9 * root.unit;
+                                padding-top: 0.6 * root.unit;
+                                padding-bottom: 0.6 * root.unit;
+                                spacing: 0.6 * root.unit;
+
+                                Text {
+                                    horizontal-stretch: 1;
+                                    text: item.error-message;
+                                    color: #fecaca;
+                                    font-size: 0.84 * root.unit;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
                         // Single chapter list: collapsed shows seasons that have at
                         // least one download; expanded shows every season.
                         if (item.is-series) : VerticalLayout {
@@ -632,10 +708,12 @@ export component DownloadsPage inherits Rectangle {
 
                             if (card.is-expanded) : HorizontalLayout {
                                 alignment: space-between;
+                                spacing: 1.0 * root.unit;
                                 padding-top: 0.2 * root.unit;
                                 padding-bottom: 0.2 * root.unit;
 
                                 Text {
+                                    horizontal-stretch: 0;
                                     text: @tr("ALL_CHAPTERS" => "Todos los capítulos");
                                     color: Theme.text-primary;
                                     font-size: 0.95 * root.unit;
@@ -643,10 +721,13 @@ export component DownloadsPage inherits Rectangle {
                                 }
 
                                 Text {
+                                    horizontal-stretch: 1;
+                                    horizontal-alignment: right;
                                     text: card.hovered-ep-info != "" ? card.hovered-ep-info : @tr("CHAPTER_HINT" => "Iluminados: descargados · Click en capítulo o temporada para gestionar");
                                     color: card.hovered-ep-info != "" ? #c4b5fd : Theme.text-muted;
                                     font-size: 0.82 * root.unit;
                                     font-weight: card.hovered-ep-info != "" ? 650 : 450;
+                                    overflow: elide;
                                 }
                             }
 
@@ -654,13 +735,21 @@ export component DownloadsPage inherits Rectangle {
                                 text: @tr("NO_SEASONS_AVAILABLE" => "No hay información de capítulos disponible para esta serie.");
                                 color: Theme.text-secondary;
                                 font-size: 0.88 * root.unit;
+                                wrap: word-wrap;
                             }
 
-                            for s in item.all-seasons : HorizontalLayout {
-                                visible: card.is-expanded || s.has-downloaded;
-                                height: 3.0 * root.unit;
-                                spacing: 0.8 * root.unit;
-                                alignment: start;
+                            for s in item.all-seasons : Rectangle {
+                                property <bool> season-visible: card.is-expanded || s.has-downloaded || s.has-active || s.has-failed;
+                                visible: self.season-visible;
+                                height: self.season-visible ? 3.1 * root.unit : 0px;
+                                clip: true;
+                                background: transparent;
+
+                                HorizontalLayout {
+                                    width: 100%;
+                                    height: 3.1 * root.unit;
+                                    spacing: 0.8 * root.unit;
+                                    alignment: start;
 
                                 // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Clickable!) - squircle sin borde
                                 Rectangle {
@@ -683,6 +772,8 @@ export component DownloadsPage inherits Rectangle {
                                             root.prompt-download-ep-title = "";
                                             root.prompt-download-job-id = "";
                                             root.prompt-download-is-downloaded = false;
+                                            root.prompt-download-is-failed = false;
+                                            root.prompt-download-error = "";
                                             root.prompt-download-season-has-dl = s.has-downloaded;
                                             root.prompt-download-season-label = s.season-label;
                                             root.prompt-download-season-year = s.season-year;
@@ -702,147 +793,191 @@ export component DownloadsPage inherits Rectangle {
                                     }
                                 }
 
-                                // Horizontal strip of episodes: E1 E2 E3 ... EN
-                                HorizontalLayout {
-                                    spacing: 0.45 * root.unit;
-                                    alignment: start;
+                                // Horizontal strip of episodes: E1 E2 E3 ... EN (scrollable so long seasons never clip)
+                                ScrollView {
+                                    horizontal-stretch: 1;
+                                    height: 3.1 * root.unit;
+                                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
 
-                                    for ep in s.episodes : Rectangle {
-                                        width: ep-grid-touch.has-hover && ep.title != ""
-                                            ? min(22 * root.unit, 4.0 * root.unit + ep-title-measure.preferred-width + 1.4 * root.unit)
-                                            : 4.0 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        horizontal-stretch: 0;
-                                        border-radius: 6px;
-                                        // ILUMINADOS (descargados) vs EN GRIS (no descargados) - squircle sin borde
-                                        clip: true;
-                                        animate width { duration: Theme.motion-panel; easing: ease-out; }
-                                        background: ep.is-downloaded
-                                            ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
-                                            : (ep-grid-touch.has-hover ? #28283c : #181824);
+                                    HorizontalLayout {
+                                        spacing: 0.45 * root.unit;
+                                        alignment: start;
 
-                                        ep-title-measure := Text {
-                                            visible: false;
-                                            text: ep.title;
-                                            font-size: 0.78 * root.unit;
-                                        }
+                                        for ep in s.episodes : Rectangle {
+                                            width: ep-grid-touch.has-hover && ep.title != ""
+                                                ? min(22 * root.unit, 4.0 * root.unit + ep-title-measure.preferred-width + 1.4 * root.unit)
+                                                : 4.0 * root.unit;
+                                            height: 2.8 * root.unit;
+                                            horizontal-stretch: 0;
+                                            border-radius: 6px;
+                                            border-width: ep.is-failed || ep.is-downloading ? 1px : 0px;
+                                            border-color: ep.is-failed
+                                                ? Theme.danger.with-alpha(0.65)
+                                                : (ep.is-downloading ? #38bdf8.with-alpha(0.55) : transparent);
+                                            clip: true;
+                                            animate width { duration: Theme.motion-panel; easing: ease-out; }
+                                            background: ep.is-downloaded
+                                                ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
+                                                : (ep.is-downloading
+                                                    ? (ep-grid-touch.has-hover ? #0284c7.with-alpha(0.45) : #0ea5e9.with-alpha(0.24))
+                                                    : (ep.is-failed
+                                                        ? (ep-grid-touch.has-hover ? Theme.danger.with-alpha(0.42) : Theme.danger.with-alpha(0.24))
+                                                        : (ep-grid-touch.has-hover ? #28283c : #181824)));
 
-                                        if (ep.watch-progress > 0) : Rectangle {
-                                            x: 0px;
-                                            y: parent.height - 3px;
-                                            width: parent.width * min(1.0, ep.watch-progress);
-                                            height: 3px;
-                                            background: Theme.accent;
-                                        }
-
-                                        ep-grid-touch := TouchArea {
-                                            mouse-cursor: MouseCursor.pointer;
-                                            moved => {
-                                                card.hovered-ep-info = s.season-label + " · E" + ep.episode-num + (ep.title != "" ? ": " + ep.title : "") + (ep.is-downloaded ? " (Descargado — click para reproducir, click derecho para opciones)" : " (No descargado — click para descargar)");
-                                            }
-                                            clicked => {
-                                                if (ep.is-downloaded) {
-                                                    root.play(ep.id);
-                                                } else {
-                                                    root.prompt-download-meta-id = item.meta-id;
-                                                    root.prompt-download-title = item.title;
-                                                    root.prompt-download-season = ep.season;
-                                                    root.prompt-download-episode = ep.episode-num;
-                                                    root.prompt-download-ep-title = ep.title;
-                                                    root.prompt-download-job-id = ep.id;
-                                                    root.prompt-download-is-downloaded = false;
-                                                    root.prompt-download-season-has-dl = s.has-downloaded;
-                                                    root.prompt-download-season-label = s.season-label;
-                                                    root.prompt-download-season-year = s.season-year;
-                                                    root.prompt-download-open = true;
-                                                }
-                                            }
-                                            pointer-event(event) => {
-                                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
-                                                    root.prompt-download-meta-id = item.meta-id;
-                                                    root.prompt-download-title = item.title;
-                                                    root.prompt-download-season = ep.season;
-                                                    root.prompt-download-episode = ep.episode-num;
-                                                    root.prompt-download-ep-title = ep.title;
-                                                    root.prompt-download-job-id = ep.id;
-                                                    root.prompt-download-is-downloaded = ep.is-downloaded;
-                                                    root.prompt-download-season-has-dl = s.has-downloaded;
-                                                    root.prompt-download-season-label = s.season-label;
-                                                    root.prompt-download-season-year = s.season-year;
-                                                    root.prompt-download-open = true;
-                                                }
-                                            }
-                                        }
-
-                                        if (ep.watched) : Image {
-                                            x: parent.width - 0.95 * root.unit;
-                                            y: 0.2 * root.unit;
-                                            width: 0.65 * root.unit;
-                                            height: 0.65 * root.unit;
-                                            source: @image-url("../assets/images/icons/checkmark.svg");
-                                            colorize: Theme.primary-foreground;
-                                            image-fit: contain;
-                                        }
-
-                                        HorizontalLayout {
-                                            width: 100%;
-                                            height: 100%;
-                                            alignment: center;
-                                            spacing: 0.3 * root.unit;
-
-                                            if (ep.is-downloaded) : Rectangle {
-                                                width: 0.85 * root.unit;
-                                                height: parent.height;
-                                                background: transparent;
-
-                                                Image {
-                                                    x: 0px;
-                                                    y: (parent.height - self.height) / 2;
-                                                    width: 0.85 * root.unit;
-                                                    height: 0.85 * root.unit;
-                                                    source: @image-url("../assets/images/icons/play.svg");
-                                                    colorize: Theme.primary-foreground;
-                                                    image-fit: contain;
-                                                }
-                                            }
-
-                                            if (!ep.is-downloaded) : Rectangle {
-                                                width: 0.85 * root.unit;
-                                                height: parent.height;
-                                                background: transparent;
-
-                                                Image {
-                                                    x: 0px;
-                                                    y: (parent.height - self.height) / 2;
-                                                    width: 0.85 * root.unit;
-                                                    height: 0.85 * root.unit;
-                                                    source: @image-url("../assets/images/icons/download.svg");
-                                                    colorize: ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted;
-                                                    image-fit: contain;
-                                                }
-                                            }
-
-                                            Text {
-                                                height: parent.height;
-                                                text: "E" + ep.episode-num;
-                                                color: ep.is-downloaded ? Theme.primary-foreground : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted);
-                                                font-size: 0.88 * root.unit;
-                                                font-weight: ep.is-downloaded ? 750 : 550;
-                                                vertical-alignment: center;
-                                            }
-
-                                            if (ep-grid-touch.has-hover && ep.title != "") : Text {
-                                                horizontal-stretch: 1;
-                                                height: parent.height;
+                                            ep-title-measure := Text {
+                                                visible: false;
                                                 text: ep.title;
-                                                color: ep.is-downloaded ? Theme.primary-foreground : Theme.text-primary;
-                                                font-size: 0.76 * root.unit;
-                                                font-weight: 500;
-                                                vertical-alignment: center;
-                                                overflow: elide;
+                                                font-size: 0.78 * root.unit;
+                                            }
+
+                                            if (ep.is-downloading) : Rectangle {
+                                                x: 0px;
+                                                y: parent.height - 3px;
+                                                width: parent.width * max(0.08, min(1.0, ep.progress));
+                                                height: 3px;
+                                                background: #38bdf8;
+                                            }
+
+                                            if (!ep.is-downloading && ep.watch-progress > 0) : Rectangle {
+                                                x: 0px;
+                                                y: parent.height - 3px;
+                                                width: parent.width * min(1.0, ep.watch-progress);
+                                                height: 3px;
+                                                background: Theme.accent;
+                                            }
+
+                                            ep-grid-touch := TouchArea {
+                                                mouse-cursor: MouseCursor.pointer;
+                                                moved => {
+                                                    card.hovered-ep-info = s.season-label + " · E" + ep.episode-num
+                                                        + (ep.title != "" ? ": " + ep.title : "")
+                                                        + (ep.is-downloaded
+                                                            ? " (Descargado — click para reproducir, click derecho para opciones)"
+                                                            : (ep.is-downloading
+                                                                ? " (Descargando " + Math.round(ep.progress * 100) + "%)"
+                                                                : (ep.is-failed
+                                                                    ? " (Error: " + ep.error-message + ")"
+                                                                    : " (No descargado — click para descargar)")));
+                                                }
+                                                clicked => {
+                                                    if (ep.is-downloaded) {
+                                                        root.play(ep.id);
+                                                    } else {
+                                                        root.prompt-download-meta-id = item.meta-id;
+                                                        root.prompt-download-title = item.title;
+                                                        root.prompt-download-season = ep.season;
+                                                        root.prompt-download-episode = ep.episode-num;
+                                                        root.prompt-download-ep-title = ep.title;
+                                                        root.prompt-download-job-id = ep.id;
+                                                        root.prompt-download-is-downloaded = false;
+                                                        root.prompt-download-is-failed = ep.is-failed;
+                                                        root.prompt-download-error = ep.error-message;
+                                                        root.prompt-download-season-has-dl = s.has-downloaded;
+                                                        root.prompt-download-season-label = s.season-label;
+                                                        root.prompt-download-season-year = s.season-year;
+                                                        root.prompt-download-open = true;
+                                                    }
+                                                }
+                                                pointer-event(event) => {
+                                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                                        root.prompt-download-meta-id = item.meta-id;
+                                                        root.prompt-download-title = item.title;
+                                                        root.prompt-download-season = ep.season;
+                                                        root.prompt-download-episode = ep.episode-num;
+                                                        root.prompt-download-ep-title = ep.title;
+                                                        root.prompt-download-job-id = ep.id;
+                                                        root.prompt-download-is-downloaded = ep.is-downloaded;
+                                                        root.prompt-download-is-failed = ep.is-failed;
+                                                        root.prompt-download-error = ep.error-message;
+                                                        root.prompt-download-season-has-dl = s.has-downloaded;
+                                                        root.prompt-download-season-label = s.season-label;
+                                                        root.prompt-download-season-year = s.season-year;
+                                                        root.prompt-download-open = true;
+                                                    }
+                                                }
+                                            }
+
+                                            if (ep.watched) : Image {
+                                                x: parent.width - 0.95 * root.unit;
+                                                y: 0.2 * root.unit;
+                                                width: 0.65 * root.unit;
+                                                height: 0.65 * root.unit;
+                                                source: @image-url("../assets/images/icons/checkmark.svg");
+                                                colorize: Theme.primary-foreground;
+                                                image-fit: contain;
+                                            }
+
+                                            HorizontalLayout {
+                                                width: 100%;
+                                                height: 100%;
+                                                alignment: center;
+                                                spacing: 0.3 * root.unit;
+
+                                                if (ep.is-downloaded) : Rectangle {
+                                                    width: 0.85 * root.unit;
+                                                    height: parent.height;
+                                                    background: transparent;
+
+                                                    Image {
+                                                        x: 0px;
+                                                        y: (parent.height - self.height) / 2;
+                                                        width: 0.85 * root.unit;
+                                                        height: 0.85 * root.unit;
+                                                        source: @image-url("../assets/images/icons/play.svg");
+                                                        colorize: Theme.primary-foreground;
+                                                        image-fit: contain;
+                                                    }
+                                                }
+
+                                                if (!ep.is-downloaded) : Rectangle {
+                                                    width: 0.85 * root.unit;
+                                                    height: parent.height;
+                                                    background: transparent;
+
+                                                    Image {
+                                                        x: 0px;
+                                                        y: (parent.height - self.height) / 2;
+                                                        width: 0.85 * root.unit;
+                                                        height: 0.85 * root.unit;
+                                                        source: @image-url("../assets/images/icons/download.svg");
+                                                        colorize: ep.is-failed
+                                                            ? #fecaca
+                                                            : (ep.is-downloading
+                                                                ? #7dd3fc
+                                                                : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted));
+                                                        image-fit: contain;
+                                                    }
+                                                }
+
+                                                Text {
+                                                    height: parent.height;
+                                                    text: "E" + ep.episode-num;
+                                                    color: ep.is-downloaded
+                                                        ? Theme.primary-foreground
+                                                        : (ep.is-failed
+                                                            ? #fecaca
+                                                            : (ep.is-downloading
+                                                                ? #bae6fd
+                                                                : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted)));
+                                                    font-size: 0.88 * root.unit;
+                                                    font-weight: ep.is-downloaded || ep.is-downloading || ep.is-failed ? 750 : 550;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                if (ep-grid-touch.has-hover && ep.title != "") : Text {
+                                                    horizontal-stretch: 1;
+                                                    height: parent.height;
+                                                    text: ep.title;
+                                                    color: ep.is-downloaded ? Theme.primary-foreground : Theme.text-primary;
+                                                    font-size: 0.76 * root.unit;
+                                                    font-weight: 500;
+                                                    vertical-alignment: center;
+                                                    overflow: elide;
+                                                }
                                             }
                                         }
                                     }
+                                }
                                 }
                             }
                         }
@@ -861,9 +996,11 @@ export component DownloadsPage inherits Rectangle {
         open: root.prompt-download-open;
         title: root.prompt-download-episode == 0
             ? ("Gestionar " + (root.prompt-download-season-label != "" ? root.prompt-download-season-label : ("Temporada " + root.prompt-download-season)))
-            : (root.prompt-download-is-downloaded ? "Capítulo descargado" : "Descargar capítulo");
-        dialog-width: 44 * root.unit;
-        dialog-height: 24 * root.unit;
+            : (root.prompt-download-is-downloaded
+                ? "Capítulo descargado"
+                : (root.prompt-download-is-failed ? "Error en descarga de capítulo" : "Descargar capítulo"));
+        dialog-width: 48 * root.unit;
+        dialog-height: 29 * root.unit;
         close-requested => { root.prompt-download-open = false; }
 
         VerticalLayout {
@@ -903,7 +1040,27 @@ export component DownloadsPage inherits Rectangle {
                 }
             }
 
-            Text {
+            if (root.prompt-download-is-failed && root.prompt-download-error != "") : Rectangle {
+                height: prompt-error-box.preferred-height;
+                border-radius: Theme.border-radius;
+                background: Theme.danger.with-alpha(0.16);
+                border-width: 1px;
+                border-color: Theme.danger.with-alpha(0.45);
+
+                prompt-error-box := HorizontalLayout {
+                    padding: 0.85 * root.unit;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.prompt-download-error;
+                        color: #fecaca;
+                        font-size: 0.88 * root.unit;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            if (!root.prompt-download-is-failed) : Text {
                 text: root.prompt-download-episode == 0
                     ? (root.prompt-download-season-has-dl
                         ? "Puedes buscar fuentes para descargar la temporada completa o eliminar los capítulos ya descargados de esta temporada."
@@ -979,8 +1136,44 @@ export component DownloadsPage inherits Rectangle {
                     }
                 }
 
-                // Case 3: Un-downloaded episode clicked (episode > 0 && !is-downloaded)
-                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded) : PillButton {
+                // Case 3: Failed episode clicked (episode > 0 && is-failed)
+                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
+                    width: 8.0 * root.unit;
+                    unit: root.unit;
+                    label: "Eliminar";
+                    outlined: true;
+                    hover-color: Theme.danger.with-alpha(0.2);
+                    hover-outline-color: Theme.danger;
+                    clicked => {
+                        root.delete-item(root.prompt-download-job-id);
+                        root.prompt-download-open = false;
+                    }
+                }
+
+                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
+                    width: 9.0 * root.unit;
+                    unit: root.unit;
+                    label: "Reintentar";
+                    outlined: true;
+                    clicked => {
+                        root.resume(root.prompt-download-job-id);
+                        root.prompt-download-open = false;
+                    }
+                }
+
+                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
+                    width: 11.0 * root.unit;
+                    unit: root.unit;
+                    label: "Elegir fuente";
+                    primary: true;
+                    clicked => {
+                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode);
+                        root.prompt-download-open = false;
+                    }
+                }
+
+                // Case 4: Un-downloaded episode clicked (episode > 0 && !is-downloaded && !is-failed)
+                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-failed) : PillButton {
                     width: 13.0 * root.unit;
                     unit: root.unit;
                     label: "Descargar temporada";
@@ -991,7 +1184,7 @@ export component DownloadsPage inherits Rectangle {
                     }
                 }
 
-                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded) : PillButton {
+                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-failed) : PillButton {
                     width: 13.0 * root.unit;
                     unit: root.unit;
                     label: "Buscar y descargar";

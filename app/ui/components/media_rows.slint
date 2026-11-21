@@ -7,6 +7,15 @@ export component StreamRow inherits Rectangle {
     in property <length> unit: 16px;
     in property <string> name;
     in property <string> description;
+    in property <string> title: "";
+    in property <string> resolution-label: "";
+    in property <string> debrid-badge: "";
+    in property <bool> is-debrid-cached: false;
+    in property <bool> is-debrid-uncached: false;
+    in property <string> source-badge: "";
+    in property <string> size-label: "";
+    in property <string> seeders-label: "";
+    in property <string> tech-summary: "";
     in property <string> score-label: "";
     in property <string> score-details: "";
     in property <bool> filtered: false;
@@ -14,14 +23,24 @@ export component StreamRow inherits Rectangle {
     in property <bool> has-thumbnail: root.thumbnail.width > 0;
     in property <float> progress: 0;
     in property <bool> selected: false;
+    in property <bool> selection-mode: false;
     callback play;
     callback download;
     callback context-requested(length, length);
 
-    height: 5.6 * root.unit;
+    height: 6.2 * root.unit;
     border-radius: Theme.border-radius;
-    property <bool> row-hovered: row-area.has-hover || download-button.has-hover || play-button.has-hover;
-    background: root.selected || root.row-hovered ? Theme.overlay-hover : transparent;
+    border-width: 1px;
+    border-color: root.selected
+        ? Theme.accent.with-alpha(0.65)
+        : (root.row-hovered ? Theme.primary-accent.with-alpha(0.35) : Theme.divider.with-alpha(0.45));
+    clip: true;
+    private property <bool> download-hovered: false;
+    private property <bool> play-hovered: false;
+    property <bool> row-hovered: row-area.has-hover || root.download-hovered || root.play-hovered;
+    background: root.selected || root.row-hovered
+        ? Theme.overlay-hover
+        : Theme.control-background.with-alpha(0.55);
 
     accessible-role: button;
     accessible-label: root.name + " " + root.description + " " + root.score-details;
@@ -38,16 +57,23 @@ export component StreamRow inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: root.unit;
-        padding-right: root.unit;
-        spacing: root.unit;
+        padding-left: 0.8 * root.unit;
+        padding-right: 0.8 * root.unit;
+        padding-top: 0.55 * root.unit;
+        padding-bottom: 0.55 * root.unit;
+        spacing: 0.85 * root.unit;
         alignment: start;
 
         stream-info := Rectangle {
-            width: 7.5 * root.unit;
-            height: 4.2 * root.unit;
-            border-radius: 0.35 * root.unit;
+            width: 6.2 * root.unit;
+            height: 4.9 * root.unit;
+            horizontal-stretch: 0;
+            border-radius: 0.45 * root.unit;
             background: Theme.overlay-color;
+            border-width: 1px;
+            border-color: root.is-debrid-cached
+                ? #10b981.with-alpha(0.45)
+                : (root.is-debrid-uncached ? #f59e0b.with-alpha(0.4) : Theme.divider);
             clip: true;
 
             if (root.has-thumbnail) : FallbackImage {
@@ -67,16 +93,70 @@ export component StreamRow inherits Rectangle {
                 }
             }
 
-            if (!root.has-thumbnail) : Text {
-                x: 0.65 * root.unit;
-                width: parent.width - 1.3 * root.unit;
+            if (!root.has-thumbnail && (root.resolution-label != "" || root.debrid-badge != "")) : VerticalLayout {
+                alignment: center;
+                spacing: 0.28 * root.unit;
+                padding-left: 0.3 * root.unit;
+                padding-right: 0.3 * root.unit;
+
+                if (root.resolution-label != "") : Text {
+                    text: root.resolution-label;
+                    color: root.resolution-label == "4K" || root.resolution-label == "8K"
+                        ? #c4b5fd
+                        : (root.resolution-label == "1080p" || root.resolution-label == "1440p"
+                            ? Theme.text-primary
+                            : Theme.text-secondary);
+                    font-size: 0.96 * root.unit;
+                    font-weight: 750;
+                    horizontal-alignment: center;
+                }
+
+                if (root.debrid-badge != "") : HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: 1.55 * root.unit;
+                        border-radius: 0.3 * root.unit;
+                        background: root.is-debrid-cached
+                            ? #10b981.with-alpha(0.22)
+                            : (root.is-debrid-uncached
+                                ? #f59e0b.with-alpha(0.20)
+                                : Theme.control-background);
+                        border-width: 1px;
+                        border-color: root.is-debrid-cached
+                            ? #10b981.with-alpha(0.45)
+                            : (root.is-debrid-uncached
+                                ? #f59e0b.with-alpha(0.45)
+                                : Theme.divider);
+
+                        HorizontalLayout {
+                            padding-left: 0.4 * root.unit;
+                            padding-right: 0.4 * root.unit;
+                            alignment: center;
+
+                            Text {
+                                text: root.debrid-badge;
+                                color: root.is-debrid-cached
+                                    ? #34d399
+                                    : (root.is-debrid-uncached ? #fbbf24 : Theme.text-secondary);
+                                font-size: 0.76 * root.unit;
+                                font-weight: 750;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!root.has-thumbnail && root.resolution-label == "" && root.debrid-badge == "") : Text {
+                x: 0.4 * root.unit;
+                width: parent.width - 0.8 * root.unit;
                 height: parent.height;
                 text: root.name;
                 color: Theme.text-primary;
                 opacity: 0.88;
-                font-size: 0.9 * root.unit;
+                font-size: 0.76 * root.unit;
                 font-weight: 600;
-                overflow: elide;
+                wrap: word-wrap;
                 vertical-alignment: center;
                 horizontal-alignment: center;
             }
@@ -98,14 +178,87 @@ export component StreamRow inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 0.2 * root.unit;
+            spacing: 0.32 * root.unit;
 
             Text {
-                text: root.description;
+                horizontal-stretch: 1;
+                text: root.title != "" ? root.title : root.description;
                 color: Theme.text-primary;
-                opacity: 0.88;
-                font-size: 0.95 * root.unit;
-                wrap: word-wrap;
+                font-size: 0.9 * root.unit;
+                font-weight: 600;
+                overflow: elide;
+            }
+
+            if (root.size-label != "" || root.source-badge != "" || root.seeders-label != "") : HorizontalLayout {
+                spacing: 0.45 * root.unit;
+                alignment: start;
+                height: 1.65 * root.unit;
+
+                if (root.size-label != "") : Rectangle {
+                    height: 1.55 * root.unit;
+                    horizontal-stretch: 0;
+                    border-radius: 4px;
+                    background: Theme.primary-accent.with-alpha(0.22);
+                    border-width: 1px;
+                    border-color: Theme.primary-accent.with-alpha(0.45);
+
+                    HorizontalLayout {
+                        padding-left: 0.45 * root.unit;
+                        padding-right: 0.45 * root.unit;
+
+                        Text {
+                            text: root.size-label;
+                            color: #ede9fe;
+                            font-size: 0.78 * root.unit;
+                            font-weight: 750;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if (root.source-badge != "") : Rectangle {
+                    height: 1.55 * root.unit;
+                    horizontal-stretch: 0;
+                    border-radius: 4px;
+                    background: Theme.control-background;
+                    border-width: 1px;
+                    border-color: Theme.divider;
+
+                    HorizontalLayout {
+                        padding-left: 0.45 * root.unit;
+                        padding-right: 0.45 * root.unit;
+
+                        Text {
+                            text: root.source-badge;
+                            color: Theme.text-primary;
+                            font-size: 0.76 * root.unit;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if (root.seeders-label != "") : Text {
+                    horizontal-stretch: 0;
+                    text: root.seeders-label;
+                    color: Theme.text-secondary;
+                    font-size: 0.76 * root.unit;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: transparent;
+                }
+            }
+
+            if (root.tech-summary != "") : Text {
+                horizontal-stretch: 1;
+                text: root.tech-summary;
+                color: Theme.text-muted;
+                font-size: 0.76 * root.unit;
+                font-weight: 500;
                 overflow: elide;
             }
         }
@@ -139,29 +292,30 @@ export component StreamRow inherits Rectangle {
             }
         }
 
-        VerticalLayout {
+        if (!root.selection-mode) : VerticalLayout {
             alignment: center;
-            width: 6.5 * root.unit;
+            width: 5.8 * root.unit;
 
             actions-container := HorizontalLayout {
-                spacing: 0.5 * root.unit;
+                spacing: 0.45 * root.unit;
                 alignment: end;
-                opacity: (root.selected || root.row-hovered) ? 1.0 : 0.0;
+                opacity: (root.selected || root.row-hovered) ? 1.0 : 0.55;
                 animate opacity { duration: 150ms; easing: ease-out; }
 
                 download-button := ButtonSurface {
-                    width: 2.8 * root.unit;
-                    height: 2.8 * root.unit;
+                    width: 2.6 * root.unit;
+                    height: 2.6 * root.unit;
                     border-radius: self.height / 2;
                     background: self.pressed ? Theme.overlay-pressed : (self.has-hover ? Theme.overlay-hover : Theme.overlay-color);
                     accessible-name: @tr("DOWNLOAD" => "Descargar");
+                    changed has-hover => { root.download-hovered = self.has-hover; }
                     clicked => { root.download(); }
 
                     Image {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        width: 1.3 * root.unit;
-                        height: 1.3 * root.unit;
+                        width: 1.25 * root.unit;
+                        height: 1.25 * root.unit;
                         source: @image-url("../assets/images/icons/download.svg");
                         colorize: Theme.text-primary;
                         image-fit: contain;
@@ -169,22 +323,46 @@ export component StreamRow inherits Rectangle {
                 }
 
                 play-button := ButtonSurface {
-                    width: 2.8 * root.unit;
-                    height: 2.8 * root.unit;
+                    width: 2.6 * root.unit;
+                    height: 2.6 * root.unit;
                     border-radius: self.height / 2;
                     background: self.pressed ? Theme.success.darker(0.2) : (self.has-hover ? Theme.success.brighter(0.15) : Theme.success);
                     accessible-name: @tr("PLAY" => "Reproducir");
+                    changed has-hover => { root.play-hovered = self.has-hover; }
                     clicked => { root.play(); }
 
                     Image {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        width: 1.3 * root.unit;
-                        height: 1.3 * root.unit;
+                        width: 1.25 * root.unit;
+                        height: 1.25 * root.unit;
                         source: @image-url("../assets/images/icons/play.svg");
                         colorize: Theme.text-primary;
                         image-fit: contain;
                     }
+                }
+            }
+        }
+
+        if (root.selection-mode) : VerticalLayout {
+            alignment: center;
+            width: 2.2 * root.unit;
+
+            Rectangle {
+                width: 1.65 * root.unit;
+                height: 1.65 * root.unit;
+                border-radius: self.height / 2;
+                border-width: 1.5px;
+                border-color: root.selected ? Theme.accent : Theme.text-muted;
+                background: transparent;
+
+                if (root.selected) : Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: 0.9 * root.unit;
+                    height: 0.9 * root.unit;
+                    border-radius: self.height / 2;
+                    background: Theme.accent;
                 }
             }
         }

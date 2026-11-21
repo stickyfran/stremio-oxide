@@ -1510,6 +1510,15 @@ export component PlayerPage inherits Rectangle {
                         unit: Theme.root-font-size;
                         name: stream.name;
                         description: stream.description;
+                        title: stream.title;
+                        resolution-label: stream.resolution-label;
+                        debrid-badge: stream.debrid-badge;
+                        is-debrid-cached: stream.is-debrid-cached;
+                        is-debrid-uncached: stream.is-debrid-uncached;
+                        source-badge: stream.source-badge;
+                        size-label: stream.size-label;
+                        seeders-label: stream.seeders-label;
+                        tech-summary: stream.tech-summary;
                         score-label: stream.score;
                         score-details: stream.score-summary;
                         filtered: stream.filtered;
@@ -2880,7 +2889,8 @@ export component PlayerPage inherits Rectangle {
                     width: streams-menu.width - 24px;
                     x: 12px;
                     label: stream.name;
-                    secondary-label: stream.provider
+                    secondary-label: (stream.size-label != "" ? stream.size-label + " · " : "")
+                        + stream.provider
                         + (stream.description == "" ? "" : " · " + stream.description);
                     active: stream-name == stream.name || stream-name == stream.description;
                     clicked => {

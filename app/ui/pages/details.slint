@@ -16,6 +16,15 @@ export struct StreamLink {
     name: string,
     description: string,
     provider: string,
+    title: string,
+    resolution-label: string,
+    debrid-badge: string,
+    is-debrid-cached: bool,
+    is-debrid-uncached: bool,
+    source-badge: string,
+    size-label: string,
+    seeders-label: string,
+    tech-summary: string,
     thumbnail-url: string,
     thumbnail: image,
     progress: float,
@@ -199,6 +208,18 @@ export component DetailsPage inherits Rectangle {
             root.download-modal-scope = root.pending-download-scope;
             root.download-modal-selection-id = "";
             root.download-modal-open = true;
+            root.pending-download-scope = "";
+        }
+    }
+
+    pending-download-empty-timer := Timer {
+        interval: 1500ms;
+        running: root.pending-download-scope != ""
+            && root.streams.length == 0
+            && root.stream-loading-count == 0
+            && !root.loading;
+        triggered => {
+            self.stop();
             root.pending-download-scope = "";
         }
     }
@@ -770,7 +791,7 @@ export component DetailsPage inherits Rectangle {
                         root.active-stream-provider == "All"
                             || stream.provider == root.active-stream-provider;
                     width: parent.width;
-                    height: self.matches-provider ? 5.8 * root.unit : 0px;
+                    height: self.matches-provider ? 6.6 * root.unit : 0px;
                     clip: true;
                     background: transparent;
 
@@ -779,10 +800,19 @@ export component DetailsPage inherits Rectangle {
                         x: 0px;
                         y: 0px;
                         width: parent.width;
-                        height: 5.6 * root.unit;
+                        height: 6.2 * root.unit;
                         unit: root.unit;
                         name: stream.name;
                         description: stream.description;
+                        title: stream.title;
+                        resolution-label: stream.resolution-label;
+                        debrid-badge: stream.debrid-badge;
+                        is-debrid-cached: stream.is-debrid-cached;
+                        is-debrid-uncached: stream.is-debrid-uncached;
+                        source-badge: stream.source-badge;
+                        size-label: stream.size-label;
+                        seeders-label: stream.seeders-label;
+                        tech-summary: stream.tech-summary;
                         score-label: "";
                         score-details: stream.score-summary;
                         filtered: stream.filtered;
@@ -1031,8 +1061,8 @@ export component DetailsPage inherits Rectangle {
         unit: root.unit;
         open: root.download-modal-open;
         title: root.is-series ? @tr("DOWNLOAD_DIALOG_TITLE" => "Descargar serie") : @tr("DOWNLOAD_MOVIE_TITLE" => "Descargar película");
-        dialog-width: 48 * root.unit;
-        dialog-height: 40 * root.unit;
+        dialog-width: 56 * root.unit;
+        dialog-height: 44 * root.unit;
         close-requested => { root.download-modal-open = false; }
         actions: [
             { id: "cancel", label: @tr("CANCEL" => "Cancelar"), icon: @image-url("../assets/images/icons/close.svg"), has-icon: false, enabled: true, primary: false },
@@ -1141,97 +1171,69 @@ export component DetailsPage inherits Rectangle {
                 }
             }
 
+            if (root.is-series && (root.download-modal-scope == "season" || root.download-modal-scope == "series")) : Rectangle {
+                height: batch-hint-layout.preferred-height;
+                border-radius: Theme.border-radius;
+                background: Theme.primary-accent.with-alpha(0.14);
+                border-width: 1px;
+                border-color: Theme.primary-accent.with-alpha(0.32);
+
+                batch-hint-layout := HorizontalLayout {
+                    padding-left: 0.9 * root.unit;
+                    padding-right: 0.9 * root.unit;
+                    padding-top: 0.55 * root.unit;
+                    padding-bottom: 0.55 * root.unit;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Se omitirán capítulos ya descargados o en curso. Para el resto se buscará automáticamente una fuente equivalente (con respaldo en otros addons si falta alguna).";
+                        color: Theme.text-secondary;
+                        font-size: 0.82 * root.unit;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
             Text {
                 text: "Selecciona una fuente de descarga (" + root.streams.length + " disponibles):";
                 color: Theme.text-primary;
                 font-size: 0.95 * root.unit;
                 font-weight: 600;
+                wrap: word-wrap;
             }
 
             sources-scroll := ScrollView {
-                height: 22 * root.unit;
-                viewport-width: self.width;
+                height: 24 * root.unit;
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
 
                 VerticalLayout {
-                    spacing: 0.4 * root.unit;
+                    spacing: 0.45 * root.unit;
 
-                    for stream in root.streams : source-item := Rectangle {
+                    for stream in root.streams : source-item := StreamRow {
                         property <bool> is-selected: root.download-modal-selection-id == stream.id
                             || (root.download-modal-selection-id == "" && stream.id == root.streams[0].id);
-                        height: 4.8 * root.unit;
-                        border-radius: Theme.border-radius;
-                        background: self.is-selected || source-touch.has-hover
-                            ? Theme.overlay-hover
-                            : transparent;
-
-                        source-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.download-modal-selection-id = stream.id;
-                                root.download-modal-stream-name = stream.name;
-                                root.download-modal-stream-details = stream.description;
-                            }
-                        }
-
-                        HorizontalLayout {
-                            padding-left: 1 * root.unit;
-                            padding-right: 1 * root.unit;
-                            spacing: 0.8 * root.unit;
-                            alignment: start;
-
-                            Rectangle {
-                                width: 7.5 * root.unit;
-                                height: 3.6 * root.unit;
-                                border-radius: 0.35 * root.unit;
-                                background: Theme.overlay-color;
-                                clip: true;
-
-                                Text {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    text: stream.name;
-                                    color: Theme.text-primary;
-                                    font-size: 0.85 * root.unit;
-                                    font-weight: 600;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                }
-                            }
-
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                alignment: center;
-
-                                Text {
-                                    text: stream.description;
-                                    color: source-item.is-selected ? Theme.primary-foreground : Theme.text-secondary;
-                                    font-size: 0.88 * root.unit;
-                                    wrap: word-wrap;
-                                    overflow: elide;
-                                }
-                            }
-
-                            VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 1.8 * root.unit;
-                                    height: 1.8 * root.unit;
-                                    border-radius: self.height / 2;
-                                    border-width: 1.5px;
-                                    border-color: source-item.is-selected ? Theme.accent : Theme.text-muted;
-                                    background: transparent;
-
-                                    if (source-item.is-selected) : Rectangle {
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        width: 1 * root.unit;
-                                        height: 1 * root.unit;
-                                        border-radius: self.height / 2;
-                                        background: Theme.accent;
-                                    }
-                                }
-                            }
+                        height: 6.2 * root.unit;
+                        unit: root.unit;
+                        selection-mode: true;
+                        selected: self.is-selected;
+                        name: stream.name;
+                        description: stream.description;
+                        title: stream.title;
+                        resolution-label: stream.resolution-label;
+                        debrid-badge: stream.debrid-badge;
+                        is-debrid-cached: stream.is-debrid-cached;
+                        is-debrid-uncached: stream.is-debrid-uncached;
+                        source-badge: stream.source-badge;
+                        size-label: stream.size-label;
+                        seeders-label: stream.seeders-label;
+                        tech-summary: stream.tech-summary;
+                        thumbnail: stream.thumbnail;
+                        progress: stream.progress;
+                        play => {
+                            root.download-modal-selection-id = stream.id;
+                            root.download-modal-stream-name = stream.name;
+                            root.download-modal-stream-details = stream.description;
                         }
                     }
                 }

@@ -62,6 +62,15 @@ pub(crate) fn project_stream_selection_views(
                 name: link.name.into(),
                 description: link.description.into(),
                 provider: link.provider.into(),
+                title: link.title.into(),
+                resolution_label: link.resolution_label.into(),
+                debrid_badge: link.debrid_badge.into(),
+                is_debrid_cached: link.is_debrid_cached,
+                is_debrid_uncached: link.is_debrid_uncached,
+                source_badge: link.source_badge.into(),
+                size_label: link.size_label.into(),
+                seeders_label: link.seeders_label.into(),
+                tech_summary: link.tech_summary.into(),
                 thumbnail: link
                     .thumbnail
                     .as_deref()
@@ -96,6 +105,10 @@ pub(crate) fn project_stream_selection_views(
         a.id == b.id
             && a.name == b.name
             && a.provider == b.provider
+            && a.title == b.title
+            && a.size_label == b.size_label
+            && a.debrid_badge == b.debrid_badge
+            && a.tech_summary == b.tech_summary
             && a.filtered == b.filtered
             && (a.progress - b.progress).abs() < f32::EPSILON
             && a.score_summary == b.score_summary
