@@ -1213,7 +1213,27 @@ pub async fn project_active_profile_with_manager(
 
                 let any_downloading = jobs.iter().any(|j| matches!(j.state, DownloadState::Downloading | DownloadState::Resolving | DownloadState::Queued));
                 let any_paused = jobs.iter().any(|j| j.state == DownloadState::Paused);
-                let failed_jobs: Vec<&DownloadJob> = jobs.iter().filter(|j| j.state == DownloadState::Failed).collect();
+                let failed_jobs: Vec<&DownloadJob> = if is_series {
+                    let mut seen_eps = std::collections::HashSet::new();
+                    let mut unique = Vec::new();
+                    for j in &jobs {
+                        if let (Some(s), Some(e)) = (j.season, j.episode) {
+                            if !seen_eps.insert((s, e)) {
+                                continue;
+                            }
+                            if let Some(best) = select_best_episode_job(&jobs, s, e)
+                                && best.state == DownloadState::Failed
+                            {
+                                unique.push(best);
+                            }
+                        } else if j.state == DownloadState::Failed {
+                            unique.push(j);
+                        }
+                    }
+                    unique
+                } else {
+                    jobs.iter().filter(|j| j.state == DownloadState::Failed).collect()
+                };
                 let any_failed = !failed_jobs.is_empty();
                 let all_completed = jobs.iter().all(|j| j.state == DownloadState::Completed);
                 let any_completed = jobs.iter().any(|j| j.state == DownloadState::Completed);
@@ -1284,7 +1304,7 @@ pub async fn project_active_profile_with_manager(
                         failed_jobs[0].error_code.as_deref().unwrap_or("Error desconocido"),
                     );
                     format!(
-                        "{} capítulos con error ({list_str}): {sample_reason} Haz clic en un capítulo en rojo para elegir otra fuente o reintentar.",
+                        "{} capítulos con error ({list_str}): {sample_reason} Hacé clic en un capítulo en rojo para elegir otra fuente o reintentar.",
                         failed_jobs.len()
                     )
                 };
@@ -3093,7 +3113,7 @@ pub async fn retry_resolve_job_with_smart_search(
         manager
             .mark_job_failed(
                 &job.id,
-                "No se encontraron fuentes disponibles en tus addons. Haz clic en el capítulo para elegir otra fuente.",
+                "No se encontraron fuentes disponibles en tus addons. Hacé clic en el capítulo para elegir otra fuente.",
             )
             .await;
     }

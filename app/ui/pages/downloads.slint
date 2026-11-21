@@ -749,7 +749,6 @@ export component DownloadsPage inherits Rectangle {
                                     width: 100%;
                                     height: 3.1 * root.unit;
                                     spacing: 0.8 * root.unit;
-                                    alignment: start;
 
                                 // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Clickable!) - squircle sin borde
                                 Rectangle {
@@ -794,12 +793,15 @@ export component DownloadsPage inherits Rectangle {
                                 }
 
                                 // Horizontal strip of episodes: E1 E2 E3 ... EN (scrollable so long seasons never clip)
-                                ScrollView {
+                                ep-scroll := ScrollView {
                                     horizontal-stretch: 1;
                                     height: 3.1 * root.unit;
+                                    viewport-width: max(self.visible-width, ep-strip.preferred-width);
+                                    viewport-height: self.visible-height;
                                     vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                                    horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
 
-                                    HorizontalLayout {
+                                    ep-strip := HorizontalLayout {
                                         spacing: 0.45 * root.unit;
                                         alignment: start;
 

@@ -803,7 +803,7 @@ pub fn setup_ui_callbacks(
                                 download_manager
                                     .mark_job_failed(
                                         &job.id,
-                                        "Sin fuentes disponibles para este capítulo. Haz clic en el capítulo para elegir otra fuente o reintentar.",
+                                        "Sin fuentes disponibles para este capítulo. Hacé clic en el capítulo para elegir otra fuente o reintentar.",
                                     )
                                     .await;
                             }
