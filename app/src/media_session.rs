@@ -97,6 +97,7 @@ impl MediaSession {
         std::thread::Builder::new()
             .name("media-session".to_owned())
             .spawn(move || {
+                crate::power_qos::set_current_thread_background();
                 let mut worker = Worker::new(on_event, commands_clone, runtime);
                 while let Ok(command) = receiver.recv() {
                     worker.handle(command);

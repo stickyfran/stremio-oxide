@@ -586,10 +586,10 @@ fn worker_main(
         //    messages.
         #[cfg(unix)]
         {
-            let timeout_ms = if source.as_ref().is_some_and(|s| !s.paused) {
-                20
-            } else {
-                80
+            let timeout_ms: libc::c_int = match source.as_ref() {
+                Some(s) if !s.paused => 20,
+                Some(_) => 250,
+                None => -1,
             };
             if wakeup_rx >= 0 {
                 let mut pfds = [libc::pollfd {
@@ -605,7 +605,8 @@ fn worker_main(
                     }
                 }
             } else {
-                std::thread::sleep(Duration::from_millis(timeout_ms as u64));
+                let fallback_ms = if timeout_ms < 0 { 250 } else { timeout_ms as u64 };
+                std::thread::sleep(Duration::from_millis(fallback_ms));
             }
         }
         #[cfg(not(unix))]

@@ -65,6 +65,7 @@ mod mpv_integration;
 pub mod network_tools;
 mod paths;
 mod performance;
+mod power_qos;
 mod pip_aspect;
 mod playback;
 mod player_features;
@@ -128,7 +129,16 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let result = run_application();
+    let worker_threads = std::thread::available_parallelism()
+        .map(|n| n.get().clamp(2, 6))
+        .unwrap_or(4);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .thread_name("stremio-tokio")
+        .on_thread_start(power_qos::set_current_thread_efficiency)
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(run_application());
     match result {
         Ok(()) => {
             tracing::info!("stremio-native exited cleanly, terminating process");
@@ -141,7 +151,6 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-#[tokio::main]
 #[cfg_attr(feature = "profiling", hotpath::main)]
 async fn run_application() -> anyhow::Result<()> {
     let startup_started = Instant::now();

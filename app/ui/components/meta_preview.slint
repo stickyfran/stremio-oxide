@@ -280,7 +280,9 @@ export component TrailerMiniPlayer inherits Rectangle {
 
     Timer {
         interval: 500ms;
-        running: root.has-trailer;
+        running: root.has-trailer
+            && ((root.video-playing && !root.hovering-bar && root.idle-ticks < 14)
+                || ((root.hovering-bar || !root.video-playing) && root.idle-ticks > 0));
         triggered => {
             if (root.hovering-bar || !root.video-playing) {
                 root.idle-ticks = 0;

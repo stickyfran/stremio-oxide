@@ -236,6 +236,7 @@ pub(crate) fn install_close_handler(ui: &MainWindow) {
             if let Some(ui) = ui_weak.upgrade() {
                 pause_playback_for_tray(&ui);
             }
+            crate::power_qos::set_process_efficiency_mode(true);
             tracing::info!("main window closed to the system tray");
             CloseRequestResponse::HideWindow
         }
@@ -302,6 +303,7 @@ fn toggle_window(ui: &MainWindow) {
         if let Err(error) = ui.hide() {
             tracing::warn!(%error, "failed to hide the main window to the system tray");
         } else {
+            crate::power_qos::set_process_efficiency_mode(true);
             tracing::info!("main window hidden to the system tray");
         }
     } else {
@@ -380,6 +382,7 @@ fn show_window_impl(ui: &MainWindow, preserve_current: bool) {
         tracing::error!(%error, "failed to show the main window from the tray");
         return;
     }
+    crate::power_qos::set_process_efficiency_mode(false);
     tracing::info!(
         max_width = target.width,
         max_height = target.height,

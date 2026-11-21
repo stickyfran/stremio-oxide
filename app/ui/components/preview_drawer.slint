@@ -182,7 +182,9 @@ export component MediaPreviewDrawer inherits Rectangle {
 
             Timer {
                 interval: 500ms;
-                running: root.has-trailer;
+                running: root.has-trailer
+                    && ((root.video-playing && !video-container.hovering-bar && video-container.idle-ticks < 14)
+                        || ((video-container.hovering-bar || !root.video-playing) && video-container.idle-ticks > 0));
                 triggered => {
                     if (video-container.hovering-bar || !root.video-playing) {
                         video-container.idle-ticks = 0;

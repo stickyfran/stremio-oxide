@@ -167,6 +167,7 @@ pub(crate) fn prefetch(yt_id: &str) {
     let spawned = std::thread::Builder::new()
         .name("trailer-resolver".to_owned())
         .spawn(move || {
+            crate::power_qos::set_current_thread_background();
             let resolved = resolve(&yt_id);
             {
                 let mut pending = pending()

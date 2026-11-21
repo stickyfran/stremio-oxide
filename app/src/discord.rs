@@ -190,6 +190,7 @@ impl DiscordRpc {
         let (commands, receiver) = mpsc::channel();
 
         std::thread::spawn(move || {
+            crate::power_qos::set_current_thread_background();
             let mut worker = DiscordWorker::new();
             loop {
                 let command = match worker.retry_wait() {

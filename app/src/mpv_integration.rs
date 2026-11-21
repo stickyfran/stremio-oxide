@@ -5444,13 +5444,20 @@ fn create_render_context(
         None
     };
     let redraw_weak = window_weak.clone();
+    let redraw_pending = Arc::new(AtomicBool::new(false));
     let render_context =
         source.create_context(get_proc_address, wayland_display, x11_display, move || {
+        if redraw_pending.swap(true, Ordering::AcqRel) {
+            return;
+        }
         crate::performance::counters().record_mpv_redraw_post();
         let redraw_weak = redraw_weak.clone();
+        let redraw_pending = Arc::clone(&redraw_pending);
         let _ = slint::invoke_from_event_loop(move || {
+            redraw_pending.store(false, Ordering::Release);
             if let Some(ui) = redraw_weak.upgrade()
                 && ui.get_show_player()
+                && ui.window().is_visible()
             {
                 ui.window().request_redraw();
             }
