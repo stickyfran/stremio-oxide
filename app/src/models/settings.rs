@@ -788,6 +788,7 @@ pub fn setup(
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
     config: &AppConfig,
     native_playback: Option<&NativePlaybackBridge>,
+    server_readiness: crate::server_readiness::ServerReadiness,
 ) {
     ui.set_settings_interface_language_options(interface_language_options());
     ui.set_settings_audio_language_options(audio_language_options());
@@ -901,7 +902,7 @@ pub fn setup(
         .ok()
         .map(|model| model.ctx.profile.settings.streaming_server_url.to_string())
         .unwrap_or_else(|| config.server_url.clone());
-    let connector = Arc::new(AppServerConnector::new(server_url));
+    let connector = Arc::new(AppServerConnector::new(server_url.clone()));
 
     let initial_dns_provider =
         core_env::DnsProvider::from_config(&config.dns_provider, &config.custom_dns_server);
@@ -930,9 +931,19 @@ pub fn setup(
     });
 
     // Fetch initial streaming server settings and coordinate with Turso DB
-    let conn_init = connector.clone();
     let ui_weak = ui.as_weak();
+    let server_readiness_for_init = server_readiness.clone();
+    let fallback_server_url = server_url.clone();
     tokio::spawn(async move {
+        let ready = server_readiness_for_init
+            .wait_ready(std::time::Duration::from_secs(15))
+            .await;
+        let effective_url = if ready {
+            server_readiness_for_init.current_url()
+        } else {
+            fallback_server_url
+        };
+        let conn_init = AppServerConnector::new(effective_url);
         let db_settings = crate::db::get_settings(&[
             "seeding_enabled",
             "bt_enable_dht",
@@ -1080,6 +1091,7 @@ pub fn setup(
             let rt = runtime.clone();
             let lang = interface_language_code(lang.as_str());
             let locale = map_interface_language_to_locale(&lang);
+            crate::localization::set_active_locale(locale);
             if let Err(error) = slint::select_bundled_translation(locale) {
                 tracing::error!(%error, %locale, "failed to select bundled translation on language change");
             }
@@ -1271,9 +1283,10 @@ pub fn setup(
             let ui_weak = ui_weak.clone();
             tokio::spawn(async move {
                 if let Err(error) = crate::secure_settings::set_tidb_api_key(&value).await {
+                    let message = crate::error_messages::humanize_credential_error(&error);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_error_message(error.to_string().into());
+                            ui.set_error_message(message.into());
                         }
                     });
                 }
@@ -1766,6 +1779,7 @@ pub fn sync(
 ) {
     let _span = tracing::info_span!("apply_ui_settings").entered();
     let locale = map_interface_language_to_locale(&settings.interface_language);
+    crate::localization::set_active_locale(locale);
     if let Err(error) = slint::select_bundled_translation(locale) {
         tracing::error!(%error, %locale, "failed to select bundled translation on sync");
     }

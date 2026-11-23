@@ -729,6 +729,8 @@ export component AddonsPage inherits Rectangle {
                 if (!root.details-loading && root.details-error != "") : Rectangle {
                     vertical-stretch: 1;
                     Text {
+                        width: parent.width;
+                        height: parent.height;
                         text: root.details-error;
                         color: Theme.text-secondary;
                         font-size: root.unit;
@@ -790,13 +792,13 @@ export component AddonsPage inherits Rectangle {
                                     width: 4.5 * root.unit;
                                     border-radius: self.height / 2;
                                     background: Theme.danger.with-alpha(0.3);
-                                    Text { text: "18+"; color: Theme.danger; font-size: 0.85 * root.unit; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                                    Text { width: parent.width; height: parent.height; text: "18+"; color: Theme.danger; font-size: 0.85 * root.unit; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                                 }
                                 if (root.details-addon.p2p) : Rectangle {
                                     width: 4.5 * root.unit;
                                     border-radius: self.height / 2;
                                     background: Theme.warning.with-alpha(0.25);
-                                    Text { text: "P2P"; color: Theme.warning; font-size: 0.85 * root.unit; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                                    Text { width: parent.width; height: parent.height; text: "P2P"; color: Theme.warning; font-size: 0.85 * root.unit; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                                 }
                             }
                         }
@@ -905,6 +907,9 @@ export component AddonsPage inherits Rectangle {
     }
 
     ModalDialog {
+        width: 100%;
+        height: 100%;
+        z: 2000;
         open: root.share-modal-open;
         unit: root.unit;
         title: @tr("Share addon") + (root.share-title != "" ? " · " + root.share-title : "");
@@ -913,7 +918,8 @@ export component AddonsPage inherits Rectangle {
         close-requested => { root.share-modal-open = false; }
 
         SharePrompt {
-            width: parent.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
             unit: root.unit;
             url: root.share-url;
             share-requested(platform, url) => { root.share-social(platform, url); }

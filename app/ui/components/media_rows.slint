@@ -32,15 +32,18 @@ export component StreamRow inherits Rectangle {
     border-radius: Theme.border-radius;
     border-width: 1px;
     border-color: root.selected
-        ? Theme.accent.with-alpha(0.65)
-        : (root.row-hovered ? Theme.primary-accent.with-alpha(0.35) : Theme.divider.with-alpha(0.45));
+        ? Theme.accent.with-alpha(0.85)
+        : (root.row-hovered ? Theme.primary-accent.with-alpha(0.65) : Theme.divider);
     clip: true;
     private property <bool> download-hovered: false;
     private property <bool> play-hovered: false;
     property <bool> row-hovered: row-area.has-hover || root.download-hovered || root.play-hovered;
-    background: root.selected || root.row-hovered
-        ? Theme.overlay-hover
-        : Theme.control-background.with-alpha(0.55);
+    background: root.selected
+        ? (root.row-hovered ? Theme.primary-accent.with-alpha(0.24) : Theme.primary-accent.with-alpha(0.18))
+        : (root.row-hovered ? Theme.primary-accent.with-alpha(0.14) : Theme.overlay-hover);
+
+    animate background { duration: Theme.motion-fast; }
+    animate border-color { duration: Theme.motion-fast; }
 
     accessible-role: button;
     accessible-label: root.name + " " + root.description + " " + root.score-details;
@@ -64,113 +67,117 @@ export component StreamRow inherits Rectangle {
         spacing: 0.85 * root.unit;
         alignment: start;
 
-        stream-info := Rectangle {
-            width: 6.2 * root.unit;
-            height: 4.9 * root.unit;
+        VerticalLayout {
+            alignment: center;
             horizontal-stretch: 0;
-            border-radius: 0.45 * root.unit;
-            background: Theme.overlay-color;
-            border-width: 1px;
-            border-color: root.is-debrid-cached
-                ? #10b981.with-alpha(0.45)
-                : (root.is-debrid-uncached ? #f59e0b.with-alpha(0.4) : Theme.divider);
-            clip: true;
 
-            if (root.has-thumbnail) : FallbackImage {
-                width: parent.width;
-                height: parent.height;
-                source: root.thumbnail;
-                contain: false;
+            stream-info := Rectangle {
+                width: 6.2 * root.unit;
+                height: 4.9 * root.unit;
+                border-radius: 0.45 * root.unit;
+                background: Theme.overlay-color;
+                border-width: 1px;
+                border-color: root.is-debrid-cached
+                    ? #10b981.with-alpha(0.45)
+                    : (root.is-debrid-uncached ? #f59e0b.with-alpha(0.4) : Theme.divider);
+                clip: true;
 
-                Image {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 1.5 * root.unit;
-                    height: 1.5 * root.unit;
-                    source: @image-url("../assets/images/icons/link.svg");
-                    colorize: Theme.text-secondary;
-                    image-fit: contain;
-                }
-            }
+                if (root.has-thumbnail) : FallbackImage {
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.thumbnail;
+                    contain: false;
 
-            if (!root.has-thumbnail && (root.resolution-label != "" || root.debrid-badge != "")) : VerticalLayout {
-                alignment: center;
-                spacing: 0.28 * root.unit;
-                padding-left: 0.3 * root.unit;
-                padding-right: 0.3 * root.unit;
-
-                if (root.resolution-label != "") : Text {
-                    text: root.resolution-label;
-                    color: root.resolution-label == "4K" || root.resolution-label == "8K"
-                        ? #c4b5fd
-                        : (root.resolution-label == "1080p" || root.resolution-label == "1440p"
-                            ? Theme.text-primary
-                            : Theme.text-secondary);
-                    font-size: 0.96 * root.unit;
-                    font-weight: 750;
-                    horizontal-alignment: center;
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 1.5 * root.unit;
+                        height: 1.5 * root.unit;
+                        source: @image-url("../assets/images/icons/link.svg");
+                        colorize: Theme.text-secondary;
+                        image-fit: contain;
+                    }
                 }
 
-                if (root.debrid-badge != "") : HorizontalLayout {
+                if (!root.has-thumbnail && (root.resolution-label != "" || root.debrid-badge != "")) : VerticalLayout {
                     alignment: center;
-                    Rectangle {
-                        height: 1.55 * root.unit;
-                        border-radius: 0.3 * root.unit;
-                        background: root.is-debrid-cached
-                            ? #10b981.with-alpha(0.22)
-                            : (root.is-debrid-uncached
-                                ? #f59e0b.with-alpha(0.20)
-                                : Theme.control-background);
-                        border-width: 1px;
-                        border-color: root.is-debrid-cached
-                            ? #10b981.with-alpha(0.45)
-                            : (root.is-debrid-uncached
-                                ? #f59e0b.with-alpha(0.45)
-                                : Theme.divider);
+                    spacing: 0.28 * root.unit;
+                    padding-left: 0.3 * root.unit;
+                    padding-right: 0.3 * root.unit;
 
-                        HorizontalLayout {
-                            padding-left: 0.4 * root.unit;
-                            padding-right: 0.4 * root.unit;
-                            alignment: center;
+                    if (root.resolution-label != "") : Text {
+                        text: root.resolution-label;
+                        color: root.resolution-label == "4K" || root.resolution-label == "8K"
+                            ? #c4b5fd
+                            : (root.resolution-label == "1080p" || root.resolution-label == "1440p"
+                                ? Theme.text-primary
+                                : Theme.text-secondary);
+                        font-size: 0.96 * root.unit;
+                        font-weight: 750;
+                        horizontal-alignment: center;
+                    }
 
-                            Text {
-                                text: root.debrid-badge;
-                                color: root.is-debrid-cached
-                                    ? #34d399
-                                    : (root.is-debrid-uncached ? #fbbf24 : Theme.text-secondary);
-                                font-size: 0.76 * root.unit;
-                                font-weight: 750;
-                                vertical-alignment: center;
+                    if (root.debrid-badge != "") : HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            height: 1.55 * root.unit;
+                            border-radius: 0.3 * root.unit;
+                            background: root.is-debrid-cached
+                                ? #10b981.with-alpha(0.22)
+                                : (root.is-debrid-uncached
+                                    ? #f59e0b.with-alpha(0.20)
+                                    : Theme.control-background);
+                            border-width: 1px;
+                            border-color: root.is-debrid-cached
+                                ? #10b981.with-alpha(0.45)
+                                : (root.is-debrid-uncached
+                                    ? #f59e0b.with-alpha(0.45)
+                                    : Theme.divider);
+
+                            HorizontalLayout {
+                                padding-left: 0.4 * root.unit;
+                                padding-right: 0.4 * root.unit;
+                                alignment: center;
+
+                                Text {
+                                    text: root.debrid-badge;
+                                    color: root.is-debrid-cached
+                                        ? #34d399
+                                        : (root.is-debrid-uncached ? #fbbf24 : Theme.text-secondary);
+                                    font-size: 0.76 * root.unit;
+                                    font-weight: 750;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if (!root.has-thumbnail && root.resolution-label == "" && root.debrid-badge == "") : Text {
-                x: 0.4 * root.unit;
-                width: parent.width - 0.8 * root.unit;
-                height: parent.height;
-                text: root.name;
-                color: Theme.text-primary;
-                opacity: 0.88;
-                font-size: 0.76 * root.unit;
-                font-weight: 600;
-                wrap: word-wrap;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
-
-            if (root.progress > 0) : Rectangle {
-                y: parent.height - 0.3 * root.unit;
-                width: parent.width;
-                height: 0.3 * root.unit;
-                background: Theme.background.with-alpha(0.7);
-
-                Rectangle {
-                    width: parent.width * root.progress.clamp(0, 1);
+                if (!root.has-thumbnail && root.resolution-label == "" && root.debrid-badge == "") : Text {
+                    x: 0.4 * root.unit;
+                    width: parent.width - 0.8 * root.unit;
                     height: parent.height;
-                    background: Theme.accent;
+                    text: root.name;
+                    color: Theme.text-primary;
+                    opacity: 0.88;
+                    font-size: 0.76 * root.unit;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+
+                if (root.progress > 0) : Rectangle {
+                    y: parent.height - 0.3 * root.unit;
+                    width: parent.width;
+                    height: 0.3 * root.unit;
+                    background: Theme.background.with-alpha(0.7);
+
+                    Rectangle {
+                        width: parent.width * root.progress.clamp(0, 1);
+                        height: parent.height;
+                        background: Theme.accent;
+                    }
                 }
             }
         }
@@ -194,46 +201,54 @@ export component StreamRow inherits Rectangle {
                 alignment: start;
                 height: 1.65 * root.unit;
 
-                if (root.size-label != "") : Rectangle {
-                    height: 1.55 * root.unit;
+                if (root.size-label != "") : VerticalLayout {
+                    alignment: center;
                     horizontal-stretch: 0;
-                    border-radius: 4px;
-                    background: Theme.primary-accent.with-alpha(0.22);
-                    border-width: 1px;
-                    border-color: Theme.primary-accent.with-alpha(0.45);
 
-                    HorizontalLayout {
-                        padding-left: 0.45 * root.unit;
-                        padding-right: 0.45 * root.unit;
+                    Rectangle {
+                        height: 1.55 * root.unit;
+                        border-radius: 4px;
+                        background: Theme.primary-accent.with-alpha(0.22);
+                        border-width: 1px;
+                        border-color: Theme.primary-accent.with-alpha(0.45);
 
-                        Text {
-                            text: root.size-label;
-                            color: #ede9fe;
-                            font-size: 0.78 * root.unit;
-                            font-weight: 750;
-                            vertical-alignment: center;
+                        HorizontalLayout {
+                            padding-left: 0.45 * root.unit;
+                            padding-right: 0.45 * root.unit;
+
+                            Text {
+                                text: root.size-label;
+                                color: #ede9fe;
+                                font-size: 0.78 * root.unit;
+                                font-weight: 750;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
 
-                if (root.source-badge != "") : Rectangle {
-                    height: 1.55 * root.unit;
+                if (root.source-badge != "") : VerticalLayout {
+                    alignment: center;
                     horizontal-stretch: 0;
-                    border-radius: 4px;
-                    background: Theme.control-background;
-                    border-width: 1px;
-                    border-color: Theme.divider;
 
-                    HorizontalLayout {
-                        padding-left: 0.45 * root.unit;
-                        padding-right: 0.45 * root.unit;
+                    Rectangle {
+                        height: 1.55 * root.unit;
+                        border-radius: 4px;
+                        background: Theme.control-background;
+                        border-width: 1px;
+                        border-color: Theme.divider;
 
-                        Text {
-                            text: root.source-badge;
-                            color: Theme.text-primary;
-                            font-size: 0.76 * root.unit;
-                            font-weight: 600;
-                            vertical-alignment: center;
+                        HorizontalLayout {
+                            padding-left: 0.45 * root.unit;
+                            padding-right: 0.45 * root.unit;
+
+                            Text {
+                                text: root.source-badge;
+                                color: Theme.text-primary;
+                                font-size: 0.76 * root.unit;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
@@ -256,7 +271,7 @@ export component StreamRow inherits Rectangle {
             if (root.tech-summary != "") : Text {
                 horizontal-stretch: 1;
                 text: root.tech-summary;
-                color: Theme.text-muted;
+                color: Theme.text-secondary;
                 font-size: 0.76 * root.unit;
                 font-weight: 500;
                 overflow: elide;
@@ -299,7 +314,7 @@ export component StreamRow inherits Rectangle {
             actions-container := HorizontalLayout {
                 spacing: 0.45 * root.unit;
                 alignment: end;
-                opacity: (root.selected || root.row-hovered) ? 1.0 : 0.55;
+                opacity: (root.selected || root.row-hovered) ? 1.0 : 0.85;
                 animate opacity { duration: 150ms; easing: ease-out; }
 
                 download-button := ButtonSurface {
@@ -579,12 +594,15 @@ export component EpisodeRow inherits Rectangle {
                         spacing: 0.25 * root.unit;
                         alignment: center;
 
-                        Image {
-                            width: 1.15 * root.unit;
-                            height: 1.15 * root.unit;
-                            source: @image-url("../assets/images/icons/eye.svg");
-                            colorize: Theme.secondary-foreground;
-                            image-fit: contain;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                width: 1.15 * root.unit;
+                                height: 1.15 * root.unit;
+                                source: @image-url("../assets/images/icons/eye.svg");
+                                colorize: Theme.secondary-foreground;
+                                image-fit: contain;
+                            }
                         }
                         Text {
                             text: @tr("WATCHED" => "Watched");

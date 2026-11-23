@@ -95,75 +95,89 @@ export component Sidebar inherits Rectangle {
         padding-top: 0.8 * root.unit;
         spacing: 0.6 * root.unit;
 
-        NavTabButton {
-            x: (parent.width - self.width) / 2;
-            unit: root.unit;
-            label: @tr("Board");
-            icon-source: @image-url("../assets/images/icons/home-outline.svg");
-            active-icon-source: @image-url("../assets/images/icons/home.svg");
-            selected: root.active-tab == 0;
-            clicked => { root.change-tab(0); }
-            double-clicked => { root.tab-double-clicked(0); }
+        HorizontalLayout {
+            alignment: center;
+            NavTabButton {
+                unit: root.unit;
+                label: @tr("Board");
+                icon-source: @image-url("../assets/images/icons/home-outline.svg");
+                active-icon-source: @image-url("../assets/images/icons/home.svg");
+                selected: root.active-tab == 0;
+                clicked => { root.change-tab(0); }
+                double-clicked => { root.tab-double-clicked(0); }
+            }
         }
-        NavTabButton {
-            x: (parent.width - self.width) / 2;
-            unit: root.unit;
-            label: @tr("Discover" => "Discover");
-            icon-source: @image-url("../assets/images/icons/discover-outline.svg");
-            active-icon-source: @image-url("../assets/images/icons/discover.svg");
-            selected: root.active-tab == 1;
-            clicked => { root.change-tab(1); }
-            double-clicked => { root.tab-double-clicked(1); }
+        HorizontalLayout {
+            alignment: center;
+            NavTabButton {
+                unit: root.unit;
+                label: @tr("Discover" => "Discover");
+                icon-source: @image-url("../assets/images/icons/discover-outline.svg");
+                active-icon-source: @image-url("../assets/images/icons/discover.svg");
+                selected: root.active-tab == 1;
+                clicked => { root.change-tab(1); }
+                double-clicked => { root.tab-double-clicked(1); }
+            }
         }
-        NavTabButton {
-            x: (parent.width - self.width) / 2;
-            unit: root.unit;
-            label: @tr("Library" => "Library");
-            icon-source: @image-url("../assets/images/icons/library-outline.svg");
-            active-icon-source: @image-url("../assets/images/icons/library.svg");
-            selected: root.active-tab == 2;
-            clicked => { root.change-tab(2); }
-            double-clicked => { root.tab-double-clicked(2); }
+        HorizontalLayout {
+            alignment: center;
+            NavTabButton {
+                unit: root.unit;
+                label: @tr("Library" => "Library");
+                icon-source: @image-url("../assets/images/icons/library-outline.svg");
+                active-icon-source: @image-url("../assets/images/icons/library.svg");
+                selected: root.active-tab == 2;
+                clicked => { root.change-tab(2); }
+                double-clicked => { root.tab-double-clicked(2); }
+            }
         }
-        NavTabButton {
-            x: (parent.width - self.width) / 2;
-            unit: root.unit;
-            label: @tr("Calendar");
-            icon-source: @image-url("../assets/images/icons/calendar-outline.svg");
-            active-icon-source: @image-url("../assets/images/icons/calendar.svg");
-            selected: root.active-tab == 5;
-            clicked => { root.change-tab(5); }
-            double-clicked => { root.tab-double-clicked(5); }
+        HorizontalLayout {
+            alignment: center;
+            NavTabButton {
+                unit: root.unit;
+                label: @tr("Calendar");
+                icon-source: @image-url("../assets/images/icons/calendar-outline.svg");
+                active-icon-source: @image-url("../assets/images/icons/calendar.svg");
+                selected: root.active-tab == 5;
+                clicked => { root.change-tab(5); }
+                double-clicked => { root.tab-double-clicked(5); }
+            }
         }
-        NavTabButton {
-            x: (parent.width - self.width) / 2;
-            unit: root.unit;
-            label: @tr("ADDONS" => "Addons");
-            icon-source: @image-url("../assets/images/icons/addons-outline.svg");
-            active-icon-source: @image-url("../assets/images/icons/addons.svg");
-            selected: root.active-tab == 3;
-            clicked => { root.change-tab(3); }
-            double-clicked => { root.tab-double-clicked(3); }
+        HorizontalLayout {
+            alignment: center;
+            NavTabButton {
+                unit: root.unit;
+                label: @tr("ADDONS" => "Addons");
+                icon-source: @image-url("../assets/images/icons/addons-outline.svg");
+                active-icon-source: @image-url("../assets/images/icons/addons.svg");
+                selected: root.active-tab == 3;
+                clicked => { root.change-tab(3); }
+                double-clicked => { root.tab-double-clicked(3); }
+            }
         }
-        NavTabButton {
-            x: (parent.width - self.width) / 2;
-            unit: root.unit;
-            label: @tr("DOWNLOADS_TITLE" => "Descargas");
-            icon-source: @image-url("../assets/images/icons/download.svg");
-            active-icon-source: @image-url("../assets/images/icons/download.svg");
-            selected: root.active-tab == 7;
-            clicked => { root.change-tab(7); }
-            double-clicked => { root.tab-double-clicked(7); }
+        HorizontalLayout {
+            alignment: center;
+            NavTabButton {
+                unit: root.unit;
+                label: @tr("DOWNLOADS_TITLE" => "Descargas");
+                icon-source: @image-url("../assets/images/icons/download.svg");
+                active-icon-source: @image-url("../assets/images/icons/download.svg");
+                selected: root.active-tab == 7;
+                clicked => { root.change-tab(7); }
+                double-clicked => { root.tab-double-clicked(7); }
+            }
         }
-        NavTabButton {
-            x: (parent.width - self.width) / 2;
-            unit: root.unit;
-            label: @tr("SETTINGS" => "Settings");
-            icon-source: @image-url("../assets/images/icons/settings-outline.svg");
-            active-icon-source: @image-url("../assets/images/icons/settings.svg");
-            selected: root.active-tab == 4 || root.active-tab == 10;
-            clicked => { root.change-tab(4); }
-            double-clicked => { root.tab-double-clicked(4); }
+        HorizontalLayout {
+            alignment: center;
+            NavTabButton {
+                unit: root.unit;
+                label: @tr("SETTINGS" => "Settings");
+                icon-source: @image-url("../assets/images/icons/settings-outline.svg");
+                active-icon-source: @image-url("../assets/images/icons/settings.svg");
+                selected: root.active-tab == 4 || root.active-tab == 10;
+                clicked => { root.change-tab(4); }
+                double-clicked => { root.tab-double-clicked(4); }
+            }
         }
     }
 }

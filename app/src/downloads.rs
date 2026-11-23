@@ -161,6 +161,7 @@ pub struct DownloadManager {
     client: Client,
     permits: Arc<Semaphore>,
     active: Arc<Mutex<HashMap<String, ActiveDownload>>>,
+    resolving: Arc<Mutex<HashMap<String, CancellationToken>>>,
     progress: watch::Sender<Option<DownloadProgress>>,
     bandwidth_limit: Arc<AtomicU64>,
     bandwidth_gate: Arc<Mutex<std::time::Instant>>,
@@ -372,90 +373,121 @@ fn get_free_disk_space(_path: &Path) -> Option<u64> {
     None
 }
 
+pub fn matches_download_target(job: &DownloadJob, target_id: &str) -> bool {
+    if let Some(rest) = target_id.strip_prefix("season:") {
+        if let Some((meta_id, season_str)) = rest.rsplit_once(':')
+            && let Ok(target_s) = season_str.parse::<i32>()
+        {
+            return job.meta_id.as_deref() == Some(meta_id) && job.season == Some(target_s);
+        }
+        return false;
+    }
+    job.id == target_id || job.meta_id.as_deref() == Some(target_id)
+}
+
+async fn cleanup_jobs_files_and_db(
+    manager: &DownloadManager,
+    jobs_to_delete: &[DownloadJob],
+) -> Result<(), DownloadError> {
+    if jobs_to_delete.is_empty() {
+        return Ok(());
+    }
+    let job_ids: Vec<String> = jobs_to_delete.iter().map(|j| j.id.clone()).collect();
+    manager.stop_jobs_in_memory(&job_ids).await;
+
+    for job in jobs_to_delete {
+        let _ = manager.credentials.delete(&job.credential_ref).await;
+    }
+
+    for job in jobs_to_delete {
+        let _ = tokio::fs::remove_file(&job.destination).await;
+        let _ = tokio::fs::remove_file(part_path(&job.destination)).await;
+        if let Some(stem) = job.destination.file_stem().and_then(|s| s.to_str())
+            && let Some(parent) = job.destination.parent()
+        {
+            if let Ok(mut entries) = tokio::fs::read_dir(parent).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                        && name.starts_with(stem)
+                        && (name.ends_with(".srt") || name.ends_with(".vtt"))
+                    {
+                        let _ = tokio::fs::remove_file(&path).await;
+                    }
+                }
+            }
+            // Try removing empty season/destination directory if no files remain
+            let _ = tokio::fs::remove_dir(parent).await;
+            if let Some(grandparent) = parent.parent() {
+                let _ = tokio::fs::remove_dir(grandparent).await;
+            }
+        }
+    }
+
+    let conn = crate::db::get_conn()
+        .await
+        .map_err(|_| DownloadError::Database)?;
+
+    for job in jobs_to_delete {
+        let _ = conn
+            .execute("DELETE FROM download_jobs WHERE id = ?", [job.id.clone()])
+            .await;
+    }
+    Ok(())
+}
+
 pub async fn delete_download_target(
     manager: &DownloadManager,
     profile_id: &str,
     target_id: &str,
 ) -> Result<(), DownloadError> {
     let jobs = list_jobs(profile_id).await?;
-    let jobs_to_delete: Vec<DownloadJob> = if let Some(rest) = target_id.strip_prefix("season:") {
-        if let Some((meta_id, season_str)) = rest.rsplit_once(':') {
-            let target_s = season_str.parse::<i32>().unwrap_or(-999);
-            let parent_ids: Vec<String> = jobs
-                .iter()
-                .filter(|j| j.meta_id.as_deref() == Some(meta_id) && j.season == Some(target_s))
-                .map(|j| j.id.clone())
-                .collect();
-            jobs.into_iter()
-                .filter(|j| {
-                    (j.meta_id.as_deref() == Some(meta_id) && j.season == Some(target_s))
-                        || j.parent_job_id.as_ref().map(|p| parent_ids.contains(p)).unwrap_or(false)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
-    } else if jobs.iter().any(|j| j.id == target_id) {
-        jobs.into_iter()
-            .filter(|j| j.id == target_id || j.parent_job_id.as_deref() == Some(target_id))
-            .collect()
-    } else {
-        let parent_ids: Vec<String> = jobs
-            .iter()
-            .filter(|j| j.meta_id.as_deref() == Some(target_id) || j.id == target_id)
-            .map(|j| j.id.clone())
-            .collect();
-        jobs.into_iter()
-            .filter(|j| {
-                j.meta_id.as_deref() == Some(target_id)
-                    || j.id == target_id
-                    || j.parent_job_id.as_ref().map(|p| parent_ids.contains(p)).unwrap_or(false)
-            })
-            .collect()
-    };
+    let primary_ids: Vec<String> = jobs
+        .iter()
+        .filter(|j| matches_download_target(j, target_id))
+        .map(|j| j.id.clone())
+        .collect();
+    let jobs_to_delete: Vec<DownloadJob> = jobs
+        .into_iter()
+        .filter(|j| {
+            matches_download_target(j, target_id)
+                || j.parent_job_id
+                    .as_ref()
+                    .is_some_and(|p| primary_ids.contains(p))
+        })
+        .collect();
 
-    // 1. Cancel active in-memory tasks & clean credentials (no DB lock held)
-    for job in &jobs_to_delete {
-        if let Some(active) = manager.active.lock().await.remove(&job.id) {
-            active.cancellation.cancel();
-            let _ = active.task.await;
-        }
-        let _ = manager.credentials.delete(&job.credential_ref).await;
-    }
+    cleanup_jobs_files_and_db(manager, &jobs_to_delete).await
+}
 
-    // 2. Remove files and subtitles from disk (no DB lock held)
-    for job in &jobs_to_delete {
-        let _ = tokio::fs::remove_file(&job.destination).await;
-        let _ = tokio::fs::remove_file(part_path(&job.destination)).await;
-        if let Some(stem) = job.destination.file_stem().and_then(|s| s.to_str()) {
-            if let Some(parent) = job.destination.parent() {
-                if let Ok(mut entries) = tokio::fs::read_dir(parent).await {
-                    while let Ok(Some(entry)) = entries.next_entry().await {
-                        let path = entry.path();
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name.starts_with(stem) && (name.ends_with(".srt") || name.ends_with(".vtt")) {
-                                let _ = tokio::fs::remove_file(&path).await;
-                            }
-                        }
-                    }
-                }
-                // Try removing empty season/destination directory if no files remain
-                let _ = tokio::fs::remove_dir(parent).await;
-                if let Some(grandparent) = parent.parent() {
-                    let _ = tokio::fs::remove_dir(grandparent).await;
-                }
-            }
-        }
-    }
+pub async fn cancel_unfinished_target(
+    manager: &DownloadManager,
+    profile_id: &str,
+    target_id: &str,
+) -> Result<(), DownloadError> {
+    let jobs = list_jobs(profile_id).await?;
+    let unfinished_ids: Vec<String> = jobs
+        .iter()
+        .filter(|j| {
+            matches_download_target(j, target_id)
+                && j.kind == "video"
+                && j.state != DownloadState::Completed
+        })
+        .map(|j| j.id.clone())
+        .collect();
+    let jobs_to_cancel: Vec<DownloadJob> = jobs
+        .into_iter()
+        .filter(|j| {
+            unfinished_ids.contains(&j.id)
+                || (j.kind == "subtitle"
+                    && j.parent_job_id
+                        .as_ref()
+                        .is_some_and(|p| unfinished_ids.contains(p)))
+        })
+        .collect();
 
-    // 3. Acquire DB connection and delete job records
-    let conn = crate::db::get_conn()
-        .await
-        .map_err(|_| DownloadError::Database)?;
-
-    for job in &jobs_to_delete {
-        let _ = conn.execute("DELETE FROM download_jobs WHERE id = ?", [job.id.clone()]).await;
-    }
+    cleanup_jobs_files_and_db(manager, &jobs_to_cancel).await?;
+    let _ = manager.progress.send(None);
     Ok(())
 }
 
@@ -501,15 +533,25 @@ pub fn setup_ui_callbacks(
             let weak = weak.clone();
             let target_id = target_id.to_string();
             tokio::spawn(async move {
-                let profile_id = crate::profiles::active_profile_id().await.map(|p| p.as_str().to_string()).unwrap_or_else(|_| "default".to_string());
+                let profile_id = crate::profiles::active_profile_id()
+                    .await
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_else(|_| "default".to_string());
                 let jobs = list_jobs(&profile_id).await.unwrap_or_default();
-                for job in jobs {
-                    if (job.meta_id.as_deref() == Some(&target_id) || job.id == target_id)
-                        && matches!(job.state, DownloadState::Queued | DownloadState::Resolving | DownloadState::Downloading)
-                    {
-                        let _ = manager.pause(&job.id).await;
-                    }
-                }
+                let ids: Vec<String> = jobs
+                    .into_iter()
+                    .filter(|job| {
+                        matches_download_target(job, &target_id)
+                            && matches!(
+                                job.state,
+                                DownloadState::Queued
+                                    | DownloadState::Resolving
+                                    | DownloadState::Downloading
+                            )
+                    })
+                    .map(|job| job.id)
+                    .collect();
+                let _ = manager.pause_jobs(&ids).await;
                 project_active_profile(weak).await;
             });
         }
@@ -532,7 +574,7 @@ pub fn setup_ui_callbacks(
                 let jobs = list_jobs(&profile_id).await.unwrap_or_default();
                 let mut smart_retry_jobs = Vec::new();
                 for job in jobs {
-                    if (job.meta_id.as_deref() == Some(&target_id) || job.id == target_id)
+                    if matches_download_target(&job, &target_id)
                         && matches!(
                             job.state,
                             DownloadState::Paused | DownloadState::Failed | DownloadState::Cancelled
@@ -579,8 +621,11 @@ pub fn setup_ui_callbacks(
             let weak = weak.clone();
             let target_id = target_id.to_string();
             tokio::spawn(async move {
-                let profile_id = crate::profiles::active_profile_id().await.map(|p| p.as_str().to_string()).unwrap_or_else(|_| "default".to_string());
-                let _ = delete_download_target(&manager, &profile_id, &target_id).await;
+                let profile_id = crate::profiles::active_profile_id()
+                    .await
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_else(|_| "default".to_string());
+                let _ = cancel_unfinished_target(&manager, &profile_id, &target_id).await;
                 project_active_profile(weak).await;
             });
         }
@@ -682,12 +727,13 @@ pub fn setup_ui_callbacks(
         let weak = ui.as_weak();
         let runtime = runtime.clone();
         let navigation = navigation.clone();
-        move |meta_id, season, episode| {
+        move |meta_id, season, episode, replace_active| {
             let meta_id = meta_id.to_string();
-            if season < 0 {
+            if season == -1 {
                 if let Some(ui) = weak.upgrade() {
                     crate::models::details::open_details_route(&ui, &runtime, &navigation, &meta_id);
                     ui.set_detail_pending_download_scope("movie".into());
+                    ui.set_detail_pending_download_replace(replace_active);
                     crate::models::details::load_meta_details_for_video(
                         &runtime,
                         meta_id,
@@ -695,6 +741,79 @@ pub fn setup_ui_callbacks(
                         None,
                     );
                 }
+                return;
+            }
+
+            if season == -2 {
+                let weak = weak.clone();
+                let runtime = runtime.clone();
+                let navigation = navigation.clone();
+                tokio::spawn(async move {
+                    let profile_id = crate::profiles::active_profile_id()
+                        .await
+                        .map(|p| p.as_str().to_string())
+                        .unwrap_or_else(|_| "default".to_string());
+                    let jobs = list_jobs(&profile_id).await.unwrap_or_default();
+                    let series_jobs: Vec<DownloadJob> = jobs
+                        .into_iter()
+                        .filter(|j| j.meta_id.as_deref() == Some(meta_id.as_str()) && j.kind == "video")
+                        .collect();
+                    let mut unfinished_pairs: Vec<(i32, i32)> = series_jobs
+                        .iter()
+                        .filter(|j| {
+                            matches!(
+                                j.state,
+                                DownloadState::Queued
+                                    | DownloadState::Resolving
+                                    | DownloadState::Downloading
+                                    | DownloadState::Paused
+                                    | DownloadState::Failed
+                            )
+                        })
+                        .filter_map(|j| Some((j.season?, j.episode?)))
+                        .collect();
+                    unfinished_pairs.sort_unstable();
+                    unfinished_pairs.dedup();
+
+                    let distinct_seasons: Vec<i32> = {
+                        let mut ss: Vec<i32> = unfinished_pairs.iter().map(|(s, _)| *s).collect();
+                        ss.dedup();
+                        ss
+                    };
+                    let (scope, target_season, target_ep) = if distinct_seasons.len() == 1 {
+                        let (s, e) = unfinished_pairs[0];
+                        ("season", s, e)
+                    } else if let Some(&(s, e)) = unfinished_pairs.first() {
+                        ("series", s, e)
+                    } else {
+                        ("series", 1, 1)
+                    };
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak.upgrade() {
+                            crate::models::details::set_pending_target_episode(
+                                meta_id.clone(),
+                                target_season,
+                                target_ep,
+                            );
+                            let video_id = Some(format!("{meta_id}:{target_season}:{target_ep}"));
+                            crate::models::details::open_details_route(
+                                &ui,
+                                &runtime,
+                                &navigation,
+                                &meta_id,
+                            );
+                            ui.set_detail_pending_download_scope(scope.into());
+                            ui.set_detail_pending_download_replace(replace_active);
+                            crate::models::details::load_meta_details_for_video(
+                                &runtime,
+                                meta_id,
+                                Some("series".to_string()),
+                                video_id,
+                            );
+                        }
+                    });
+                });
                 return;
             }
 
@@ -709,6 +828,7 @@ pub fn setup_ui_callbacks(
                     let video_id = Some(format!("{meta_id}:{target_season}:{episode}"));
                     crate::models::details::open_details_route(&ui, &runtime, &navigation, &meta_id);
                     ui.set_detail_pending_download_scope("episode".into());
+                    ui.set_detail_pending_download_replace(replace_active);
                     crate::models::details::load_meta_details_for_video(
                         &runtime,
                         meta_id,
@@ -736,7 +856,11 @@ pub fn setup_ui_callbacks(
                         .filter(|j| j.meta_id.as_deref() == Some(meta_id.as_str()))
                         .collect();
                     let all_eps = get_series_all_episodes(&client, &meta_id, &series_jobs).await;
-                    let target_ep = first_missing_aired_episode(&all_eps, &series_jobs, target_season);
+                    let target_ep = if replace_active {
+                        first_unfinished_episode(&all_eps, &series_jobs, target_season)
+                    } else {
+                        first_missing_aired_episode(&all_eps, &series_jobs, target_season)
+                    };
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
                             crate::models::details::set_pending_target_episode(
@@ -752,6 +876,7 @@ pub fn setup_ui_callbacks(
                                 &meta_id,
                             );
                             ui.set_detail_pending_download_scope("season".into());
+                            ui.set_detail_pending_download_replace(replace_active);
                             crate::models::details::load_meta_details_for_video(
                                 &runtime,
                                 meta_id,
@@ -793,6 +918,7 @@ pub struct SendEpisodeChip {
     pub title: String,
     pub is_downloaded: bool,
     pub is_downloading: bool,
+    pub is_paused: bool,
     pub is_failed: bool,
     pub error_message: String,
     pub watched: bool,
@@ -807,6 +933,7 @@ pub struct SendSeasonGroup {
     pub season_year: String,
     pub has_downloaded: bool,
     pub has_active: bool,
+    pub has_paused: bool,
     pub has_failed: bool,
     pub episodes: Vec<SendEpisodeChip>,
 }
@@ -843,10 +970,13 @@ struct SendDownloadGroup {
     subtitles_info: String,
     has_subtitles: bool,
     is_downloading: bool,
+    is_paused: bool,
     has_failed: bool,
     error_message: String,
     can_pause: bool,
     can_resume: bool,
+    can_cancel: bool,
+    can_change_source: bool,
     can_play: bool,
     can_delete: bool,
     watched: bool,
@@ -1260,7 +1390,18 @@ pub async fn project_active_profile_with_manager(
                         )
                     }
                 } else if any_paused {
-                    format!("Pausado · {}", format_bytes(total_downloaded))
+                    if is_series {
+                        let done_count = jobs.iter().filter(|j| j.state == DownloadState::Completed).count();
+                        format!("Pausado ({done_count}/{}) · {}", jobs.len(), format_bytes(total_downloaded))
+                    } else if total_expected > 0 {
+                        format!(
+                            "Pausado · {} / {}",
+                            format_bytes(total_downloaded),
+                            format_bytes(total_expected)
+                        )
+                    } else {
+                        format!("Pausado · {}", format_bytes(total_downloaded))
+                    }
                 } else if any_failed {
                     if !is_series {
                         "Error en la descarga".to_string()
@@ -1400,6 +1541,7 @@ pub async fn project_active_profile_with_manager(
                                 title: clean_title,
                                 is_downloaded: true,
                                 is_downloading: false,
+                                is_paused: false,
                                 is_failed: false,
                                 error_message: String::new(),
                                 watched: ws.watched,
@@ -1424,6 +1566,7 @@ pub async fn project_active_profile_with_manager(
                             season_year,
                             has_downloaded: true,
                             has_active: false,
+                            has_paused: false,
                             has_failed: false,
                             episodes: eps,
                         });
@@ -1434,25 +1577,32 @@ pub async fn project_active_profile_with_manager(
                     for ep in &all_eps {
                         let matching_job = select_best_episode_job(&jobs, ep.season, ep.episode);
 
-                        let (is_downloaded, is_downloading, is_failed, error_message, progress, chip_id) = match matching_job {
+                        let (is_downloaded, is_downloading, is_paused, is_failed, error_message, progress, chip_id) = match matching_job {
                             Some(j) if j.state == DownloadState::Completed => {
-                                (true, false, false, String::new(), 1.0, j.id.clone())
+                                (true, false, false, false, String::new(), 1.0, j.id.clone())
                             }
                             Some(j) if matches!(j.state, DownloadState::Downloading | DownloadState::Resolving | DownloadState::Queued) => {
                                 let p = j.bytes_total
                                     .filter(|tot| *tot > 0)
                                     .map(|tot| (j.bytes_downloaded as f32 / tot as f32).clamp(0.0, 1.0))
                                     .unwrap_or(0.0);
-                                (false, true, false, String::new(), p, j.id.clone())
+                                (false, true, false, false, String::new(), p, j.id.clone())
+                            }
+                            Some(j) if j.state == DownloadState::Paused => {
+                                let p = j.bytes_total
+                                    .filter(|tot| *tot > 0)
+                                    .map(|tot| (j.bytes_downloaded as f32 / tot as f32).clamp(0.0, 1.0))
+                                    .unwrap_or(0.0);
+                                (false, false, true, false, String::new(), p, j.id.clone())
                             }
                             Some(j) if j.state == DownloadState::Failed => {
                                 let msg = humanize_error_code(
                                     j.error_code.as_deref().unwrap_or("Error desconocido"),
                                 );
-                                (false, false, true, msg, 0.0, j.id.clone())
+                                (false, false, false, true, msg, 0.0, j.id.clone())
                             }
-                            Some(j) => (false, false, false, String::new(), 0.0, j.id.clone()),
-                            None => (false, false, false, String::new(), 0.0, ep.id.clone()),
+                            Some(j) => (false, false, false, false, String::new(), 0.0, j.id.clone()),
+                            None => (false, false, false, false, String::new(), 0.0, ep.id.clone()),
                         };
 
                         let ws = watch_states
@@ -1472,6 +1622,7 @@ pub async fn project_active_profile_with_manager(
                             title: ep.title.clone(),
                             is_downloaded,
                             is_downloading,
+                            is_paused,
                             is_failed,
                             error_message,
                             watched: ws.watched,
@@ -1491,6 +1642,7 @@ pub async fn project_active_profile_with_manager(
                         let season_year = compute_season_year(&all_eps, s);
                         let has_downloaded = eps.iter().any(|e| e.is_downloaded);
                         let has_active = eps.iter().any(|e| e.is_downloading);
+                        let has_paused = eps.iter().any(|e| e.is_paused);
                         let has_failed = eps.iter().any(|e| e.is_failed);
                         full_seasons.push(SendSeasonGroup {
                             season: s,
@@ -1498,6 +1650,7 @@ pub async fn project_active_profile_with_manager(
                             season_year,
                             has_downloaded,
                             has_active,
+                            has_paused,
                             has_failed,
                             episodes: eps,
                         });
@@ -1522,10 +1675,13 @@ pub async fn project_active_profile_with_manager(
                     subtitles_info,
                     has_subtitles,
                     is_downloading: any_downloading,
+                    is_paused: any_paused,
                     has_failed: any_failed,
                     error_message,
                     can_pause: any_downloading,
                     can_resume: any_paused || any_failed,
+                    can_cancel: any_downloading || any_paused,
+                    can_change_source: any_downloading || any_paused || any_failed,
                     can_play: any_completed,
                     can_delete: true,
                     watched: jobs.iter().all(|j| {
@@ -1610,6 +1766,7 @@ pub async fn project_active_profile_with_manager(
                                         title: c.title.into(),
                                         is_downloaded: c.is_downloaded,
                                         is_downloading: c.is_downloading,
+                                        is_paused: c.is_paused,
                                         is_failed: c.is_failed,
                                         error_message: c.error_message.into(),
                                         watched: c.watched,
@@ -1623,6 +1780,7 @@ pub async fn project_active_profile_with_manager(
                                     season_year: sg.season_year.into(),
                                     has_downloaded: sg.has_downloaded,
                                     has_active: sg.has_active,
+                                    has_paused: sg.has_paused,
                                     has_failed: sg.has_failed,
                                     episodes: slint::ModelRc::new(slint::VecModel::from(chips)),
                                 }
@@ -1646,10 +1804,13 @@ pub async fn project_active_profile_with_manager(
                         subtitles_info: g.subtitles_info.into(),
                         has_subtitles: g.has_subtitles,
                         is_downloading: g.is_downloading,
+                        is_paused: g.is_paused,
                         has_failed: g.has_failed,
                         error_message: g.error_message.into(),
                         can_pause: g.can_pause,
                         can_resume: g.can_resume,
+                        can_cancel: g.can_cancel,
+                        can_change_source: g.can_change_source,
                         can_play: g.can_play,
                         can_delete: g.can_delete,
                         watched: g.watched,
@@ -1689,10 +1850,71 @@ impl DownloadManager {
             client,
             permits: Arc::new(Semaphore::new(concurrency.max(1))),
             active: Arc::new(Mutex::new(HashMap::new())),
+            resolving: Arc::new(Mutex::new(HashMap::new())),
             progress,
             bandwidth_limit: Arc::new(AtomicU64::new(0)),
             bandwidth_gate: Arc::new(Mutex::new(std::time::Instant::now())),
         }
+    }
+
+    pub async fn register_resolver(&self, job_id: &str) -> CancellationToken {
+        let token = CancellationToken::new();
+        let mut resolving = self.resolving.lock().await;
+        if let Some(prev) = resolving.insert(job_id.to_owned(), token.clone()) {
+            prev.cancel();
+        }
+        token
+    }
+
+    pub async fn unregister_resolver(&self, job_id: &str) {
+        self.resolving.lock().await.remove(job_id);
+    }
+
+    pub async fn stop_jobs_in_memory(&self, job_ids: &[String]) {
+        if job_ids.is_empty() {
+            return;
+        }
+        {
+            let mut resolving = self.resolving.lock().await;
+            for id in job_ids {
+                if let Some(token) = resolving.remove(id) {
+                    token.cancel();
+                }
+            }
+        }
+        let tasks: Vec<JoinHandle<()>> = {
+            let mut active = self.active.lock().await;
+            let mut handles = Vec::new();
+            for id in job_ids {
+                if let Some(entry) = active.remove(id) {
+                    entry.cancellation.cancel();
+                    handles.push(entry.task);
+                }
+            }
+            handles
+        };
+        for task in tasks {
+            let _ = task.await;
+        }
+    }
+
+    pub async fn pause_jobs(&self, job_ids: &[String]) -> Result<(), DownloadError> {
+        if job_ids.is_empty() {
+            return Ok(());
+        }
+        self.stop_jobs_in_memory(job_ids).await;
+        for id in job_ids {
+            if let Ok(job) = load_job(id).await
+                && matches!(
+                    job.state,
+                    DownloadState::Queued | DownloadState::Resolving | DownloadState::Downloading
+                )
+            {
+                let _ = update_state(id, DownloadState::Paused, None).await;
+            }
+        }
+        let _ = self.progress.send(None);
+        Ok(())
     }
 
     pub fn set_bandwidth_limit(&self, bytes_per_second: Option<u64>) {
@@ -1719,15 +1941,18 @@ impl DownloadManager {
     }
 
     pub async fn pause_profile(&self, profile_id: &str) -> Result<(), DownloadError> {
-        for job in list_jobs(profile_id).await? {
-            if matches!(
-                job.state,
-                DownloadState::Queued | DownloadState::Resolving | DownloadState::Downloading
-            ) {
-                self.pause(&job.id).await?;
-            }
-        }
-        Ok(())
+        let ids: Vec<String> = list_jobs(profile_id)
+            .await?
+            .into_iter()
+            .filter(|job| {
+                matches!(
+                    job.state,
+                    DownloadState::Queued | DownloadState::Resolving | DownloadState::Downloading
+                )
+            })
+            .map(|job| job.id)
+            .collect();
+        self.pause_jobs(&ids).await
     }
 
     pub async fn enqueue(
@@ -1838,11 +2063,20 @@ impl DownloadManager {
     }
 
     pub async fn pause(&self, job_id: &str) -> Result<(), DownloadError> {
-        if let Some(active) = self.active.lock().await.remove(job_id) {
-            active.cancellation.cancel();
-            let _ = active.task.await;
+        self.stop_jobs_in_memory(&[job_id.to_owned()]).await;
+        if let Ok(current) = load_job(job_id).await
+            && current.state == DownloadState::Completed
+        {
+            return Ok(());
         }
-        update_state(job_id, DownloadState::Paused, None).await
+        update_state(job_id, DownloadState::Paused, None).await?;
+        let _ = self.progress.send(Some(DownloadProgress {
+            job_id: job_id.to_owned(),
+            state: DownloadState::Paused,
+            bytes_downloaded: 0,
+            bytes_total: None,
+        }));
+        Ok(())
     }
 
     pub async fn create_placeholder_job(
@@ -1907,6 +2141,10 @@ impl DownloadManager {
         source: DownloadSource,
         bytes_total_hint: Option<u64>,
     ) -> Result<(), DownloadError> {
+        let current = load_job(&job.id).await?;
+        if current.state != DownloadState::Resolving {
+            return Err(DownloadError::Missing);
+        }
         let url = url::Url::parse(&source.url).map_err(|_| DownloadError::InvalidSource)?;
         if !matches!(url.scheme(), "http" | "https") {
             return Err(DownloadError::InvalidSource);
@@ -1939,7 +2177,7 @@ impl DownloadManager {
             )
             .await?;
 
-        let mut updated = job.clone();
+        let mut updated = current;
         updated.state = DownloadState::Queued;
         updated.error_code = None;
         if let Some(total) = bytes_total_hint.filter(|&t| t > 0) {
@@ -1957,12 +2195,21 @@ impl DownloadManager {
     }
 
     pub async fn mark_job_failed(&self, job_id: &str, message: &str) {
+        let Ok(current) = load_job(job_id).await else {
+            return;
+        };
+        if matches!(
+            current.state,
+            DownloadState::Paused | DownloadState::Cancelled | DownloadState::Completed
+        ) {
+            return;
+        }
         let _ = update_state(job_id, DownloadState::Failed, Some(message)).await;
         let _ = self.progress.send(Some(DownloadProgress {
             job_id: job_id.to_owned(),
             state: DownloadState::Failed,
-            bytes_downloaded: 0,
-            bytes_total: None,
+            bytes_downloaded: current.bytes_downloaded,
+            bytes_total: current.bytes_total,
         }));
     }
 
@@ -1982,10 +2229,7 @@ impl DownloadManager {
     }
 
     pub async fn cancel(&self, job_id: &str) -> Result<(), DownloadError> {
-        if let Some(active) = self.active.lock().await.remove(job_id) {
-            active.cancellation.cancel();
-            let _ = active.task.await;
-        }
+        self.stop_jobs_in_memory(&[job_id.to_owned()]).await;
         let job = load_job(job_id).await;
         if let Ok(job) = job {
             if matches!(
@@ -2042,11 +2286,14 @@ impl DownloadManager {
         job: &DownloadJob,
         cancellation: CancellationToken,
     ) -> Result<(), DownloadError> {
-        let _permit = self
-            .permits
-            .acquire()
-            .await
-            .map_err(|_| DownloadError::Network)?;
+        let _permit = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Ok(()),
+            permit = self.permits.acquire() => permit.map_err(|_| DownloadError::Network)?,
+        };
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
         update_state(&job.id, DownloadState::Resolving, None).await?;
         let secret = self.credentials.get(&job.credential_ref).await?;
         let source: DownloadSource =
@@ -2063,7 +2310,11 @@ impl DownloadManager {
         if resume_from > 0 {
             request = request.header(RANGE, format!("bytes={resume_from}-"));
         }
-        let response = request.send().await.map_err(|_| DownloadError::Network)?;
+        let response = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Ok(()),
+            resp = request.send() => resp.map_err(|_| DownloadError::Network)?,
+        };
         if !response.status().is_success() {
             return Err(DownloadError::HttpStatus(response.status().as_u16()));
         }
@@ -2128,31 +2379,48 @@ impl DownloadManager {
 
         let mut file = file;
         let mut downloaded = downloaded;
+        if cancellation.is_cancelled() {
+            let _ = file.flush().await;
+            let _ = update_bytes_only(&job.id, downloaded, bytes_total).await;
+            return Ok(());
+        }
         update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
 
         let mut stream = response.bytes_stream();
         let mut last_progress_time = std::time::Instant::now();
         loop {
             if cancellation.is_cancelled() {
-                update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total)
-                    .await?;
-                file.flush().await.map_err(|_| DownloadError::Filesystem)?;
+                let _ = file.flush().await;
+                let _ = update_bytes_only(&job.id, downloaded, bytes_total).await;
                 return Ok(());
             }
 
-            let next_chunk = match tokio::time::timeout(Duration::from_secs(45), stream.next())
-                .await
-            {
-                Ok(Some(chunk_res)) => chunk_res.map_err(|_| DownloadError::Network)?,
-                Ok(None) => break,
-                Err(_) => {
-                    tracing::warn!(job_id = %job.id, "Download chunk read timed out after 45s of silence");
+            let next_chunk = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
                     let _ = file.flush().await;
-                    return Err(DownloadError::Timeout);
+                    let _ = update_bytes_only(&job.id, downloaded, bytes_total).await;
+                    return Ok(());
+                }
+                chunk_outcome = tokio::time::timeout(Duration::from_secs(45), stream.next()) => {
+                    match chunk_outcome {
+                        Ok(Some(chunk_res)) => chunk_res.map_err(|_| DownloadError::Network)?,
+                        Ok(None) => break,
+                        Err(_) => {
+                            tracing::warn!(job_id = %job.id, "Download chunk read timed out after 45s of silence");
+                            let _ = file.flush().await;
+                            return Err(DownloadError::Timeout);
+                        }
+                    }
                 }
             };
 
-            self.throttle(next_chunk.len() as u64).await;
+            self.throttle(next_chunk.len() as u64, &cancellation).await;
+            if cancellation.is_cancelled() {
+                let _ = file.flush().await;
+                let _ = update_bytes_only(&job.id, downloaded, bytes_total).await;
+                return Ok(());
+            }
             file.write_all(&next_chunk)
                 .await
                 .map_err(|_| DownloadError::Filesystem)?;
@@ -2171,9 +2439,18 @@ impl DownloadManager {
                 }));
             }
         }
+        if cancellation.is_cancelled() {
+            let _ = file.flush().await;
+            let _ = update_bytes_only(&job.id, downloaded, bytes_total).await;
+            return Ok(());
+        }
         update_progress(&job.id, DownloadState::Downloading, downloaded, bytes_total).await?;
         file.flush().await.map_err(|_| DownloadError::Filesystem)?;
         drop(file);
+        if cancellation.is_cancelled() {
+            let _ = update_bytes_only(&job.id, downloaded, bytes_total).await;
+            return Ok(());
+        }
         tokio::fs::rename(&part_path, &job.destination)
             .await
             .map_err(|_| DownloadError::Filesystem)?;
@@ -2188,7 +2465,7 @@ impl DownloadManager {
         Ok(())
     }
 
-    async fn throttle(&self, bytes: u64) {
+    async fn throttle(&self, bytes: u64, cancellation: &CancellationToken) {
         let limit = self.bandwidth_limit.load(Ordering::Acquire);
         if limit == 0 || bytes == 0 {
             return;
@@ -2201,7 +2478,11 @@ impl DownloadManager {
             *next = start + duration;
             start
         };
-        tokio::time::sleep_until(tokio::time::Instant::from_std(sleep_until)).await;
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => {},
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(sleep_until)) => {},
+        }
     }
 }
 
@@ -2520,6 +2801,30 @@ async fn update_state(
     Ok(())
 }
 
+async fn update_bytes_only(
+    job_id: &str,
+    downloaded: u64,
+    total: Option<u64>,
+) -> Result<(), DownloadError> {
+    let conn = crate::db::get_conn()
+        .await
+        .map_err(|_| DownloadError::Database)?;
+    conn.execute(
+        "UPDATE download_jobs
+         SET bytes_downloaded = ?, bytes_total = ?, updated_at = ?
+         WHERE id = ?",
+        (
+            downloaded as i64,
+            total.map(|value| value as i64),
+            chrono::Utc::now().timestamp(),
+            job_id,
+        ),
+    )
+    .await
+    .map_err(|_| DownloadError::Database)?;
+    Ok(())
+}
+
 async fn update_progress(
     job_id: &str,
     state: DownloadState,
@@ -2634,6 +2939,7 @@ pub fn humanize_error_code(raw: &str) -> String {
         "invalid-source" => "El enlace de descarga es inválido o no compatible.".to_owned(),
         "invalid-destination" => "La carpeta de destino para descargas no es válida.".to_owned(),
         "credential-unavailable" => "No se encontró el enlace guardado para reanudar. Elegí otra fuente.".to_owned(),
+        "vault-unavailable" => "No se pudo acceder al llavero del sistema (KDE Wallet / Secret Service) para leer el enlace guardado. Reintentá o elegí otra fuente.".to_owned(),
         "database" => "Error al acceder a la base de datos de descargas.".to_owned(),
         "range-unsupported" => "El servidor no permite reanudar la descarga parcial.".to_owned(),
         "filesystem" => "Error al escribir en disco. Verificá espacio libre y permisos.".to_owned(),
@@ -2649,6 +2955,12 @@ fn error_code(error: &DownloadError) -> String {
     match error {
         DownloadError::InvalidSource => humanize_error_code("invalid-source"),
         DownloadError::InvalidDestination => humanize_error_code("invalid-destination"),
+        DownloadError::Credential(
+            CredentialError::Locked
+            | CredentialError::Unavailable
+            | CredentialError::WorkerStopped
+            | CredentialError::OperationFailed,
+        ) => humanize_error_code("vault-unavailable"),
         DownloadError::Credential(_) => humanize_error_code("credential-unavailable"),
         DownloadError::Database => humanize_error_code("database"),
         DownloadError::Network => humanize_error_code("network"),
@@ -2725,6 +3037,74 @@ pub fn first_missing_aired_episode(
     }
 }
 
+pub fn first_unfinished_episode(
+    all_eps: &[CachedEpisode],
+    jobs: &[DownloadJob],
+    season: i32,
+) -> i32 {
+    let mut season_eps: Vec<&CachedEpisode> =
+        all_eps.iter().filter(|e| e.season == season).collect();
+    season_eps.sort_by_key(|e| e.episode);
+    if let Some(ep) = season_eps.iter().find(|ep| {
+        !jobs.iter().any(|j| {
+            j.kind == "video"
+                && j.season == Some(season)
+                && j.episode == Some(ep.episode)
+                && j.state == DownloadState::Completed
+        })
+    }) {
+        ep.episode
+    } else {
+        season_eps.first().map(|e| e.episode).unwrap_or(1)
+    }
+}
+
+pub async fn delete_incomplete_episode_jobs(
+    manager: &DownloadManager,
+    profile_id: &str,
+    meta_id: Option<&str>,
+    season: Option<i32>,
+    episode: Option<i32>,
+    include_active: bool,
+) {
+    let Ok(jobs) = list_jobs(profile_id).await else {
+        return;
+    };
+    let target_ids: Vec<String> = jobs
+        .iter()
+        .filter(|job| {
+            job.kind == "video"
+                && job.meta_id.as_deref() == meta_id
+                && job.season == season
+                && job.episode == episode
+                && if include_active {
+                    job.state != DownloadState::Completed
+                } else {
+                    matches!(
+                        job.state,
+                        DownloadState::Paused | DownloadState::Failed | DownloadState::Cancelled
+                    )
+                }
+        })
+        .map(|job| job.id.clone())
+        .collect();
+    if target_ids.is_empty() {
+        return;
+    }
+    let to_delete: Vec<DownloadJob> = jobs
+        .into_iter()
+        .filter(|job| {
+            target_ids.contains(&job.id)
+                || (job.kind == "subtitle"
+                    && job
+                        .parent_job_id
+                        .as_ref()
+                        .is_some_and(|p| target_ids.contains(p)))
+        })
+        .collect();
+    let _ = cleanup_jobs_files_and_db(manager, &to_delete).await;
+}
+
 pub async fn delete_stale_episode_jobs(
     manager: &DownloadManager,
     profile_id: &str,
@@ -2732,19 +3112,7 @@ pub async fn delete_stale_episode_jobs(
     season: Option<i32>,
     episode: Option<i32>,
 ) {
-    let Ok(jobs) = list_jobs(profile_id).await else {
-        return;
-    };
-    for job in jobs {
-        if job.kind == "video"
-            && job.meta_id.as_deref() == meta_id
-            && job.season == season
-            && job.episode == episode
-            && matches!(job.state, DownloadState::Failed | DownloadState::Cancelled)
-        {
-            let _ = delete_download_target(manager, profile_id, &job.id).await;
-        }
-    }
+    delete_incomplete_episode_jobs(manager, profile_id, meta_id, season, episode, false).await;
 }
 
 #[derive(Clone, Debug)]
@@ -2819,22 +3187,24 @@ pub fn collect_aired_episodes(
 
 async fn fetch_episode_streams_from_addon(
     transport_url: &url::Url,
+    media_type: &str,
     video_id: &str,
 ) -> Vec<stremio_core::types::resource::Stream> {
     use stremio_core::addon_transport::{AddonHTTPTransport, AddonTransport};
     use stremio_core::types::addon::{ResourcePath, ResourceResponse};
 
     let transport = AddonHTTPTransport::<core_env::DesktopEnv>::new(transport_url.clone());
-    let path = ResourcePath::without_extra("stream", "series", video_id);
+    let path = ResourcePath::without_extra("stream", media_type, video_id);
     match tokio::time::timeout(Duration::from_secs(10), transport.resource(&path)).await {
         Ok(Ok(ResourceResponse::Streams { streams })) => streams,
         _ => Vec::new(),
     }
 }
 
-pub async fn find_and_rank_episode_candidates(
+pub async fn find_and_rank_media_candidates(
     profile: &stream_ranking::StreamMatchProfile,
     installed_addons: &[stremio_core::types::addon::Descriptor],
+    media_type: &str,
     video_id: &str,
 ) -> Vec<(
     stremio_core::types::addon::Descriptor,
@@ -2843,7 +3213,7 @@ pub async fn find_and_rank_episode_candidates(
     use stremio_core::types::addon::ResourcePath;
     use stremio_core::types::resource::StreamSource;
 
-    let path = ResourcePath::without_extra("stream", "series", video_id);
+    let path = ResourcePath::without_extra("stream", media_type, video_id);
     let mut capable: Vec<stremio_core::types::addon::Descriptor> = installed_addons
         .iter()
         .filter(|addon| addon.manifest.is_resource_supported(&path))
@@ -2866,7 +3236,8 @@ pub async fn find_and_rank_episode_candidates(
     )> = Vec::new();
 
     for (idx, addon) in capable.into_iter().enumerate() {
-        let streams = fetch_episode_streams_from_addon(&addon.transport_url, video_id).await;
+        let streams =
+            fetch_episode_streams_from_addon(&addon.transport_url, media_type, video_id).await;
         if streams.is_empty() {
             continue;
         }
@@ -2935,6 +3306,17 @@ pub async fn find_and_rank_episode_candidates(
         .into_iter()
         .map(|(_, addon, stream)| (addon, stream))
         .collect()
+}
+
+pub async fn find_and_rank_episode_candidates(
+    profile: &stream_ranking::StreamMatchProfile,
+    installed_addons: &[stremio_core::types::addon::Descriptor],
+    video_id: &str,
+) -> Vec<(
+    stremio_core::types::addon::Descriptor,
+    stremio_core::types::resource::Stream,
+)> {
+    find_and_rank_media_candidates(profile, installed_addons, "series", video_id).await
 }
 
 pub async fn resolve_stream_to_download_url(
@@ -3036,19 +3418,27 @@ pub async fn retry_resolve_job_with_smart_search(
 ) {
     use stremio_core::types::addon::{ResourcePath, ResourceRequest};
 
+    let token = manager.register_resolver(&job.id).await;
     let _ = update_state(&job.id, DownloadState::Resolving, None).await;
     project_active_profile(ui_weak.clone()).await;
 
+    let media_type = job.meta_type.as_deref().unwrap_or(if job.season.is_some() {
+        "series"
+    } else {
+        "movie"
+    });
     let Some(video_id) = job.video_id.clone().or_else(|| {
         match (&job.meta_id, job.season, job.episode) {
             (Some(m), Some(s), Some(e)) => Some(format!("{m}:{s}:{e}")),
+            (Some(m), _, _) => Some(m.clone()),
             _ => None,
         }
     }) else {
+        manager.unregister_resolver(&job.id).await;
         manager
             .mark_job_failed(
                 &job.id,
-                "Falta el identificador del capítulo. Elegí una fuente manualmente.",
+                "Falta el identificador del título. Elegí una fuente manualmente.",
             )
             .await;
         project_active_profile(ui_weak).await;
@@ -3060,7 +3450,14 @@ pub async fn retry_resolve_job_with_smart_search(
         quality_height: Some(1080),
         ..Default::default()
     };
-    let candidates = find_and_rank_episode_candidates(&profile, installed_addons, &video_id).await;
+    let candidates = tokio::select! {
+        biased;
+        _ = token.cancelled() => {
+            manager.unregister_resolver(&job.id).await;
+            return;
+        }
+        cands = find_and_rank_media_candidates(&profile, installed_addons, media_type, &video_id) => cands,
+    };
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .user_agent("Stremio-Native/1")
@@ -3069,21 +3466,31 @@ pub async fn retry_resolve_job_with_smart_search(
 
     let mut activated = false;
     for (addon, stream) in candidates.into_iter().take(3) {
+        if token.is_cancelled() {
+            manager.unregister_resolver(&job.id).await;
+            return;
+        }
         let req = ResourceRequest {
             base: addon.transport_url.clone(),
-            path: ResourcePath::without_extra("stream", "series", &video_id),
+            path: ResourcePath::without_extra("stream", media_type, &video_id),
         };
-        if let Some((url, _resolved_stream, size_hint)) = resolve_stream_to_download_url(
-            stream,
-            Some(req),
-            None,
-            streaming_server_url,
-            settings,
-            &client,
-            false,
-        )
-        .await
-        {
+        let resolved = tokio::select! {
+            biased;
+            _ = token.cancelled() => {
+                manager.unregister_resolver(&job.id).await;
+                return;
+            }
+            res = resolve_stream_to_download_url(
+                stream,
+                Some(req),
+                None,
+                streaming_server_url,
+                settings,
+                &client,
+                false,
+            ) => res,
+        };
+        if let Some((url, _resolved_stream, size_hint)) = resolved {
             match manager
                 .activate_placeholder_job(
                     job,
@@ -3100,6 +3507,10 @@ pub async fn retry_resolve_job_with_smart_search(
                     activated = true;
                     break;
                 }
+                Err(DownloadError::Missing) => {
+                    manager.unregister_resolver(&job.id).await;
+                    return;
+                }
                 Err(err) => {
                     manager.mark_job_failed(&job.id, &error_code(&err)).await;
                     activated = true;
@@ -3109,11 +3520,12 @@ pub async fn retry_resolve_job_with_smart_search(
         }
     }
 
-    if !activated {
+    manager.unregister_resolver(&job.id).await;
+    if !activated && !token.is_cancelled() {
         manager
             .mark_job_failed(
                 &job.id,
-                "No se encontraron fuentes disponibles en tus addons. Hacé clic en el capítulo para elegir otra fuente.",
+                "No se encontraron fuentes disponibles en tus addons. Elegí otra fuente.",
             )
             .await;
     }
@@ -3255,5 +3667,113 @@ mod tests {
             lang: None,
         };
         assert_eq!(first_missing_aired_episode(&eps, &[done_e1], 1), 2);
+    }
+
+    fn make_test_job(
+        id: &str,
+        meta_id: Option<&str>,
+        season: Option<i32>,
+        episode: Option<i32>,
+        state: DownloadState,
+    ) -> DownloadJob {
+        DownloadJob {
+            id: id.into(),
+            profile_id: "p".into(),
+            title: id.into(),
+            filename: format!("{id}.mp4"),
+            destination: PathBuf::from(format!("/tmp/{id}.mp4")),
+            state,
+            source_kind: DownloadSourceKind::DirectHttp,
+            credential_ref: CredentialRef::new(format!("download-source/{id}")).unwrap(),
+            bytes_downloaded: 0,
+            bytes_total: Some(100),
+            error_code: None,
+            created_at: 1,
+            updated_at: 1,
+            meta_id: meta_id.map(ToOwned::to_owned),
+            meta_type: Some(if season.is_some() { "series" } else { "movie" }.into()),
+            series_name: None,
+            season,
+            episode,
+            video_id: None,
+            poster_url: None,
+            kind: "video".into(),
+            parent_job_id: None,
+            lang: None,
+        }
+    }
+
+    #[test]
+    fn test_matches_download_target_handles_job_meta_and_season() {
+        let ep_job = make_test_job("job-1", Some("tt100"), Some(2), Some(3), DownloadState::Downloading);
+        let other_season = make_test_job("job-2", Some("tt100"), Some(1), Some(3), DownloadState::Paused);
+        let movie_job = make_test_job("job-3", Some("tt200"), None, None, DownloadState::Downloading);
+
+        assert!(matches_download_target(&ep_job, "job-1"));
+        assert!(matches_download_target(&ep_job, "tt100"));
+        assert!(matches_download_target(&ep_job, "season:tt100:2"));
+        assert!(!matches_download_target(&ep_job, "season:tt100:1"));
+        assert!(!matches_download_target(&other_season, "season:tt100:2"));
+        assert!(matches_download_target(&movie_job, "tt200"));
+        assert!(!matches_download_target(&movie_job, "season:tt200:1"));
+    }
+
+    #[test]
+    fn test_first_unfinished_episode_returns_active_or_paused_before_missing() {
+        let eps = vec![
+            CachedEpisode { id: "s1e1".into(), title: "E1".into(), season: 1, episode: 1, released: None },
+            CachedEpisode { id: "s1e2".into(), title: "E2".into(), season: 1, episode: 2, released: None },
+            CachedEpisode { id: "s1e3".into(), title: "E3".into(), season: 1, episode: 3, released: None },
+        ];
+        let done_e1 = make_test_job("j1", Some("tt1"), Some(1), Some(1), DownloadState::Completed);
+        let paused_e2 = make_test_job("j2", Some("tt1"), Some(1), Some(2), DownloadState::Paused);
+        assert_eq!(first_unfinished_episode(&eps, &[done_e1, paused_e2], 1), 2);
+    }
+
+    #[tokio::test]
+    async fn test_stop_jobs_in_memory_cancels_saturated_semaphore_without_deadlock() {
+        let store = Arc::new(credential_store::MemoryCredentialStore::default());
+        let manager = DownloadManager::new(store, 1);
+
+        let resolver_tok = manager.register_resolver("res-1").await;
+        assert!(!resolver_tok.is_cancelled());
+
+        let permit_held = manager.permits.clone().acquire_owned().await.unwrap();
+        let cancel_a = CancellationToken::new();
+        let cancel_a_clone = cancel_a.clone();
+        let task_a = tokio::spawn(async move {
+            tokio::select! {
+                _ = cancel_a_clone.cancelled() => {},
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {},
+            }
+            drop(permit_held);
+        });
+
+        let permits_b = manager.permits.clone();
+        let cancel_b = CancellationToken::new();
+        let cancel_b_clone = cancel_b.clone();
+        let task_b = tokio::spawn(async move {
+            tokio::select! {
+                _ = cancel_b_clone.cancelled() => {},
+                _ = permits_b.acquire() => {},
+            }
+        });
+
+        {
+            let mut active = manager.active.lock().await;
+            active.insert("job-b".into(), ActiveDownload { cancellation: cancel_b, task: task_b });
+            active.insert("job-a".into(), ActiveDownload { cancellation: cancel_a, task: task_a });
+        }
+
+        // Cancelling queued job-b before permit-holder job-a must complete immediately without deadlocking.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            manager.stop_jobs_in_memory(&["job-b".into(), "job-a".into(), "res-1".into()]),
+        )
+        .await;
+        assert!(outcome.is_ok(), "stop_jobs_in_memory deadlocked");
+        assert!(resolver_tok.is_cancelled());
+        assert!(manager.active.lock().await.is_empty());
+        assert!(manager.resolving.lock().await.is_empty());
     }
 }

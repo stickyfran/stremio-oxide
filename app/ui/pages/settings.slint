@@ -388,6 +388,18 @@ export component SettingsPage inherits Rectangle {
 
     in property <length> unit: Theme.root-font-size;
     in-out property <int> active-category: 0;
+    in-out property <int> scroll-target-category: -1;
+    changed scroll-target-category => {
+        if (root.scroll-target-category == 5) {
+            scroll.viewport-y = -streaming-sec.y;
+            root.active-category = 5;
+            root.scroll-target-category = -1;
+        } else if (root.scroll-target-category == 0) {
+            scroll.viewport-y = 0px;
+            root.active-category = 0;
+            root.scroll-target-category = -1;
+        }
+    }
     background: transparent;
 
     private property <float> content-fade-opacity: 1.0;
@@ -522,21 +534,23 @@ export component SettingsPage inherits Rectangle {
                             spacing: 1.5 * root.unit;
                             alignment: start;
 
-                            Rectangle {
-                                width: 5 * root.unit;
-                                height: 5 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: self.width / 2;
-                                background: Theme.overlay;
-                                clip: true;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 5 * root.unit;
+                                    height: 5 * root.unit;
+                                    border-radius: self.width / 2;
+                                    background: Theme.overlay;
+                                    clip: true;
 
-                                Image {
-                                    width: parent.width;
-                                    height: parent.height;
-                                    source: root.authenticated
-                                        ? (root.has-avatar ? root.user-avatar : root.default-avatar)
-                                        : root.anonymous-avatar;
-                                    image-fit: cover;
+                                    Image {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        source: root.authenticated
+                                            ? (root.has-avatar ? root.user-avatar : root.default-avatar)
+                                            : root.anonymous-avatar;
+                                        image-fit: cover;
+                                    }
                                 }
                             }
 

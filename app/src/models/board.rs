@@ -4,7 +4,8 @@ use crate::models::{
     library_details_video_id, project_catalog_section, queue_visible_catalog,
     spawn_catalog_visibility_loader, sync_fingerprint_changed,
 };
-use crate::{AppModel, AppModelField, MainWindow, NavigationController};
+use crate::server_readiness::{ServerLifecycleState, ServerReadiness};
+use crate::{AppModel, AppModelField, MainWindow, NavigationController, NavigationIntent, Tab};
 use crate::{BoardSection, MediaCardItem};
 use core_env::DesktopEnv;
 use slint::{ComponentHandle, Model};
@@ -22,7 +23,7 @@ use stremio_core::{
     },
     runtime::{
         Runtime, RuntimeAction,
-        msg::{Action, ActionCatalogsWithExtra, ActionCtx, ActionLoad},
+        msg::{Action, ActionCatalogsWithExtra, ActionCtx, ActionLoad, ActionStreamingServer},
     },
     types::addon::Descriptor,
     types::streams::StreamsItemKey,
@@ -36,10 +37,11 @@ const AUTO_RETRY_MAX_ATTEMPTS: u8 = 3;
 static AUTO_RETRY_ATTEMPTS: AtomicU8 = AtomicU8::new(0);
 static AUTO_RETRY_SCHEDULED: AtomicBool = AtomicBool::new(false);
 static RECOVERY_WATCHER: AtomicBool = AtomicBool::new(false);
-const RECOVERY_PROBE_INTERVAL: Duration = Duration::from_secs(5);
-const RECOVERY_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+static SERVER_SETTINGS_AUTO_RETRIES: AtomicU8 = AtomicU8::new(0);
+const RECOVERY_PROBE_MIN_INTERVAL: Duration = Duration::from_secs(5);
+const RECOVERY_PROBE_MAX_INTERVAL: Duration = Duration::from_secs(30);
+const RECOVERY_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const RECOVERY_WATCH_MAX: Duration = Duration::from_secs(15 * 60);
-const PROBE_FALLBACK_URL: &str = "https://api.strem.io/";
 
 /// Automatic recovery is on by default; set `STREMIO_STARTUP_RESILIENCE=0`
 /// to keep only the manual Retry action.
@@ -137,45 +139,85 @@ fn schedule_board_auto_retry(runtime: Arc<Runtime<DesktopEnv, AppModel>>) {
     });
 }
 
-fn set_board_offline(ui_weak: &slint::Weak<MainWindow>, offline: bool) {
+fn set_app_offline(ui_weak: &slint::Weak<MainWindow>, offline: bool) {
     let weak = ui_weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = weak.upgrade() {
+            ui.set_app_offline(offline);
             ui.set_board_offline(offline);
         }
     });
 }
 
-fn probe_url(model: &AppModel) -> String {
-    model
-        .ctx
-        .profile
-        .addons
-        .iter()
-        .find_map(|addon| {
-            let url = &addon.transport_url;
-            if !matches!(url.scheme(), "http" | "https") {
-                return None;
-            }
-            let host = url.host_str()?;
-            if host.eq_ignore_ascii_case("localhost")
-                || host
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback())
-            {
-                return None;
-            }
-            Some(url.to_string())
-        })
-        .unwrap_or_else(|| PROBE_FALLBACK_URL.to_owned())
+fn extra_probe_url(model: &AppModel) -> Option<String> {
+    model.ctx.profile.addons.iter().find_map(|addon| {
+        let url = &addon.transport_url;
+        if !matches!(url.scheme(), "http" | "https") {
+            return None;
+        }
+        let host = url.host_str()?;
+        let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+        if trimmed.eq_ignore_ascii_case("localhost")
+            || trimmed
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+        {
+            return None;
+        }
+        Some(url.to_string())
+    })
 }
 
-/// While rows are failing, probe the network cheaply instead of reloading every
-/// catalog every few seconds. When the probe succeeds the board reloads at once,
-/// which covers "network restored while the app was open".
-fn ensure_recovery_watcher(
+fn reload_failed_views_after_recovery(
+    runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
+    ui_weak: &slint::Weak<MainWindow>,
+) {
+    let (board_failed, discover_failed) = runtime
+        .model()
+        .ok()
+        .map(|model| {
+            let board_failed = board_has_real_errors(&model.board);
+            let discover_failed = model.discover.catalog.iter().any(|page| {
+                loadable_is_real_error(page.content.as_ref())
+            });
+            (board_failed, discover_failed)
+        })
+        .unwrap_or((false, false));
+
+    if board_failed {
+        AUTO_RETRY_ATTEMPTS.store(0, Ordering::Release);
+        runtime.dispatch(RuntimeAction {
+            field: Some(AppModelField::Board),
+            action: Action::Unload,
+        });
+        crate::callbacks::trigger_initial_load(runtime);
+    }
+    if discover_failed {
+        if let Ok(model) = runtime.model()
+            && let Some(selected) = model.discover.selected.clone()
+        {
+            drop(model);
+            runtime.dispatch(RuntimeAction {
+                field: Some(AppModelField::Discover),
+                action: Action::Load(ActionLoad::CatalogWithFilters(Some(selected))),
+            });
+        }
+    }
+    let weak = ui_weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_discover_load_error("".into());
+        }
+    });
+}
+
+/// Probes multi-endpoint internet connectivity when network failures occur.
+/// Only marks the app offline when all independent probes fail, and keeps
+/// watching with exponential backoff until connectivity returns.
+pub fn trigger_connectivity_check(
     runtime: Arc<Runtime<DesktopEnv, AppModel>>,
     ui_weak: slint::Weak<MainWindow>,
+    override_extra_url: Option<String>,
 ) {
     if !startup_resilience_enabled() || RECOVERY_WATCHER.swap(true, Ordering::AcqRel) {
         return;
@@ -183,49 +225,58 @@ fn ensure_recovery_watcher(
     tokio::spawn(async move {
         let started = Instant::now();
         let mut offline_announced = false;
+        let mut delay = RECOVERY_PROBE_MIN_INTERVAL;
+        let mut online_rx = core_env::watch_network_online();
+
         loop {
             if started.elapsed() > RECOVERY_WATCH_MAX {
                 break;
             }
-            let probe = {
-                let Ok(model) = runtime.model() else {
-                    break;
-                };
-                if !board_has_real_errors(&model.board) {
-                    break;
-                }
-                probe_url(&model)
-            };
-            if core_env::probe_connectivity(&probe, RECOVERY_PROBE_TIMEOUT).await {
-                tracing::info!("network probe succeeded; reloading failed board catalogs");
+            let extra = override_extra_url.clone().or_else(|| {
+                runtime
+                    .model()
+                    .ok()
+                    .and_then(|model| extra_probe_url(&model))
+            });
+            if core_env::probe_internet_connectivity(extra.as_deref(), RECOVERY_PROBE_TIMEOUT)
+                .await
+            {
                 if offline_announced {
-                    set_board_offline(&ui_weak, false);
-                    offline_announced = false;
+                    tracing::info!("internet connectivity restored; reloading failed views");
+                    set_app_offline(&ui_weak, false);
+                    reload_failed_views_after_recovery(&runtime, &ui_weak);
                 }
-                AUTO_RETRY_ATTEMPTS.store(0, Ordering::Release);
-                runtime.dispatch(RuntimeAction {
-                    field: Some(AppModelField::Board),
-                    action: Action::Unload,
-                });
-                crate::callbacks::trigger_initial_load(&runtime);
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                continue;
+                break;
             }
+
             if !offline_announced {
-                tracing::warn!(
-                    url = %probe,
-                    "network probe failed; board is offline and will keep retrying"
-                );
-                set_board_offline(&ui_weak, true);
+                tracing::warn!("internet connectivity probe failed across all endpoints; entering offline banner state");
+                set_app_offline(&ui_weak, true);
                 offline_announced = true;
             }
-            tokio::time::sleep(RECOVERY_PROBE_INTERVAL).await;
-        }
-        if offline_announced {
-            set_board_offline(&ui_weak, false);
+
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {
+                    delay = (delay * 2).min(RECOVERY_PROBE_MAX_INTERVAL);
+                }
+                changed = online_rx.changed() => {
+                    if changed.is_ok() && *online_rx.borrow() {
+                        set_app_offline(&ui_weak, false);
+                        reload_failed_views_after_recovery(&runtime, &ui_weak);
+                        break;
+                    }
+                }
+            }
         }
         RECOVERY_WATCHER.store(false, Ordering::Release);
     });
+}
+
+fn ensure_recovery_watcher(
+    runtime: Arc<Runtime<DesktopEnv, AppModel>>,
+    ui_weak: slint::Weak<MainWindow>,
+) {
+    trigger_connectivity_check(runtime, ui_weak, None);
 }
 
 const STUCK_CHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -458,6 +509,7 @@ pub fn setup(
     ui: &MainWindow,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
     navigation: &NavigationController,
+    server_readiness: ServerReadiness,
 ) {
     let ui_weak = ui.as_weak();
     let catalog_loader = spawn_catalog_visibility_loader(runtime, CatalogScope::Board);
@@ -681,18 +733,6 @@ pub fn setup(
     });
 
     ui.on_board_dismiss_server_warning({
-        let ui_weak = ui_weak.clone();
-        move || {
-            if let Err(error) = open::that("https://www.stremio.com/download-service") {
-                tracing::warn!(%error, "could not open the streaming-service download page");
-            }
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_board_show_server_warning(false);
-            }
-        }
-    });
-
-    ui.on_board_reload_server({
         let runtime = runtime.clone();
         let ui_weak = ui_weak.clone();
         move || {
@@ -708,19 +748,87 @@ pub fn setup(
         }
     });
 
-    ui.on_board_open_server_settings({
+    ui.on_board_reload_server({
         let runtime = runtime.clone();
         let ui_weak = ui_weak.clone();
+        let server_readiness = server_readiness.clone();
         move || {
-            let dismissed_until = chrono::Utc::now()
-                .checked_add_months(chrono::Months::new(600))
-                .unwrap_or_else(chrono::Utc::now);
-            crate::models::settings::update_profile_settings(&runtime, |settings| {
-                settings.streaming_server_warning_dismissed = Some(dismissed_until);
+            reset_server_settings_auto_retry();
+            server_readiness.request_retry();
+            runtime.dispatch(RuntimeAction {
+                field: Some(AppModelField::StreamingServer),
+                action: Action::StreamingServer(ActionStreamingServer::Reload),
             });
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_board_show_server_warning(false);
+                if server_readiness.state() == ServerLifecycleState::Offline {
+                    ui.set_server_status(ServerLifecycleState::Retrying.as_ui_status().into());
+                }
             }
+        }
+    });
+
+    ui.on_board_open_server_settings({
+        let ui_weak = ui_weak.clone();
+        let navigation = navigation.clone();
+        move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_board_show_server_warning(false);
+                navigation.dispatch_and_project(&ui, NavigationIntent::SelectTab(Tab::Settings));
+                ui.set_settings_scroll_target_category(5);
+            }
+        }
+    });
+
+    ui.on_app_retry_connection({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        let navigation = navigation.clone();
+        move || {
+            let runtime = runtime.clone();
+            let ui_weak = ui_weak.clone();
+            let navigation = navigation.clone();
+            tokio::spawn(async move {
+                let extra = runtime.model().ok().and_then(|model| extra_probe_url(&model));
+                let online = core_env::probe_internet_connectivity(
+                    extra.as_deref(),
+                    RECOVERY_PROBE_TIMEOUT,
+                )
+                .await;
+                if !online {
+                    set_app_offline(&ui_weak, true);
+                    trigger_connectivity_check(runtime, ui_weak, extra);
+                    return;
+                }
+                set_app_offline(&ui_weak, false);
+                reload_failed_views_after_recovery(&runtime, &ui_weak);
+                let active_tab = navigation.active_tab_index();
+                if navigation.snapshot().show_details()
+                    && let Ok(model) = runtime.model()
+                    && let Some(selected) = model.meta_details.selected.clone()
+                {
+                    drop(model);
+                    runtime.dispatch(RuntimeAction {
+                        field: Some(AppModelField::MetaDetails),
+                        action: Action::Load(ActionLoad::MetaDetails(selected)),
+                    });
+                } else if active_tab == 3 {
+                    runtime.dispatch(RuntimeAction {
+                        field: Some(AppModelField::RemoteAddons),
+                        action: Action::Load(ActionLoad::CatalogWithFilters(None)),
+                    });
+                } else {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            if navigation.active_tab_index() == 0 {
+                                ui.invoke_board_retry();
+                            } else {
+                                ui.invoke_discover_retry();
+                            }
+                        }
+                    });
+                }
+            });
         }
     });
 
@@ -745,6 +853,99 @@ pub fn setup(
     });
 }
 
+fn is_loopback_server_url(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    trimmed.eq_ignore_ascii_case("localhost")
+        || trimmed
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+pub fn note_server_settings_auto_retry() -> u8 {
+    SERVER_SETTINGS_AUTO_RETRIES.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+pub fn reset_server_settings_auto_retry() {
+    SERVER_SETTINGS_AUTO_RETRIES.store(0, Ordering::Release);
+}
+
+pub fn server_settings_auto_retries() -> u8 {
+    SERVER_SETTINGS_AUTO_RETRIES.load(Ordering::Acquire)
+}
+
+pub fn evaluate_server_warning(
+    settings_dismissed_until: Option<chrono::DateTime<chrono::Utc>>,
+    configured_url: &Url,
+    server_settings: &stremio_core::models::common::Loadable<
+        stremio_core::types::streaming_server::Settings,
+        stremio_core::runtime::EnvError,
+    >,
+    selected_url: &Url,
+    lifecycle_state: ServerLifecycleState,
+    ready_url: &str,
+    auto_retries_exhausted: bool,
+) -> bool {
+    if settings_dismissed_until.is_some_and(|until| until >= chrono::Utc::now()) {
+        return false;
+    }
+
+    if is_loopback_server_url(configured_url) {
+        return match lifecycle_state {
+            ServerLifecycleState::Starting
+            | ServerLifecycleState::Retrying
+            | ServerLifecycleState::Reconnecting => false,
+            ServerLifecycleState::Offline => true,
+            ServerLifecycleState::Online => match server_settings {
+                stremio_core::models::common::Loadable::Ready(_)
+                | stremio_core::models::common::Loadable::Loading => false,
+                stremio_core::models::common::Loadable::Err(_) => {
+                    let configured_matches_ready =
+                        ready_url.trim_end_matches('/') == configured_url.as_str().trim_end_matches('/');
+                    let selected_matches_ready =
+                        ready_url.trim_end_matches('/') == selected_url.as_str().trim_end_matches('/');
+                    if configured_matches_ready && selected_matches_ready {
+                        auto_retries_exhausted
+                    } else {
+                        true
+                    }
+                }
+            },
+        };
+    }
+
+    matches!(
+        server_settings,
+        stremio_core::models::common::Loadable::Err(_)
+    )
+}
+
+pub fn should_show_server_warning(model: &AppModel, server_readiness: &ServerReadiness) -> bool {
+    evaluate_server_warning(
+        model.ctx.profile.settings.streaming_server_warning_dismissed,
+        &model.ctx.profile.settings.streaming_server_url,
+        &model.streaming_server.settings,
+        &model.streaming_server.selected.transport_url,
+        server_readiness.state(),
+        &server_readiness.current_url(),
+        server_settings_auto_retries() >= 2,
+    )
+}
+
+pub fn sync_server_warning(
+    ui: &MainWindow,
+    runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
+    server_readiness: &ServerReadiness,
+) {
+    let show_warning = runtime
+        .model()
+        .ok()
+        .is_some_and(|model| should_show_server_warning(&model, server_readiness));
+    ui.set_board_show_server_warning(show_warning);
+}
+
 #[tracing::instrument(skip_all)]
 #[cfg_attr(feature = "profiling", hotpath::measure)]
 pub fn sync(
@@ -754,18 +955,11 @@ pub fn sync(
     addons: &[Descriptor],
     ui_weak: &slint::Weak<MainWindow>,
     runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
+    server_readiness: Option<&ServerReadiness>,
 ) {
     let (show_warning, lib_flags, saved_stream_keys) = if let Ok(model) = runtime.model() {
-        let show_warning = model
-            .ctx
-            .profile
-            .settings
-            .streaming_server_warning_dismissed
-            .is_none_or(|dismissed_until| dismissed_until < chrono::Utc::now())
-            && matches!(
-                &model.streaming_server.settings,
-                stremio_core::models::common::Loadable::Err(_)
-            );
+        let show_warning = server_readiness
+            .map(|readiness| should_show_server_warning(&model, readiness));
 
         let mut lib_flags = std::collections::HashMap::with_capacity(model.ctx.library.items.len());
         for (id, item) in &model.ctx.library.items {
@@ -783,13 +977,15 @@ pub fn sync(
         (show_warning, lib_flags, saved_stream_keys)
     } else {
         (
-            false,
+            None,
             std::collections::HashMap::new(),
             std::collections::HashSet::new(),
         )
     };
 
-    ui.set_board_show_server_warning(show_warning);
+    if let Some(show_warning) = show_warning {
+        ui.set_board_show_server_warning(show_warning);
+    }
 
     let mut fingerprint = Fingerprint::new();
     for item in &continue_watching.items {
@@ -1140,5 +1336,135 @@ mod tests {
         let ready: Loadable<Vec<MetaItemPreview>, ResourceError> = Loadable::Ready(Vec::new());
         assert!(!loadable_is_real_error(Some(&ready)));
         assert!(!loadable_is_real_error::<Vec<MetaItemPreview>>(None));
+    }
+
+    #[test]
+    fn server_warning_tracks_lifecycle_state_without_false_startup_alerts() {
+        use super::evaluate_server_warning;
+        use crate::server_readiness::ServerLifecycleState;
+        use stremio_core::runtime::EnvError;
+        use stremio_core::types::streaming_server::Settings as StreamingServerSettings;
+
+        let local = url::Url::parse("http://127.0.0.1:11470/").unwrap();
+        let remote = url::Url::parse("https://streaming.example.com/").unwrap();
+        let err_state: Loadable<StreamingServerSettings, EnvError> =
+            Loadable::Err(EnvError::Fetch("connection refused".to_owned()));
+        let loading_state: Loadable<StreamingServerSettings, EnvError> = Loadable::Loading;
+        let ready_settings = serde_json::from_value::<StreamingServerSettings>(serde_json::json!({
+            "appPath": "/tmp",
+            "cacheRoot": "/tmp",
+            "serverVersion": "0.1.0",
+            "remoteHttps": "",
+            "transcodeProfile": null,
+            "cacheSize": 2147483648.0,
+            "proxyStreamsEnabled": false,
+            "btMaxConnections": 55,
+            "btHandshakeTimeout": 20000,
+            "btRequestTimeout": 4000,
+            "btDownloadSpeedSoftLimit": 2621440.0,
+            "btDownloadSpeedHardLimit": 3670016.0,
+            "btMinPeersForStable": 5
+        }))
+        .unwrap();
+        let ready_state = Loadable::Ready(ready_settings);
+
+        // During Starting / Retrying / Reconnecting, never warn for loopback server even if core hit an early Err.
+        assert!(!evaluate_server_warning(
+            None,
+            &local,
+            &err_state,
+            &local,
+            ServerLifecycleState::Starting,
+            "http://127.0.0.1:11470",
+            false
+        ));
+        assert!(!evaluate_server_warning(
+            None,
+            &local,
+            &err_state,
+            &local,
+            ServerLifecycleState::Retrying,
+            "http://127.0.0.1:11470",
+            true
+        ));
+        assert!(!evaluate_server_warning(
+            None,
+            &local,
+            &err_state,
+            &local,
+            ServerLifecycleState::Reconnecting,
+            "http://127.0.0.1:11470",
+            true
+        ));
+
+        // Transient Err right when Online (before reload settles) must NOT flash warning until retries exhaust.
+        assert!(!evaluate_server_warning(
+            None,
+            &local,
+            &err_state,
+            &local,
+            ServerLifecycleState::Online,
+            "http://127.0.0.1:11470/",
+            false
+        ));
+        assert!(!evaluate_server_warning(
+            None,
+            &local,
+            &loading_state,
+            &local,
+            ServerLifecycleState::Online,
+            "http://127.0.0.1:11470/",
+            true
+        ));
+        assert!(!evaluate_server_warning(
+            None,
+            &local,
+            &ready_state,
+            &local,
+            ServerLifecycleState::Online,
+            "http://127.0.0.1:11470/",
+            true
+        ));
+
+        // Genuinely offline embedded server OR exhausted reload retries OR remote URL Err shows warning unless dismissed.
+        assert!(evaluate_server_warning(
+            None,
+            &local,
+            &err_state,
+            &local,
+            ServerLifecycleState::Offline,
+            "http://127.0.0.1:11470",
+            false
+        ));
+        assert!(evaluate_server_warning(
+            None,
+            &local,
+            &err_state,
+            &local,
+            ServerLifecycleState::Online,
+            "http://127.0.0.1:11470/",
+            true
+        ));
+        assert!(evaluate_server_warning(
+            None,
+            &remote,
+            &err_state,
+            &remote,
+            ServerLifecycleState::Online,
+            "http://127.0.0.1:11470/",
+            false
+        ));
+
+        // Dismissed warning stays hidden even when Offline.
+        let future = chrono::Utc::now() + chrono::Duration::days(5);
+        assert!(!evaluate_server_warning(
+            Some(future),
+            &local,
+            &err_state,
+            &local,
+            ServerLifecycleState::Offline,
+            "http://127.0.0.1:11470",
+            true
+        ));
     }
 }

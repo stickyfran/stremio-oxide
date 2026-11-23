@@ -44,7 +44,7 @@ pub fn setup_ui_callbacks(
     let ui_weak = ui.as_weak();
     // Hook up submodel setup functions
     models::auth::setup(ui, runtime);
-    models::board::setup(ui, runtime, &navigation);
+    models::board::setup(ui, runtime, &navigation, server_readiness.clone());
     models::calendar::setup(ui, runtime, &navigation);
     models::discover::setup(ui, runtime, &navigation);
     models::events::setup(ui, runtime);
@@ -53,7 +53,13 @@ pub fn setup_ui_callbacks(
     models::addons::setup(ui, runtime, &navigation);
     crate::community_addons::setup(ui);
     models::details::setup(ui, runtime, &navigation);
-    models::settings::setup(ui, runtime, config, native_playback_bridge.as_ref());
+    models::settings::setup(
+        ui,
+        runtime,
+        config,
+        native_playback_bridge.as_ref(),
+        server_readiness.clone(),
+    );
     models::onboarding::setup(ui, config);
 
     ui.on_details_ranking_mode_changed({
@@ -299,6 +305,8 @@ pub fn setup_ui_callbacks(
 
             let raw_detail_title = ui.get_detail_title().to_string();
             let is_series = ui.get_detail_is_series();
+            let replace_active = ui.get_detail_download_replace_active();
+            ui.set_detail_download_replace_active(false);
             let scope = scope.to_string();
 
             let model = runtime.model().expect("model read failed");
@@ -486,28 +494,36 @@ pub fn setup_ui_callbacks(
                     let mut skipped_count = 0usize;
 
                     for ep in aired_episodes {
-                        let already_active = existing_jobs.iter().any(|j| {
+                        let is_completed = existing_jobs.iter().any(|j| {
                             j.kind == "video"
                                 && j.meta_id.as_deref() == meta_id.as_deref()
                                 && j.season == Some(ep.season)
                                 && j.episode == Some(ep.episode)
-                                && matches!(
-                                    j.state,
-                                    crate::downloads::DownloadState::Completed
-                                        | crate::downloads::DownloadState::Downloading
-                                        | crate::downloads::DownloadState::Resolving
-                                        | crate::downloads::DownloadState::Queued
-                                )
+                                && j.state == crate::downloads::DownloadState::Completed
                         });
-                        if already_active {
+                        let already_active = !replace_active
+                            && existing_jobs.iter().any(|j| {
+                                j.kind == "video"
+                                    && j.meta_id.as_deref() == meta_id.as_deref()
+                                    && j.season == Some(ep.season)
+                                    && j.episode == Some(ep.episode)
+                                    && matches!(
+                                        j.state,
+                                        crate::downloads::DownloadState::Downloading
+                                            | crate::downloads::DownloadState::Resolving
+                                            | crate::downloads::DownloadState::Queued
+                                    )
+                            });
+                        if is_completed || already_active {
                             skipped_count += 1;
                         } else {
-                            crate::downloads::delete_stale_episode_jobs(
+                            crate::downloads::delete_incomplete_episode_jobs(
                                 &download_manager,
                                 &profile_id,
                                 meta_id.as_deref(),
                                 Some(ep.season),
                                 Some(ep.episode),
+                                replace_active,
                             )
                             .await;
                             to_download.push(ep);
@@ -704,14 +720,26 @@ pub fn setup_ui_callbacks(
                                 )
                                 .await
                             {
-                                placeholders.push((ep, job));
+                                let token = download_manager.register_resolver(&job.id).await;
+                                placeholders.push((ep, job, token));
                             }
                         }
                         crate::downloads::project_active_profile(ui_weak_inner.clone()).await;
 
-                        for (idx, (ep, job)) in placeholders.into_iter().enumerate() {
+                        for (idx, (ep, job, token)) in placeholders.into_iter().enumerate() {
+                            if token.is_cancelled() {
+                                download_manager.unregister_resolver(&job.id).await;
+                                continue;
+                            }
                             if idx > 0 {
-                                tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+                                tokio::select! {
+                                    biased;
+                                    _ = token.cancelled() => {
+                                        download_manager.unregister_resolver(&job.id).await;
+                                        continue;
+                                    }
+                                    _ = tokio::time::sleep(std::time::Duration::from_millis(180)) => {},
+                                }
                             }
 
                             let mut resolved_entry: Option<(
@@ -721,27 +749,40 @@ pub fn setup_ui_callbacks(
                             )> = None;
 
                             if ep.season == current_season && ep.episode == current_ep_num {
-                                resolved_entry = crate::downloads::resolve_stream_to_download_url(
-                                    selected.stream.clone(),
-                                    selected.stream_request.clone(),
-                                    selected.meta_request.clone(),
-                                    &streaming_server_url,
-                                    &settings,
-                                    &client,
-                                    false,
-                                )
-                                .await;
+                                resolved_entry = tokio::select! {
+                                    biased;
+                                    _ = token.cancelled() => None,
+                                    res = crate::downloads::resolve_stream_to_download_url(
+                                        selected.stream.clone(),
+                                        selected.stream_request.clone(),
+                                        selected.meta_request.clone(),
+                                        &streaming_server_url,
+                                        &settings,
+                                        &client,
+                                        false,
+                                    ) => res,
+                                };
+                            }
+
+                            if token.is_cancelled() {
+                                download_manager.unregister_resolver(&job.id).await;
+                                continue;
                             }
 
                             if resolved_entry.is_none() && !ep.video_id.is_empty() {
-                                let candidates =
-                                    crate::downloads::find_and_rank_episode_candidates(
+                                let candidates = tokio::select! {
+                                    biased;
+                                    _ = token.cancelled() => Vec::new(),
+                                    cands = crate::downloads::find_and_rank_episode_candidates(
                                         &profile,
                                         &installed_addons,
                                         &ep.video_id,
-                                    )
-                                    .await;
+                                    ) => cands,
+                                };
                                 for (addon, cand_stream) in candidates.into_iter().take(3) {
+                                    if token.is_cancelled() {
+                                        break;
+                                    }
                                     let req = stremio_core::types::addon::ResourceRequest {
                                         base: addon.transport_url.clone(),
                                         path: stremio_core::types::addon::ResourcePath::without_extra(
@@ -750,8 +791,10 @@ pub fn setup_ui_callbacks(
                                             &ep.video_id,
                                         ),
                                     };
-                                    if let Some(res) =
-                                        crate::downloads::resolve_stream_to_download_url(
+                                    let res = tokio::select! {
+                                        biased;
+                                        _ = token.cancelled() => None,
+                                        out = crate::downloads::resolve_stream_to_download_url(
                                             cand_stream,
                                             Some(req),
                                             selected.meta_request.clone(),
@@ -759,13 +802,18 @@ pub fn setup_ui_callbacks(
                                             &settings,
                                             &client,
                                             false,
-                                        )
-                                        .await
-                                    {
+                                        ) => out,
+                                    };
+                                    if let Some(res) = res {
                                         resolved_entry = Some(res);
                                         break;
                                     }
                                 }
+                            }
+
+                            download_manager.unregister_resolver(&job.id).await;
+                            if token.is_cancelled() {
+                                continue;
                             }
 
                             if let Some((url, final_stream, size_hint)) = resolved_entry {
@@ -789,6 +837,7 @@ pub fn setup_ui_callbacks(
                                             final_stream.subtitles,
                                         );
                                     }
+                                    Err(crate::downloads::DownloadError::Missing) => {}
                                     Err(err) => {
                                         let msg = match err {
                                             crate::downloads::DownloadError::StorageLimitExceeded => {
@@ -831,12 +880,13 @@ pub fn setup_ui_callbacks(
                     (detail_title.clone(), None, None, meta_id.clone(), title_folder)
                 };
 
-                crate::downloads::delete_stale_episode_jobs(
+                crate::downloads::delete_incomplete_episode_jobs(
                     &download_manager,
                     &profile_id,
                     meta_id.as_deref(),
                     season_num,
                     ep_num,
+                    true,
                 )
                 .await;
 
@@ -882,8 +932,11 @@ pub fn setup_ui_callbacks(
                     }
                 };
 
-                if let Some((url, final_stream, size_hint)) =
-                    crate::downloads::resolve_stream_to_download_url(
+                let resolver_token = download_manager.register_resolver(&placeholder.id).await;
+                let resolved_single = tokio::select! {
+                    biased;
+                    _ = resolver_token.cancelled() => None,
+                    res = crate::downloads::resolve_stream_to_download_url(
                         selected.stream.clone(),
                         selected.stream_request.clone(),
                         selected.meta_request.clone(),
@@ -891,9 +944,15 @@ pub fn setup_ui_callbacks(
                         &settings,
                         &client,
                         false,
-                    )
-                    .await
-                {
+                    ) => res,
+                };
+                download_manager.unregister_resolver(&placeholder.id).await;
+                if resolver_token.is_cancelled() {
+                    crate::downloads::project_active_profile(ui_weak_inner).await;
+                    return;
+                }
+
+                if let Some((url, final_stream, size_hint)) = resolved_single {
                     match download_manager
                         .activate_placeholder_job(
                             &placeholder,
@@ -914,6 +973,7 @@ pub fn setup_ui_callbacks(
                                 final_stream.subtitles,
                             );
                         }
+                        Err(crate::downloads::DownloadError::Missing) => {}
                         Err(err) => {
                             let msg = match err {
                                 crate::downloads::DownloadError::StorageLimitExceeded => {

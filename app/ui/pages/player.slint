@@ -77,6 +77,8 @@ component PipIconButton inherits Rectangle {
     }
 
     Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
         width: 16px;
         height: 16px;
         source: root.icon-source;
@@ -249,7 +251,7 @@ component SubtitleStepper inherits Rectangle {
                     enabled: !root.disabled;
                     accessible-name: @tr("Decrease") + " " + root.label;
                     background: self.has-hover ? Theme.overlay-pressed : Theme.overlay-hover;
-                    Text { text: "−"; color: Theme.text-primary; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { width: parent.width; height: parent.height; text: "−"; color: Theme.text-primary; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                     clicked => {
                         root.value = max(root.minimum, root.value - root.step);
                         root.changed(root.value);
@@ -273,7 +275,7 @@ component SubtitleStepper inherits Rectangle {
                     enabled: !root.disabled;
                     accessible-name: @tr("Increase") + " " + root.label;
                     background: self.has-hover ? Theme.overlay-pressed : Theme.overlay-hover;
-                    Text { text: "+"; color: Theme.text-primary; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { width: parent.width; height: parent.height; text: "+"; color: Theme.text-primary; font-size: 20px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                     clicked => {
                         root.value = min(root.maximum, root.value + root.step);
                         root.changed(root.value);
@@ -1142,23 +1144,26 @@ export component PlayerPage inherits Rectangle {
                 overflow: elide;
             }
 
-            if (active-shader-preset > 0) : Rectangle {
-                height: 22px;
-                background: Theme.accent.with-alpha(0.9);
-                border-radius: Theme.compact-radius;
-                y: (parent.height - self.height) / 2;
+            if (active-shader-preset > 0) : VerticalLayout {
+                alignment: center;
 
-                HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    alignment: center;
+                Rectangle {
+                    height: 22px;
+                    background: Theme.accent.with-alpha(0.9);
+                    border-radius: Theme.compact-radius;
 
-                    Text {
-                        text: active-shader-preset == 7 ? "FSR" : "4K HDR";
-                        color: Theme.surface-light;
-                        font-size: 12px;
-                        font-weight: 700;
-                        vertical-alignment: center;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        alignment: center;
+
+                        Text {
+                            text: active-shader-preset == 7 ? "FSR" : "4K HDR";
+                            color: Theme.surface-light;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
@@ -1332,20 +1337,27 @@ export component PlayerPage inherits Rectangle {
                         font-weight: 600;
                         vertical-alignment: center;
                     }
-                    if (root.media-rating != "") : Rectangle {
-                        height: 22px;
-                        border-radius: 11px;
-                        background: #caa53d;
+                    if (root.media-rating != "") : VerticalLayout {
+                        alignment: center;
 
-                        Text {
-                            x: 8px;
-                            width: parent.width - 16px;
-                            height: parent.height;
-                            text: @tr("IMDB_RATING" => "IMDb") + " " + root.media-rating;
-                            color: #141414;
-                            font-size: 12px;
-                            font-weight: 750;
-                            vertical-alignment: center;
+                        Rectangle {
+                            height: 22px;
+                            border-radius: 11px;
+                            background: #caa53d;
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                alignment: center;
+
+                                Text {
+                                    text: @tr("IMDB_RATING" => "IMDb") + " " + root.media-rating;
+                                    color: #141414;
+                                    font-size: 12px;
+                                    font-weight: 750;
+                                    vertical-alignment: center;
+                                }
+                            }
                         }
                     }
                 }
@@ -1578,7 +1590,7 @@ export component PlayerPage inherits Rectangle {
     if (show-skip-button) : Rectangle {
         x: parent.width - self.width - 48px;
         y: parent.height - self.height - (controls-visible ? 230px : 120px);
-        width: 170px;
+        width: max(170px, skip-content.preferred-width);
         height: 48px;
         background: touch-area.has-hover ? Theme.card-background.with-alpha(0.95) : Theme.modal-background.with-alpha(0.85);
         border-radius: self.height / 2;
@@ -1590,18 +1602,25 @@ export component PlayerPage inherits Rectangle {
         animate background { duration: Theme.motion-fast; }
 
         touch-area := TouchArea {
+            mouse-cursor: pointer;
             clicked => { root.skip-segment(); }
         }
 
-        HorizontalLayout {
+        skip-content := HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
             alignment: center;
             spacing: 8px;
 
-            Image {
-                source: @image-url("../assets/images/icons/chevron-forward.svg");
-                width: 18px;
-                height: 18px;
-                colorize: Theme.text-primary;
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: @image-url("../assets/images/icons/chevron-forward.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.text-primary;
+                    image-fit: contain;
+                }
             }
 
             Text {
@@ -2241,22 +2260,27 @@ export component PlayerPage inherits Rectangle {
         HorizontalLayout {
             padding-left: 6px;
             padding-right: 6px;
+            padding-top: 2px;
+            padding-bottom: 2px;
             spacing: 8px;
             // `stretch` (not `center`): a centered layout ignores the title's
             // horizontal-stretch and clumps both buttons in the middle of the bar.
             alignment: stretch;
 
             // Expandir a pantalla completa / restaurar ventana arriba a la izquierda
-            PipIconButton {
-                icon-source: @image-url("../assets/images/icons/maximize.svg");
-                tooltip: @tr("Restore window") + " (Escape)";
-                activity => {
-                    root.pip-report-pointer-enter();
-                    root.activity();
-                }
-                clicked => {
-                    root.activity();
-                    root.toggle-pip();
+            VerticalLayout {
+                alignment: center;
+                PipIconButton {
+                    icon-source: @image-url("../assets/images/icons/maximize.svg");
+                    tooltip: @tr("Restore window") + " (Escape)";
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.activity();
+                        root.toggle-pip();
+                    }
                 }
             }
 
@@ -2272,17 +2296,20 @@ export component PlayerPage inherits Rectangle {
             }
 
             // Cerrar arriba a la derecha
-            PipIconButton {
-                icon-source: @image-url("../assets/images/icons/close.svg");
-                tooltip: @tr("Close player");
-                danger: true;
-                activity => {
-                    root.pip-report-pointer-enter();
-                    root.activity();
-                }
-                clicked => {
-                    root.activity();
-                    root.close();
+            VerticalLayout {
+                alignment: center;
+                PipIconButton {
+                    icon-source: @image-url("../assets/images/icons/close.svg");
+                    tooltip: @tr("Close player");
+                    danger: true;
+                    activity => {
+                        root.pip-report-pointer-enter();
+                        root.activity();
+                    }
+                    clicked => {
+                        root.activity();
+                        root.close();
+                    }
                 }
             }
         }
@@ -3530,14 +3557,14 @@ export component PlayerPage inherits Rectangle {
         x: parent.width - stats-menu.width - 32px;
         y: parent.height - stats-menu.height - 112px;
         width: min(480px, parent.width - 64px);
-        height: 300px;
+        height: max(300px, stats-layout.preferred-height);
         background: Theme.card-background;
         border-radius: Theme.border-radius;
         border-width: 1px;
         border-color: Theme.divider;
         z: 180;
 
-        VerticalLayout {
+        stats-layout := VerticalLayout {
             padding: 24px;
             spacing: 20px;
             alignment: start;
@@ -3639,7 +3666,7 @@ export component PlayerPage inherits Rectangle {
     // NextVideoPopup Overlay ("Up Next" card) matching stremio-web/src/routes/Player/NextVideoPopup
     if (show-next-video-popup && has-next-episode) : next-video-popup := PopupMenuSurface {
         x: parent.width - next-video-popup.width - 32px;
-        y: parent.height - next-video-popup.height - 112px;
+        y: parent.height - next-video-popup.height - (controls-visible ? 176px : 48px);
         width: min(560px, parent.width - 64px);
         height: 180px;
         background: Theme.card-background;
@@ -3647,6 +3674,8 @@ export component PlayerPage inherits Rectangle {
         border-width: 1px;
         border-color: Theme.divider;
         z: 180;
+
+        animate y { duration: Theme.motion-panel; easing: ease-out; }
 
         HorizontalLayout {
             padding: 0px;

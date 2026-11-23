@@ -102,8 +102,36 @@ fn translation_paths(translations_src_dir: &Path) -> std::io::Result<Vec<PathBuf
     Ok(paths)
 }
 
+fn custom_translation_overlays() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
+        (
+            "BOARD_OFFLINE",
+            "No internet connection. Retrying automatically…",
+            "Sin conexión a internet. Reintentando automáticamente…",
+        ),
+        (
+            "DETAILS_LOAD_FAILED",
+            "Could not load this title. Check your connection and try again.",
+            "No se pudo cargar este título. Revisá tu conexión e intentá nuevamente.",
+        ),
+        (
+            "DISCOVER_LOAD_FAILED",
+            "Could not load this catalog. Check your connection and try again.",
+            "No se pudo cargar este catálogo. Revisá tu conexión e intentá nuevamente.",
+        ),
+        ("RETRY", "Retry", "Reintentar"),
+        ("SERVER_WARNING_SETTINGS", "Settings", "Configuración"),
+        ("SERVER_WARNING_HIDE", "Dismiss", "Ocultar"),
+    ]
+}
+
 fn generate_po_files(translations_src_dir: &Path, output_dir: &Path) -> std::io::Result<()> {
-    let en_map = read_json_translation(&translations_src_dir.join("en-US.json"))?;
+    let mut en_map = read_json_translation(&translations_src_dir.join("en-US.json"))?;
+    for &(key, en_val, _) in custom_translation_overlays() {
+        en_map
+            .entry(key.to_owned())
+            .or_insert_with(|| en_val.to_owned());
+    }
 
     let mut english_counts = BTreeMap::new();
     for value in en_map.values() {
@@ -123,7 +151,20 @@ fn generate_po_files(translations_src_dir: &Path, output_dir: &Path) -> std::io:
         let Some(locale) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
-        let lang_map = read_json_translation(&path)?;
+        let mut lang_map = read_json_translation(&path)?;
+        if locale == "en-US" {
+            for &(key, en_val, _) in custom_translation_overlays() {
+                lang_map
+                    .entry(key.to_owned())
+                    .or_insert_with(|| en_val.to_owned());
+            }
+        } else if locale.starts_with("es") {
+            for &(key, _, es_val) in custom_translation_overlays() {
+                lang_map
+                    .entry(key.to_owned())
+                    .or_insert_with(|| es_val.to_owned());
+            }
+        }
         let mut po_content = format!(
             "msgid \"\"\nmsgstr \"\"\n\"Language: {}\\n\"\n\"MIME-Version: 1.0\\n\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"\n\"Content-Transfer-Encoding: 8bit\\n\"\n\n",
             escape_po_string(locale)

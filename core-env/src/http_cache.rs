@@ -94,9 +94,51 @@ pub struct ConnectivitySnapshot {
 
 static CONSECUTIVE_NETWORK_FAILURES: AtomicU32 = AtomicU32::new(0);
 static LAST_NETWORK_RESPONSE: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+static NETWORK_ONLINE_TX: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
+static PROBE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-fn note_network_response() {
+fn network_online_tx() -> &'static tokio::sync::watch::Sender<bool> {
+    NETWORK_ONLINE_TX.get_or_init(|| {
+        let (tx, _rx) = tokio::sync::watch::channel(true);
+        tx
+    })
+}
+
+fn probe_client() -> Option<&'static reqwest::Client> {
+    if let Some(client) = PROBE_CLIENT.get() {
+        return Some(client);
+    }
+    let client = reqwest::Client::builder()
+        .dns_resolver(crate::dns::shared_dns_resolver())
+        .build()
+        .ok()?;
+    Some(PROBE_CLIENT.get_or_init(|| client))
+}
+
+pub(crate) fn is_loopback_url(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let trimmed = host.trim_start_matches('[').trim_end_matches(']');
+    trimmed.eq_ignore_ascii_case("localhost")
+        || trimmed
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+pub(crate) fn note_network_response() {
     CONSECUTIVE_NETWORK_FAILURES.store(0, Ordering::Release);
+    network_online_tx().send_if_modified(|online| {
+        if !*online {
+            *online = true;
+            true
+        } else {
+            false
+        }
+    });
     let Some(mut slot) = try_lock_no_block(LAST_NETWORK_RESPONSE.get_or_init(|| Mutex::new(None)))
     else {
         // Timestamp bookkeeping is best effort; never stall the caller for it.
@@ -105,8 +147,23 @@ fn note_network_response() {
     *slot = Some(Instant::now());
 }
 
-fn note_network_failure() {
+pub(crate) fn note_network_failure() {
     CONSECUTIVE_NETWORK_FAILURES.fetch_add(1, Ordering::AcqRel);
+}
+
+pub fn mark_network_offline() {
+    network_online_tx().send_if_modified(|online| {
+        if *online {
+            *online = false;
+            true
+        } else {
+            false
+        }
+    });
+}
+
+pub fn watch_network_online() -> tokio::sync::watch::Receiver<bool> {
+    network_online_tx().subscribe()
 }
 
 /// Transport-level failures observed in this process since the last response.
@@ -131,11 +188,12 @@ pub async fn probe_connectivity(url: &str, timeout: Duration) -> bool {
     if !matches!(url.scheme(), "http" | "https") {
         return false;
     }
-    let Ok(client) = reqwest::Client::builder().timeout(timeout).build() else {
+    let Some(client) = probe_client() else {
         return false;
     };
     match client
         .get(url)
+        .timeout(timeout)
         .header(reqwest::header::RANGE, "bytes=0-0")
         .send()
         .await
@@ -149,6 +207,59 @@ pub async fn probe_connectivity(url: &str, timeout: Duration) -> bool {
             false
         }
     }
+}
+
+async fn probe_single_endpoint(client: &reqwest::Client, url: &str, timeout: Duration) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    client
+        .get(parsed)
+        .timeout(timeout)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+        .await
+        .is_ok()
+}
+
+/// Probes independent non-loopback endpoints concurrently so one unreachable
+/// addon cannot falsely mark the entire application offline.
+pub async fn probe_internet_connectivity(extra_url: Option<&str>, timeout: Duration) -> bool {
+    let Some(client) = probe_client() else {
+        return false;
+    };
+    let mut urls = vec![
+        "https://api.strem.io/".to_owned(),
+        "https://1.1.1.1/cdn-cgi/trace".to_owned(),
+    ];
+    if let Some(extra) = extra_url
+        && let Ok(parsed) = url::Url::parse(extra)
+        && matches!(parsed.scheme(), "http" | "https")
+        && !is_loopback_url(extra)
+        && !urls.iter().any(|existing| existing == extra)
+    {
+        urls.push(extra.to_owned());
+    }
+
+    let mut set = tokio::task::JoinSet::new();
+    for url in urls {
+        let client = client.clone();
+        set.spawn(async move { probe_single_endpoint(&client, &url, timeout).await });
+    }
+    while let Some(result) = set.join_next().await {
+        if matches!(result, Ok(true)) {
+            set.abort_all();
+            note_network_response();
+            return true;
+        }
+    }
+
+    note_network_failure();
+    mark_network_offline();
+    false
 }
 
 /// Removes only the addon response cache. Settings, the library, images and the

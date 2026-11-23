@@ -190,7 +190,7 @@ export component ModalDialog inherits Rectangle {
 
         close-button := ButtonSurface {
             x: parent.width - 3.5 * root.unit;
-            y: 0.5 * root.unit;
+            y: 1.0 * root.unit;
             width: 3 * root.unit;
             height: 3 * root.unit;
             border-radius: Theme.border-radius;
@@ -271,10 +271,8 @@ export component ModalDialog inherits Rectangle {
                     spacing: 0.5 * root.unit;
                     alignment: center;
 
-                    if (action.has-icon) : Rectangle {
-                        width: 1.2 * root.unit;
-                        height: 1.2 * root.unit;
-                        y: (parent.height - self.height) / 2;
+                    if (action.has-icon) : VerticalLayout {
+                        alignment: center;
 
                         Image {
                             width: 1.2 * root.unit;

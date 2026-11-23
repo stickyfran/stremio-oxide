@@ -99,14 +99,18 @@ export component OnboardingModal inherits Rectangle {
             spacing: 6px;
             alignment: center;
 
-            for step-idx in 4 : Rectangle {
-                width: root.active-step == step-idx ? 24px : 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: root.active-step == step-idx ? Theme.primary-accent : Theme.primary-foreground.with-alpha(0.3);
+            for step-idx in 4 : VerticalLayout {
+                alignment: center;
 
-                animate width { duration: Theme.motion-control; easing: ease-out; }
-                animate background { duration: Theme.motion-control; }
+                Rectangle {
+                    width: root.active-step == step-idx ? 24px : 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: root.active-step == step-idx ? Theme.primary-accent : Theme.primary-foreground.with-alpha(0.3);
+
+                    animate width { duration: Theme.motion-control; easing: ease-out; }
+                    animate background { duration: Theme.motion-control; }
+                }
             }
         }
 
@@ -149,44 +153,49 @@ export component OnboardingModal inherits Rectangle {
             }
 
             // Centered Language Selection Container
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                width: min(340px, parent.width * 0.85);
-                height: 220px;
-                border-radius: 12px;
-                background: Theme.card-background;
-                border-width: 1px;
-                border-color: Theme.card-border;
-                clip: true;
+            HorizontalLayout {
+                alignment: center;
 
-                ScrollView {
-                    width: parent.width;
-                    height: parent.height;
-                    viewport-width: self.width;
-                    horizontal-scrollbar-policy: always-off;
+                Rectangle {
+                    width: min(340px, parent.width * 0.85);
+                    height: 220px;
+                    border-radius: 12px;
+                    background: Theme.card-background;
+                    border-width: 1px;
+                    border-color: Theme.card-border;
+                    clip: true;
 
-                    VerticalLayout {
+                    ScrollView {
                         width: parent.width;
-                        padding: 6px;
-                        spacing: 2px;
+                        height: parent.height;
+                        viewport-width: self.width;
+                        horizontal-scrollbar-policy: always-off;
 
-                        for lang[idx] in root.available-languages : ButtonSurface {
-                            width: parent.width - 12px;
-                            height: 36px;
-                            border-radius: 8px;
-                            background: root.selected-language-idx == idx ? Theme.primary-accent : (self.has-hover ? Theme.overlay-hover : transparent);
-                            clicked => {
-                                root.selected-language-idx = idx;
-                                root.language-changed(idx);
-                            }
+                        VerticalLayout {
+                            width: parent.width;
+                            padding: 6px;
+                            spacing: 2px;
 
-                            Text {
-                                text: lang;
-                                color: Theme.primary-foreground;
-                                font-size: 14px;
-                                font-weight: root.selected-language-idx == idx ? 700 : 500;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            for lang[idx] in root.available-languages : ButtonSurface {
+                                width: parent.width - 12px;
+                                height: 36px;
+                                border-radius: 8px;
+                                background: root.selected-language-idx == idx ? Theme.primary-accent : (self.has-hover ? Theme.overlay-hover : transparent);
+                                clicked => {
+                                    root.selected-language-idx = idx;
+                                    root.language-changed(idx);
+                                }
+
+                                Text {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    text: lang;
+                                    color: Theme.primary-foreground;
+                                    font-size: 14px;
+                                    font-weight: root.selected-language-idx == idx ? 700 : 500;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
                             }
                         }
                     }
@@ -269,6 +278,8 @@ export component OnboardingModal inherits Rectangle {
                         background: Theme.primary-accent;
 
                         Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                             width: 10px;
                             height: 10px;
                             source: @image-url("../assets/images/icons/checkmark.svg");
@@ -321,6 +332,8 @@ export component OnboardingModal inherits Rectangle {
                         background: Theme.primary-accent;
 
                         Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                             width: 10px;
                             height: 10px;
                             source: @image-url("../assets/images/icons/checkmark.svg");
@@ -371,6 +384,8 @@ export component OnboardingModal inherits Rectangle {
                         background: Theme.primary-accent;
 
                         Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                             width: 10px;
                             height: 10px;
                             source: @image-url("../assets/images/icons/checkmark.svg");
@@ -432,15 +447,19 @@ export component OnboardingModal inherits Rectangle {
                         vertical-alignment: center;
                     }
 
-                    Slider {
-                        width: parent.width - 160px;
-                        height: 28px;
-                        minimum: 5.0;
-                        maximum: 30.0;
-                        value: root.seek-duration-seconds;
-                        changed(val) => {
-                            root.seek-duration-seconds = val;
-                            root.seek-duration-changed(val);
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+
+                        Slider {
+                            height: 28px;
+                            minimum: 5.0;
+                            maximum: 30.0;
+                            value: root.seek-duration-seconds;
+                            changed(val) => {
+                                root.seek-duration-seconds = val;
+                                root.seek-duration-changed(val);
+                            }
                         }
                     }
 
@@ -480,9 +499,12 @@ export component OnboardingModal inherits Rectangle {
                             Text { text: root.hwdec-label; color: Theme.text-muted; font-size: 11px; }
                         }
 
-                        ToggleSwitch {
-                            checked <=> root.hardware-acceleration-enabled;
-                            toggled => { root.toggle-hwdec(root.hardware-acceleration-enabled); }
+                        VerticalLayout {
+                            alignment: center;
+                            ToggleSwitch {
+                                checked <=> root.hardware-acceleration-enabled;
+                                toggled => { root.toggle-hwdec(root.hardware-acceleration-enabled); }
+                            }
                         }
                     }
                 }
@@ -508,9 +530,12 @@ export component OnboardingModal inherits Rectangle {
                             Text { text: @tr("Pick preferred subtitles"); color: Theme.text-muted; font-size: 11px; }
                         }
 
-                        ToggleSwitch {
-                            checked <=> root.auto-subtitles-enabled;
-                            toggled => { root.toggle-auto-subtitles(root.auto-subtitles-enabled); }
+                        VerticalLayout {
+                            alignment: center;
+                            ToggleSwitch {
+                                checked <=> root.auto-subtitles-enabled;
+                                toggled => { root.toggle-auto-subtitles(root.auto-subtitles-enabled); }
+                            }
                         }
                     }
                 }
@@ -609,6 +634,8 @@ export component OnboardingModal inherits Rectangle {
                             }
 
                             Text {
+                                width: parent.width;
+                                height: parent.height;
                                 text: opt.short;
                                 color: Theme.primary-foreground;
                                 font-size: 11px;
@@ -649,9 +676,12 @@ export component OnboardingModal inherits Rectangle {
                                 Text { text: @tr("Show what you watch on Discord."); color: Theme.text-muted; font-size: 11px; }
                             }
 
-                            ToggleSwitch {
-                                checked <=> root.discord-rpc-enabled;
-                                toggled => { root.toggle-discord-rpc(root.discord-rpc-enabled); }
+                            VerticalLayout {
+                                alignment: center;
+                                ToggleSwitch {
+                                    checked <=> root.discord-rpc-enabled;
+                                    toggled => { root.toggle-discord-rpc(root.discord-rpc-enabled); }
+                                }
                             }
                         }
                     }
@@ -676,9 +706,12 @@ export component OnboardingModal inherits Rectangle {
                                 Text { text: @tr("Keep audio playing when minimized."); color: Theme.text-muted; font-size: 11px; }
                             }
 
-                            ToggleSwitch {
-                                checked <=> root.background-playback-enabled;
-                                toggled => { root.toggle-background-playback(root.background-playback-enabled); }
+                            VerticalLayout {
+                                alignment: center;
+                                ToggleSwitch {
+                                    checked <=> root.background-playback-enabled;
+                                    toggled => { root.toggle-background-playback(root.background-playback-enabled); }
+                                }
                             }
                         }
                     }
@@ -708,9 +741,12 @@ export component OnboardingModal inherits Rectangle {
                                 Text { text: @tr("Seed active streams in background."); color: Theme.text-muted; font-size: 11px; }
                             }
 
-                            ToggleSwitch {
-                                checked <=> root.seeding-enabled;
-                                toggled => { root.toggle-seeding(root.seeding-enabled); }
+                            VerticalLayout {
+                                alignment: center;
+                                ToggleSwitch {
+                                    checked <=> root.seeding-enabled;
+                                    toggled => { root.toggle-seeding(root.seeding-enabled); }
+                                }
                             }
                         }
                     }
@@ -735,9 +771,12 @@ export component OnboardingModal inherits Rectangle {
                                 Text { text: @tr("Pause video when minimized."); color: Theme.text-muted; font-size: 11px; }
                             }
 
-                            ToggleSwitch {
-                                checked <=> root.pause-on-minimize-enabled;
-                                toggled => { root.toggle-pause-on-minimize(root.pause-on-minimize-enabled); }
+                            VerticalLayout {
+                                alignment: center;
+                                ToggleSwitch {
+                                    checked <=> root.pause-on-minimize-enabled;
+                                    toggled => { root.toggle-pause-on-minimize(root.pause-on-minimize-enabled); }
+                                }
                             }
                         }
                     }
@@ -841,10 +880,8 @@ export component OnboardingModal inherits Rectangle {
                         spacing: 8px;
                         alignment: center;
 
-                        Rectangle {
-                            width: 16px;
-                            height: 16px;
-                            y: (parent.height - self.height) / 2;
+                        VerticalLayout {
+                            alignment: center;
 
                             Image {
                                 width: 16px;
@@ -876,42 +913,52 @@ export component OnboardingModal inherits Rectangle {
             alignment: space-between;
 
             // Previous Button (Text Link)
-            if (root.active-step > 0) : ButtonSurface {
-                width: 80px;
-                height: 36px;
-                clicked => { root.active-step -= 1; }
+            if (root.active-step > 0) : VerticalLayout {
+                alignment: center;
+                ButtonSurface {
+                    width: 80px;
+                    height: 36px;
+                    clicked => { root.active-step -= 1; }
 
-                Text {
-                    text: @tr("Previous");
-                    color: Theme.text-secondary;
-                    font-size: 14px;
-                    font-weight: 500;
-                    vertical-alignment: center;
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: @tr("Previous");
+                        color: Theme.text-secondary;
+                        font-size: 14px;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
                 }
             }
             if (root.active-step == 0) : Rectangle { width: 80px; } // Spacer
 
             // Next / Get Started Primary Pill Button
-            ButtonSurface {
-                width: root.active-step == 3 ? 130px : 100px;
-                height: 38px;
-                border-radius: 19px;
-                background: Theme.primary-accent;
-                clicked => {
-                    if (root.active-step < 3) {
-                        root.active-step += 1;
-                    } else {
-                        root.completed();
+            VerticalLayout {
+                alignment: center;
+                ButtonSurface {
+                    width: root.active-step == 3 ? 130px : 100px;
+                    height: 38px;
+                    border-radius: 19px;
+                    background: Theme.primary-accent;
+                    clicked => {
+                        if (root.active-step < 3) {
+                            root.active-step += 1;
+                        } else {
+                            root.completed();
+                        }
                     }
-                }
 
-                Text {
-                    text: root.active-step == 3 ? @tr("Get Started") : @tr("Next");
-                    color: Theme.primary-foreground;
-                    font-size: 14px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: root.active-step == 3 ? @tr("Get Started") : @tr("Next");
+                        color: Theme.primary-foreground;
+                        font-size: 14px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }

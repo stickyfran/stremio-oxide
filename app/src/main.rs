@@ -52,6 +52,7 @@ pub mod db;
 mod deep_link;
 pub mod diagnostics;
 pub mod downloads;
+pub mod error_messages;
 mod gpu_prewarm;
 pub mod image_cache;
 pub mod integrations;
@@ -373,7 +374,11 @@ async fn run_app(
             tracing::error!(%error, "application startup failed after opening the window");
             if let Some(ui) = failure_ui.upgrade() {
                 ui.set_loading(false);
-                ui.set_error_message(error.to_string().into());
+                let message = error_messages::humanize_raw_error(
+                    &error.to_string(),
+                    ui.get_app_offline(),
+                );
+                ui.set_error_message(message.into());
             }
         }
         result
@@ -584,8 +589,9 @@ async fn finish_startup(
 ) -> anyhow::Result<AppSession> {
     let ui_weak = ui.as_weak();
 
-    let credential_store: Arc<dyn credential_store::CredentialStore> =
-        Arc::new(credential_store::PlatformCredentialStore::default());
+    let credential_store: Arc<dyn credential_store::CredentialStore> = Arc::new(
+        credential_store::PlatformCredentialStore::with_fallback_dir(paths::get().root().join("vault")),
+    );
     core_env::install_credential_store(credential_store.clone());
     secure_settings::install(credential_store.clone());
     integrations::install(credential_store.clone());
@@ -596,7 +602,7 @@ async fn finish_startup(
     let local_profiles = profiles::list_profiles()
         .await
         .context("could not load local profiles")?;
-    let (active_profile_id, preloaded_profile) =
+    let (active_profile_id, preloaded_profile, mut startup_vault_error) =
         select_startup_profile(&ui, local_profiles, active_profile_id).await?;
     core_env::set_active_profile_scope(active_profile_id.as_str());
     let storage_task = tokio::spawn(load_startup_storage(preloaded_profile));
@@ -615,21 +621,14 @@ async fn finish_startup(
                     .context("could not remove a migrated provider key from local storage")?;
             }
         }
-        Err(
-            error @ (credential_store::CredentialError::Locked
-            | credential_store::CredentialError::Unavailable
-            | credential_store::CredentialError::Missing),
-        ) => {
-            // A minimal Wayland session may not have gnome-keyring/kwallet
-            // running. The app must still start; keep the legacy key in the
-            // config so it can be migrated once the vault is available.
+        Err(error) => {
             tracing::warn!(
                 %error,
-                "OS credential vault unavailable; starting without provider credentials"
+                "OS credential vault unavailable during settings activation; continuing with degraded provider credentials"
             );
-        }
-        Err(error) => {
-            return Err(error).context("could not load the profile credential settings");
+            if startup_vault_error.is_none() {
+                startup_vault_error = Some(error);
+            }
         }
     }
     apply_theme(&ui, &config);
@@ -707,67 +706,81 @@ async fn finish_startup(
         let mut attempt = 0;
 
         loop {
-            attempt += 1;
-            tracing::info!(
-                attempt,
-                max_retries = max_startup_retries,
-                "launching stremio-runtime engine"
-            );
+            loop {
+                attempt += 1;
+                tracing::info!(
+                    attempt,
+                    max_retries = max_startup_retries,
+                    "launching stremio-runtime engine"
+                );
 
-            match stremio_runtime::start(server_cfg.clone()).await {
-                Ok(handle) => {
-                    let bound_addr = handle.http_addr();
-                    let effective_url = format!("http://{bound_addr}");
-                    if bound_addr.port() != configured_torrent_port {
-                        tracing::warn!(
-                            configured = configured_torrent_port,
-                            bound = bound_addr.port(),
-                            "streaming server bound to fallback port"
-                        );
-                    }
-                    server_notifier_task.mark_ready(effective_url.clone());
-                    crate::startup_metrics::global().mark_server_ready();
-                    let ui_weak = server_ui_weak.clone();
-                    let eff_url = effective_url.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_server_url(eff_url.into());
-                            ui.set_server_status("Online".into());
+                match stremio_runtime::start(server_cfg.clone()).await {
+                    Ok(handle) => {
+                        let bound_addr = handle.http_addr();
+                        let effective_url = format!("http://{bound_addr}");
+                        if bound_addr.port() != configured_torrent_port {
+                            tracing::warn!(
+                                configured = configured_torrent_port,
+                                bound = bound_addr.port(),
+                                "streaming server bound to fallback port"
+                            );
                         }
-                    });
-                    *server_shared_handle_task.lock().await = Some(handle);
-                    break;
-                }
-                Err(error) => {
-                    tracing::error!(%error, attempt, "stremio-runtime startup failed");
-                    if attempt >= max_startup_retries {
-                        server_notifier_task.mark_failed();
+                        server_notifier_task.mark_ready(effective_url.clone());
+                        crate::startup_metrics::global().mark_server_ready();
+                        let ui_weak = server_ui_weak.clone();
+                        let eff_url = effective_url.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_server_url(eff_url.into());
+                                ui.set_server_status("Online".into());
+                            }
+                        });
+                        *server_shared_handle_task.lock().await = Some(handle);
+                        break;
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, attempt, "stremio-runtime startup failed");
+                        if attempt >= max_startup_retries {
+                            server_notifier_task.mark_offline();
+                            let ui_weak = server_ui_weak.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = ui_weak.upgrade() {
+                                    ui.set_server_status("Offline".into());
+                                }
+                            });
+                            break;
+                        }
+                        server_notifier_task.mark_retrying();
                         let ui_weak = server_ui_weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_weak.upgrade() {
-                                ui.set_server_status("Offline".into());
+                                ui.set_server_status("Retrying...".into());
                             }
                         });
-                        return;
+                        tokio::time::sleep(retry_delay).await;
+                        retry_delay = (retry_delay * 2).min(Duration::from_secs(4));
                     }
-                    server_notifier_task.mark_failed();
-                    let ui_weak = server_ui_weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_server_status("Retrying...".into());
-                        }
-                    });
-                    tokio::time::sleep(retry_delay).await;
-                    retry_delay = (retry_delay * 2).min(Duration::from_secs(4));
                 }
             }
+
+            if server_shared_handle_task.lock().await.is_some() {
+                break;
+            }
+
+            server_notifier_task.notified_retry().await;
+            attempt = 0;
+            retry_delay = Duration::from_millis(400);
+            server_notifier_task.mark_retrying();
         }
 
         // Periodic watchdog: checks that the server remains alive and responsive.
-        // If it terminates unexpectedly, attempts automatic recovery.
+        // If it terminates unexpectedly, attempts automatic recovery or waits for manual retry.
         let mut check_interval = tokio::time::interval(Duration::from_secs(20));
         loop {
-            check_interval.tick().await;
+            tokio::select! {
+                _ = check_interval.tick() => {}
+                _ = server_notifier_task.notified_retry() => {}
+            }
             let is_alive = {
                 let lock = server_shared_handle_task.lock().await;
                 lock.as_ref().is_some_and(|h| h.is_running())
@@ -776,7 +789,7 @@ async fn finish_startup(
                 tracing::warn!(
                     "streaming server process died unexpectedly; initiating auto-recovery"
                 );
-                server_notifier_task.mark_failed();
+                server_notifier_task.mark_reconnecting();
                 let ui_weak = server_ui_weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = ui_weak.upgrade() {
@@ -799,6 +812,13 @@ async fn finish_startup(
                     *server_shared_handle_task.lock().await = Some(new_handle);
                     tracing::info!("streaming server auto-recovery succeeded");
                 } else {
+                    server_notifier_task.mark_offline();
+                    let ui_weak = server_ui_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_server_status("Offline".into());
+                        }
+                    });
                     tracing::error!("streaming server auto-recovery failed");
                 }
             }
@@ -911,42 +931,100 @@ async fn finish_startup(
 
     {
         let rt = runtime.clone();
-        let mut rx_ready = server_readiness.watch_ready();
+        let readiness_watch = server_readiness.clone();
+        let mut rx_state = server_readiness.watch_state();
         let rx_url = server_readiness.watch_url();
+        let ui_weak_server = ui_weak.clone();
         tokio::spawn(async move {
             let sync_server = |url_str: &str| {
                 tracing::info!(
                     effective_url = url_str,
                     "streaming server readiness confirmed; synchronizing core model"
                 );
+                models::board::reset_server_settings_auto_retry();
                 // Never dispatch while holding the model read guard: dispatch
                 // takes the write lock and would deadlock against ourselves.
-                let updated_settings = url::Url::parse(url_str).ok().and_then(|parsed_url| {
-                    let model = rt.model().ok()?;
-                    (model.ctx.profile.settings.streaming_server_url != parsed_url).then(|| {
-                        let mut settings = model.ctx.profile.settings.clone();
-                        settings.streaming_server_url = parsed_url;
-                        settings
+                let (updated_settings, already_ready) = url::Url::parse(url_str)
+                    .ok()
+                    .and_then(|parsed_url| {
+                        let model = rt.model().ok()?;
+                        let url_changed =
+                            model.ctx.profile.settings.streaming_server_url != parsed_url;
+                        let ready = matches!(
+                            model.streaming_server.settings,
+                            stremio_core::models::common::Loadable::Ready(_)
+                        ) && !url_changed;
+                        let settings = url_changed.then(|| {
+                            let mut settings = model.ctx.profile.settings.clone();
+                            settings.streaming_server_url = parsed_url;
+                            settings
+                        });
+                        Some((settings, ready))
                     })
-                });
+                    .unwrap_or((None, false));
                 if let Some(settings) = updated_settings {
                     rt.dispatch(RuntimeAction {
                         field: Some(AppModelField::Ctx),
                         action: Action::Ctx(ActionCtx::UpdateSettings(settings)),
                     });
+                } else if !already_ready {
+                    rt.dispatch(RuntimeAction {
+                        field: Some(AppModelField::StreamingServer),
+                        action: Action::StreamingServer(ActionStreamingServer::Reload),
+                    });
                 }
-                rt.dispatch(RuntimeAction {
-                    field: Some(AppModelField::StreamingServer),
-                    action: Action::StreamingServer(ActionStreamingServer::Reload),
+
+                // Self-heal if core still holds a stale Loadable::Err after startup race.
+                let rt_heal = rt.clone();
+                let readiness_heal = readiness_watch.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(1200)).await;
+                    if !readiness_heal.is_ready() {
+                        return;
+                    }
+                    let needs_reload = rt_heal.model().ok().is_some_and(|model| {
+                        matches!(
+                            model.streaming_server.settings,
+                            stremio_core::models::common::Loadable::Err(_)
+                        ) && model
+                            .streaming_server
+                            .selected
+                            .transport_url
+                            .as_str()
+                            .trim_end_matches('/')
+                            == readiness_heal.current_url().trim_end_matches('/')
+                    });
+                    if needs_reload {
+                        rt_heal.dispatch(RuntimeAction {
+                            field: Some(AppModelField::StreamingServer),
+                            action: Action::StreamingServer(ActionStreamingServer::Reload),
+                        });
+                    }
                 });
             };
 
-            if *rx_ready.borrow() {
+            let project_lifecycle = |state: server_readiness::ServerLifecycleState| {
+                let weak = ui_weak_server.clone();
+                let rt_proj = rt.clone();
+                let readiness_proj = readiness_watch.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.set_server_status(state.as_ui_status().into());
+                        models::board::sync_server_warning(&ui, &rt_proj, &readiness_proj);
+                    }
+                });
+            };
+
+            let initial_state = *rx_state.borrow();
+            project_lifecycle(initial_state);
+            if initial_state == server_readiness::ServerLifecycleState::Online {
                 sync_server(&rx_url.borrow().clone());
             }
 
-            while rx_ready.changed().await.is_ok() {
-                if *rx_ready.borrow() {
+            while rx_state.changed().await.is_ok() {
+                let state = *rx_state.borrow();
+                project_lifecycle(state);
+                if state == server_readiness::ServerLifecycleState::Online {
                     sync_server(&rx_url.borrow().clone());
                 }
             }
@@ -1100,6 +1178,7 @@ async fn finish_startup(
         native_playback_bridge.clone(),
         navigation.clone(),
         discord_rpc,
+        server_readiness.clone(),
     );
     callbacks::setup_ui_callbacks(
         &ui,
@@ -1219,6 +1298,84 @@ async fn finish_startup(
             ui.set_calendar_loading(true);
         }
     }
+
+    ui.on_error_action_clicked({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        move || {
+            let runtime = runtime.clone();
+            let ui_weak = ui_weak.clone();
+            tokio::spawn(async move {
+                core_env::reset_credential_vault_cooldown();
+                let profile_id = core_env::active_profile_scope();
+                match core_env::load_profile_scope_resilient(&profile_id).await {
+                    Ok(loaded) if matches!(loaded.recovery, core_env::ProfileVaultRecovery::Complete) => {
+                        let token = loaded.profile.and_then(|p| p.auth_key().cloned());
+                        let _ = secure_settings::activate_profile(&profile_id, None).await;
+                        if let Some(token) = token {
+                            runtime.dispatch(RuntimeAction {
+                                field: None,
+                                action: Action::Ctx(ActionCtx::PullUserFromAPI {
+                                    token: Some(token),
+                                }),
+                            });
+                        }
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_error_message("".into());
+                                ui.set_error_action_label("".into());
+                                ui.set_settings_tidb_api_key(if secure_settings::has_tidb_api_key() {
+                                    "••••••••••••".into()
+                                } else {
+                                    "".into()
+                                });
+                            }
+                        });
+                    }
+                    Ok(loaded) => {
+                        let reason = match loaded.recovery {
+                            core_env::ProfileVaultRecovery::AuthUnavailable(err) => err,
+                            core_env::ProfileVaultRecovery::Complete => credential_store::CredentialError::Unavailable,
+                        };
+                        let msg = error_messages::vault_fallback_banner(&reason, true);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_error_message(msg.into());
+                            }
+                        });
+                    }
+                    Err(error) => {
+                        let msg = error_messages::humanize_env_error(&error, false);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak.upgrade() {
+                                ui.set_error_message(msg.into());
+                            }
+                        });
+                    }
+                }
+            });
+        }
+    });
+
+    if let Some(vault_err) = startup_vault_error.or_else(|| match core_env::credential_vault_health() {
+        credential_store::VaultHealth::Fallback { reason } => Some(reason),
+        credential_store::VaultHealth::Native => None,
+    }) {
+        let auth_lost = runtime
+            .model()
+            .ok()
+            .is_some_and(|model| model.ctx.profile.auth.is_none());
+        let banner = error_messages::vault_fallback_banner(&vault_err, auth_lost);
+        ui.set_error_message(banner.into());
+        if auth_lost {
+            let label = if localization::is_spanish() {
+                "Reintentar llavero"
+            } else {
+                "Retry vault"
+            };
+            ui.set_error_action_label(label.into());
+        }
+    }
     ui.set_loading(false);
     let command_task = deep_link::start_command_receiver(
         commands,
@@ -1287,7 +1444,7 @@ fn setup_live_profile_switch(
             let result = async {
                 let previous_id = profiles::active_profile_id().await?;
                 if previous_id == target_id {
-                    return Ok::<_, anyhow::Error>((previous_id, None, false));
+                    return Ok::<_, anyhow::Error>((previous_id, None, false, None));
                 }
                 let profiles = profiles::list_profiles().await?;
                 let target = profiles
@@ -1297,29 +1454,37 @@ fn setup_live_profile_switch(
                 if target.has_pin {
                     profiles::verify_pin(&target_id, &pin, &limiter).await?;
                 }
-                let target_core_profile = core_env::load_profile_scope(target_id.as_str())
+                let loaded = core_env::load_profile_scope_resilient(target_id.as_str())
                     .await
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?
-                    .unwrap_or_default();
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                let target_core_profile = loaded.profile.unwrap_or_default();
+                let mut switch_vault_error = match loaded.recovery {
+                    core_env::ProfileVaultRecovery::AuthUnavailable(err) => Some(err),
+                    core_env::ProfileVaultRecovery::Complete => None,
+                };
                 profiles::set_active_profile(&target_id).await?;
                 core_env::set_active_profile_scope(target_id.as_str());
                 if let Err(error) =
                     secure_settings::activate_profile(target_id.as_str(), None).await
                 {
-                    core_env::set_active_profile_scope(previous_id.as_str());
-                    profiles::set_active_profile(&previous_id).await?;
-                    let _ = secure_settings::activate_profile(previous_id.as_str(), None).await;
-                    return Err(anyhow::anyhow!(error.to_string()));
+                    tracing::warn!(
+                        %error,
+                        profile_id = target_id.as_str(),
+                        "OS credential vault unavailable on profile switch; continuing in degraded mode"
+                    );
+                    if switch_vault_error.is_none() {
+                        switch_vault_error = Some(error);
+                    }
                 }
                 if let Err(error) = download_manager.pause_profile(previous_id.as_str()).await {
                     tracing::warn!(%error, "could not pause every previous-profile download");
                 }
                 let token = target_core_profile.auth_key().cloned();
-                Ok((previous_id, token, true))
+                Ok((previous_id, token, true, switch_vault_error))
             }
             .await;
             match result {
-                Ok((_previous_id, _token, false)) => {
+                Ok((_previous_id, _token, false, _vault_err)) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak.upgrade() {
                             ui.set_show_profile_picker(false);
@@ -1331,13 +1496,29 @@ fn setup_live_profile_switch(
                         }
                     });
                 }
-                Ok((_previous_id, token, true)) => {
+                Ok((_previous_id, token, true, switch_vault_error)) => {
                     let weak = ui_weak.clone();
                     let runtime_for_ui = runtime.clone();
                     let download_manager_for_ui = download_manager.clone();
                     let target_id_for_ui = target_id.clone();
+                    let had_token = token.is_some();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
+                            if let Some(vault_err) = switch_vault_error {
+                                let msg = error_messages::vault_fallback_banner(&vault_err, !had_token);
+                                ui.set_error_message(msg.into());
+                                if !had_token {
+                                    let label = if localization::is_spanish() {
+                                        "Reintentar llavero"
+                                    } else {
+                                        "Retry vault"
+                                    };
+                                    ui.set_error_action_label(label.into());
+                                }
+                            } else {
+                                ui.set_error_message("".into());
+                                ui.set_error_action_label("".into());
+                            }
                             if let Some(playback) = playback.as_ref() {
                                 playback.stop_for_profile_switch();
                             }
@@ -1396,7 +1577,7 @@ fn setup_live_profile_switch(
                     });
                 }
                 Err(error) => {
-                    let message = error.to_string();
+                    let message = error_messages::humanize_raw_error(&error.to_string(), false);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak.upgrade() {
                             ui.set_profile_picker_error(message.into());
@@ -1733,7 +1914,13 @@ async fn refresh_integration_projection(
                 )));
                 ui.set_integrations_status(status.unwrap_or_default().into());
             }
-            Err(error) => ui.set_integrations_status(error.to_string().into()),
+            Err(error) => {
+                let humanized = error_messages::humanize_raw_error(
+                    &error.to_string(),
+                    ui.get_app_offline(),
+                );
+                ui.set_integrations_status(humanized.into());
+            }
         }
     });
 }
@@ -1741,7 +1928,8 @@ async fn refresh_integration_projection(
 fn set_integrations_status(ui_weak: slint::Weak<MainWindow>, message: String) {
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = ui_weak.upgrade() {
-            ui.set_integrations_status(message.into());
+            let humanized = error_messages::humanize_raw_error(&message, ui.get_app_offline());
+            ui.set_integrations_status(humanized.into());
         }
     });
 }
@@ -2294,7 +2482,13 @@ async fn refresh_profile_projection(ui_weak: slint::Weak<MainWindow>, status: Op
                 ))));
                 ui.set_profile_manager_error(status.unwrap_or_default().into());
             }
-            Err(error) => ui.set_profile_manager_error(error.to_string().into()),
+            Err(error) => {
+                let humanized = error_messages::humanize_raw_error(
+                    &error.to_string(),
+                    ui.get_app_offline(),
+                );
+                ui.set_profile_manager_error(humanized.into());
+            }
         }
     });
 }
@@ -2302,7 +2496,8 @@ async fn refresh_profile_projection(ui_weak: slint::Weak<MainWindow>, status: Op
 fn set_profile_manager_error(ui_weak: slint::Weak<MainWindow>, message: String) {
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(ui) = ui_weak.upgrade() {
-            ui.set_profile_manager_error(message.into());
+            let humanized = error_messages::humanize_raw_error(&message, ui.get_app_offline());
+            ui.set_profile_manager_error(humanized.into());
         }
     });
 }
@@ -2417,23 +2612,32 @@ async fn select_startup_profile(
 ) -> anyhow::Result<(
     profiles::ProfileId,
     Option<stremio_core::types::profile::Profile>,
+    Option<credential_store::CredentialError>,
 )> {
     let initial_preflight = preflight_profile(&active_profile).await;
     let items = profile_items(&profiles);
     ui.set_local_profiles(slint::ModelRc::new(slint::VecModel::from(items)));
     ui.set_profile_picker_selected_id(active_profile.as_str().into());
-    if profiles.len() <= 1 && initial_preflight.is_ok() {
-        return Ok((active_profile, initial_preflight.ok().flatten()));
+    if profiles.len() <= 1
+        && let Ok(loaded) = initial_preflight
+    {
+        let vault_err = match loaded.recovery {
+            core_env::ProfileVaultRecovery::AuthUnavailable(err) => Some(err),
+            core_env::ProfileVaultRecovery::Complete => None,
+        };
+        return Ok((active_profile, loaded.profile, vault_err));
     }
 
-    ui.set_profile_picker_error(
-        initial_preflight
-            .as_ref()
-            .err()
-            .map(|error| error.to_string())
-            .unwrap_or_default()
-            .into(),
-    );
+    let initial_err = match &initial_preflight {
+        Err(error) => error_messages::humanize_raw_error(&error.to_string(), false),
+        Ok(loaded) => match &loaded.recovery {
+            core_env::ProfileVaultRecovery::AuthUnavailable(err) => {
+                error_messages::humanize_credential_error(err)
+            }
+            core_env::ProfileVaultRecovery::Complete => String::new(),
+        },
+    };
+    ui.set_profile_picker_error(initial_err.into());
     ui.set_show_profile_picker(true);
 
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
@@ -2456,19 +2660,22 @@ async fn select_startup_profile(
             continue;
         }
         match preflight_profile(&profile.id).await {
-            Ok(loaded_profile) => {
+            Ok(loaded) => {
                 profiles::set_active_profile(&profile.id)
                     .await
                     .context("could not persist the active local profile")?;
                 ui.set_profile_picker_error("".into());
                 ui.set_show_profile_picker(false);
-                return Ok((profile.id.clone(), loaded_profile));
+                let vault_err = match loaded.recovery {
+                    core_env::ProfileVaultRecovery::AuthUnavailable(err) => Some(err),
+                    core_env::ProfileVaultRecovery::Complete => None,
+                };
+                return Ok((profile.id.clone(), loaded.profile, vault_err));
             }
             Err(error) => {
                 core_env::set_active_profile_scope(active_profile.as_str());
-                ui.set_profile_picker_error(
-                    format!("{error}. Retry or select another profile.").into(),
-                );
+                let humanized = error_messages::humanize_raw_error(&error.to_string(), false);
+                ui.set_profile_picker_error(humanized.into());
             }
         }
     }
@@ -2497,9 +2704,9 @@ fn profile_items(profiles: &[profiles::LocalProfile]) -> Vec<ProfileItem> {
 
 async fn preflight_profile(
     profile_id: &profiles::ProfileId,
-) -> anyhow::Result<Option<stremio_core::types::profile::Profile>> {
+) -> anyhow::Result<core_env::LoadedProfileScope> {
     core_env::set_active_profile_scope(profile_id.as_str());
-    DesktopEnv::get_storage::<stremio_core::types::profile::Profile>(PROFILE_STORAGE_KEY)
+    core_env::load_profile_scope_resilient(profile_id.as_str())
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
@@ -2668,7 +2875,7 @@ pub(crate) fn sync_tab_from_model(
                 )
             });
             if let Some((continue_watching, board, addons)) = snapshot {
-                models::board::sync(ui, &continue_watching, &board, &addons, ui_weak, runtime);
+                models::board::sync(ui, &continue_watching, &board, &addons, ui_weak, runtime, None);
             }
         }
         Tab::Discover | Tab::Movies | Tab::Shows | Tab::Anime | Tab::Kids => {

@@ -114,7 +114,9 @@ export component DetailsPage inherits Rectangle {
     in-out property <string> download-modal-stream-name: "";
     in-out property <string> download-modal-stream-details: "";
     in-out property <string> download-modal-scope: "episode";
+    in-out property <bool> download-modal-replace-active: false;
     in-out property <string> pending-download-scope: "";
+    in-out property <bool> pending-download-replace: false;
     in property <bool> is-series: false;
     in property <[int]> available-seasons: [];
     in-out property <int> active-season: 1;
@@ -206,9 +208,11 @@ export component DetailsPage inherits Rectangle {
         triggered => {
             self.stop();
             root.download-modal-scope = root.pending-download-scope;
+            root.download-modal-replace-active = root.pending-download-replace;
             root.download-modal-selection-id = "";
             root.download-modal-open = true;
             root.pending-download-scope = "";
+            root.pending-download-replace = false;
         }
     }
 
@@ -221,6 +225,7 @@ export component DetailsPage inherits Rectangle {
         triggered => {
             self.stop();
             root.pending-download-scope = "";
+            root.pending-download-replace = false;
         }
     }
 
@@ -747,13 +752,16 @@ export component DetailsPage inherits Rectangle {
                     }
                 }
 
-                if (root.is-series) : PillButton {
-                    width: 15 * root.unit;
-                    unit: root.unit;
-                    label: @tr("SIDEBAR_SHOW_STREAMS" => "Show streams");
-                    clicked => {
-                        root.manual-episode-selected(root.manual-season, root.manual-episode);
-                        root.in-stream-view = true;
+                if (root.is-series) : HorizontalLayout {
+                    alignment: center;
+                    PillButton {
+                        width: 15 * root.unit;
+                        unit: root.unit;
+                        label: @tr("SIDEBAR_SHOW_STREAMS" => "Show streams");
+                        clicked => {
+                            root.manual-episode-selected(root.manual-season, root.manual-episode);
+                            root.in-stream-view = true;
+                        }
                     }
                 }
 
@@ -765,12 +773,15 @@ export component DetailsPage inherits Rectangle {
                     message: @tr("INSTALL_MORE_ADDONS" => "For more streams, please install more addons");
                 }
 
-                PillButton {
-                    width: 16 * root.unit;
-                    unit: root.unit;
-                    label: @tr("ADDON_CATALOGUE_MORE" => "Install more addons");
-                    outlined: true;
-                    clicked => { root.open-addons(); }
+                HorizontalLayout {
+                    alignment: center;
+                    PillButton {
+                        width: 16 * root.unit;
+                        unit: root.unit;
+                        label: @tr("ADDON_CATALOGUE_MORE" => "Install more addons");
+                        outlined: true;
+                        clicked => { root.open-addons(); }
+                    }
                 }
             }
 
@@ -824,6 +835,7 @@ export component DetailsPage inherits Rectangle {
                             root.download-modal-stream-name = stream.name;
                             root.download-modal-stream-details = stream.description;
                             root.download-modal-scope = root.is-series ? "episode" : "movie";
+                            root.download-modal-replace-active = false;
                             root.download-modal-open = true;
                         }
                         context-requested(x, y) => {
@@ -855,13 +867,15 @@ export component DetailsPage inherits Rectangle {
                     alignment: center;
 
                     // Indicador circular con centrado vertical explícito y pulso dinámico
-                    Rectangle {
-                        y: (parent.height - self.height) / 2;
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 4px;
-                        background: Theme.accent;
-                        opacity: 0.35 + 0.65 * abs(sin(animation-tick() / 700ms * 180deg));
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Theme.accent;
+                            opacity: 0.35 + 0.65 * abs(sin(animation-tick() / 700ms * 180deg));
+                        }
                     }
 
                     Text {
@@ -1016,19 +1030,22 @@ export component DetailsPage inherits Rectangle {
 
             Text {
                 horizontal-stretch: 1;
-                text: @tr("DETAILS_LOAD_FAILED" => "Could not load this title. Check your connection and try again.");
+                text: root.load-error;
                 color: Theme.primary-foreground;
                 font-size: 1.05 * root.unit;
                 wrap: word-wrap;
                 vertical-alignment: center;
             }
 
-            PillButton {
-                width: 7 * root.unit;
-                height: 2.75 * root.unit;
-                unit: root.unit;
-                label: @tr("RETRY" => "Retry");
-                clicked => { root.retry(); }
+            VerticalLayout {
+                alignment: center;
+                PillButton {
+                    width: 7 * root.unit;
+                    height: 2.75 * root.unit;
+                    unit: root.unit;
+                    label: @tr("RETRY" => "Retry");
+                    clicked => { root.retry(); }
+                }
             }
         }
     }
@@ -1060,17 +1077,23 @@ export component DetailsPage inherits Rectangle {
         z: 2000;
         unit: root.unit;
         open: root.download-modal-open;
-        title: root.is-series ? @tr("DOWNLOAD_DIALOG_TITLE" => "Descargar serie") : @tr("DOWNLOAD_MOVIE_TITLE" => "Descargar película");
+        title: root.download-modal-replace-active
+            ? (root.is-series ? @tr("CHANGE_DOWNLOAD_SOURCE_SERIES" => "Cambiar fuente de descarga") : @tr("CHANGE_DOWNLOAD_SOURCE_MOVIE" => "Cambiar fuente de película"))
+            : (root.is-series ? @tr("DOWNLOAD_DIALOG_TITLE" => "Descargar serie") : @tr("DOWNLOAD_MOVIE_TITLE" => "Descargar película"));
         dialog-width: 56 * root.unit;
-        dialog-height: 44 * root.unit;
-        close-requested => { root.download-modal-open = false; }
+        dialog-height: 46 * root.unit;
+        close-requested => {
+            root.download-modal-open = false;
+            root.download-modal-replace-active = false;
+        }
         actions: [
             { id: "cancel", label: @tr("CANCEL" => "Cancelar"), icon: @image-url("../assets/images/icons/close.svg"), has-icon: false, enabled: true, primary: false },
-            { id: "download", label: @tr("DOWNLOAD" => "Descargar"), icon: @image-url("../assets/images/icons/download.svg"), has-icon: false, enabled: root.streams.length > 0, primary: true },
+            { id: "download", label: root.download-modal-replace-active ? "Cambiar fuente" : @tr("DOWNLOAD" => "Descargar"), icon: @image-url("../assets/images/icons/download.svg"), has-icon: false, enabled: root.streams.length > 0, primary: true },
         ];
         action-triggered(action) => {
             if action == "cancel" {
                 root.download-modal-open = false;
+                root.download-modal-replace-active = false;
             } else if action == "download" && root.streams.length > 0 {
                 root.start-download(
                     root.download-modal-selection-id != "" ? root.download-modal-selection-id : root.streams[0].id,
@@ -1083,6 +1106,31 @@ export component DetailsPage inherits Rectangle {
 
         VerticalLayout {
             spacing: 0.8 * root.unit;
+
+            if (root.download-modal-replace-active) : Rectangle {
+                height: replace-hint-layout.preferred-height;
+                border-radius: Theme.border-radius;
+                background: #f59e0b.with-alpha(0.14);
+                border-width: 1px;
+                border-color: #f59e0b.with-alpha(0.38);
+
+                replace-hint-layout := HorizontalLayout {
+                    padding-left: 0.9 * root.unit;
+                    padding-right: 0.9 * root.unit;
+                    padding-top: 0.55 * root.unit;
+                    padding-bottom: 0.55 * root.unit;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.is-series
+                            ? "Se cancelará y reemplazará la descarga activa o pausada del alcance seleccionado, conservando los capítulos ya completados."
+                            : "Se cancelará la descarga actual de esta película y se iniciará con la nueva fuente elegida.";
+                        color: #fde68a;
+                        font-size: 0.82 * root.unit;
+                        wrap: word-wrap;
+                    }
+                }
+            }
 
             if (!root.is-series) : Rectangle {
                 height: 3.2 * root.unit;
@@ -1203,7 +1251,7 @@ export component DetailsPage inherits Rectangle {
             }
 
             sources-scroll := ScrollView {
-                height: 24 * root.unit;
+                height: 22 * root.unit;
                 viewport-width: self.visible-width;
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
 

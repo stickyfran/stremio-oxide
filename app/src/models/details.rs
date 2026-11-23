@@ -1106,18 +1106,33 @@ pub fn sync(
             _ => None,
         });
     let Some(meta_item) = ready_meta else {
-        let load_error =
-            meta_details
-                .meta_items
-                .iter()
-                .find_map(|resource| match &resource.content {
-                    Some(Loadable::Err(error)) => Some(error.to_string()),
-                    _ => None,
-                });
+        let load_error = meta_details
+            .meta_items
+            .iter()
+            .find_map(|resource| match &resource.content {
+                Some(Loadable::Err(error))
+                    if !matches!(
+                        error,
+                        stremio_core::models::common::ResourceError::EmptyContent
+                    ) =>
+                {
+                    Some(error)
+                }
+                _ => None,
+            });
         if let Some(error) = load_error {
+            if crate::error_messages::is_network_transport_error(&error.to_string()) {
+                crate::models::board::trigger_connectivity_check(
+                    _runtime.clone(),
+                    ui_weak.clone(),
+                    None,
+                );
+            }
+            let humanized =
+                crate::error_messages::humanize_resource_error(error, ui.get_app_offline());
             tracing::warn!(%selected_id, %error, "meta details failed to load");
             ui.set_details_loading(false);
-            ui.set_detail_load_error(error.into());
+            ui.set_detail_load_error(humanized.into());
         } else {
             // If every meta item finished loading (or failed) without a match,
             // release the loading lock so the details view cannot spin forever.

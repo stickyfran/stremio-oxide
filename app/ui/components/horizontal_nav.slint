@@ -121,11 +121,11 @@ export component HorizontalNavBar inherits Rectangle {
 
     buttons := Rectangle {
         x: parent.width - self.width - root.unit;
-        y: 0px;
+        y: (parent.height - self.height) / 2;
         width: (root.show-hdr ? 4 * root.unit : 0px)
             + (root.show-fullscreen && !root.compact ? 4 * root.unit : 0px)
             + (root.show-profile ? 3.5 * root.unit : 0px);
-        height: parent.height;
+        height: 3.5 * root.unit;
         background: transparent;
 
         HorizontalLayout {

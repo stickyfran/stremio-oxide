@@ -218,6 +218,32 @@ pub fn setup(
         }
     });
 
+    ui.on_discover_retry({
+        let runtime = runtime.clone();
+        let ui_weak = ui_weak.clone();
+        move || {
+            let selected = runtime
+                .model()
+                .ok()
+                .and_then(|model| model.discover.selected.clone());
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_discover_load_error("".into());
+                ui.set_loading(true);
+            }
+            if let Some(selected) = selected {
+                runtime.dispatch(RuntimeAction {
+                    field: Some(AppModelField::Discover),
+                    action: Action::Load(ActionLoad::CatalogWithFilters(Some(selected))),
+                });
+            } else {
+                runtime.dispatch(RuntimeAction {
+                    field: Some(AppModelField::Discover),
+                    action: Action::Load(ActionLoad::CatalogWithFilters(None)),
+                });
+            }
+        }
+    });
+
     ui.on_discover_install_selected_addon({
         let runtime = runtime.clone();
         move || {
@@ -474,6 +500,38 @@ pub fn sync(
             .flatten()
             .collect()
     };
+
+    let catalog_error = discover.catalog.iter().find_map(|page| match &page.content {
+        Some(Loadable::Err(error))
+            if !matches!(
+                error,
+                stremio_core::models::common::ResourceError::EmptyContent
+            ) =>
+        {
+            Some(error)
+        }
+        _ => None,
+    });
+    if raw_items.is_empty()
+        && let Some(error) = catalog_error
+    {
+        if crate::error_messages::is_network_transport_error(&error.to_string()) {
+            let extra = discover
+                .selected
+                .as_ref()
+                .map(|selected| selected.request.base.to_string());
+            crate::models::board::trigger_connectivity_check(
+                runtime.clone(),
+                ui_weak.clone(),
+                extra,
+            );
+        }
+        let message =
+            crate::error_messages::humanize_resource_error(error, ui.get_app_offline());
+        ui.set_discover_load_error(message.into());
+    } else {
+        ui.set_discover_load_error("".into());
+    }
 
     let metrics = crate::models::media_grid_metrics(ui);
     // The official Discover route reserves a fixed 29rem metadata preview on

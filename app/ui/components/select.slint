@@ -210,11 +210,14 @@ export component SelectField inherits Rectangle {
                                 overflow: elide;
                             }
 
-                            if (option == root.value) : Rectangle {
-                                width: 0.5 * root.unit;
-                                height: 0.5 * root.unit;
-                                border-radius: self.width / 2;
-                                background: Theme.secondary-accent;
+                            if (option == root.value) : VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 0.5 * root.unit;
+                                    height: 0.5 * root.unit;
+                                    border-radius: self.width / 2;
+                                    background: Theme.secondary-accent;
+                                }
                             }
                         }
                     }
@@ -356,11 +359,14 @@ export component SeasonSelectField inherits Rectangle {
                             overflow: elide;
                         }
 
-                        if (option == root.value) : Rectangle {
-                            width: 0.5 * root.unit;
-                            height: 0.5 * root.unit;
-                            border-radius: self.width / 2;
-                            background: Theme.secondary-accent;
+                        if (option == root.value) : VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 0.5 * root.unit;
+                                height: 0.5 * root.unit;
+                                border-radius: self.width / 2;
+                                background: Theme.secondary-accent;
+                            }
                         }
                     }
                 }

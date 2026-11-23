@@ -292,13 +292,15 @@ component CycleSelect inherits ButtonSurface {
             font-weight: 600;
             vertical-alignment: center;
         }
-        Image {
-            y: (parent.height - self.height) / 2;
-            width: 0.75 * root.unit;
-            height: 0.75 * root.unit;
-            source: @image-url("../assets/images/icons/chevron-down.svg");
-            colorize: Theme.text-secondary;
-            image-fit: contain;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 0.75 * root.unit;
+                height: 0.75 * root.unit;
+                source: @image-url("../assets/images/icons/chevron-down.svg");
+                colorize: Theme.text-secondary;
+                image-fit: contain;
+            }
         }
     }
 }
@@ -315,13 +317,15 @@ component AddButton inherits ButtonSurface {
         spacing: 0.25 * root.unit;
         alignment: end;
 
-        Image {
-            y: (parent.height - self.height) / 2;
-            width: 0.85 * root.unit;
-            height: 0.85 * root.unit;
-            source: @image-url("../assets/images/icons/add.svg");
-            colorize: root.enabled ? Theme.primary-accent : Theme.text-muted;
-            image-fit: contain;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 0.85 * root.unit;
+                height: 0.85 * root.unit;
+                source: @image-url("../assets/images/icons/add.svg");
+                colorize: root.enabled ? Theme.primary-accent : Theme.text-muted;
+                image-fit: contain;
+            }
         }
         Text {
             text: root.label;
@@ -446,12 +450,14 @@ component ColorValueRow inherits HorizontalLayout {
             padding-left: 0.6 * root.unit;
             spacing: 0.5 * root.unit;
 
-            ColorChip {
-                y: (parent.height - self.height) / 2;
-                width: 1.15 * root.unit;
-                height: 1.15 * root.unit;
-                border-radius: self.width / 2;
-                value: root.value;
+            VerticalLayout {
+                alignment: center;
+                ColorChip {
+                    width: 1.15 * root.unit;
+                    height: 1.15 * root.unit;
+                    border-radius: self.width / 2;
+                    value: root.value;
+                }
             }
 
             EditableField {
@@ -553,18 +559,20 @@ component GradientStopRow inherits HorizontalLayout {
             padding-left: 0.55 * root.unit;
             spacing: 0.45 * root.unit;
 
-            SwatchButton {
-                y: (parent.height - self.height) / 2;
-                unit: root.unit;
-                width: 1.15 * root.unit;
-                height: 1.15 * root.unit;
-                accessible-name: @tr("Edit stop colour");
-                clicked => { root.select(); }
-                ColorChip {
-                    width: 100%;
-                    height: 100%;
-                    border-radius: parent.border-radius;
-                    value: root.stop.color;
+            VerticalLayout {
+                alignment: center;
+                SwatchButton {
+                    unit: root.unit;
+                    width: 1.15 * root.unit;
+                    height: 1.15 * root.unit;
+                    accessible-name: @tr("Edit stop colour");
+                    clicked => { root.select(); }
+                    ColorChip {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: parent.border-radius;
+                        value: root.stop.color;
+                    }
                 }
             }
 
@@ -599,17 +607,19 @@ component GradientStopRow inherits HorizontalLayout {
         }
     }
 
-    IconButton {
-        unit: root.unit;
-        width: 2.2 * root.unit;
-        height: 2.2 * root.unit;
-        y: (parent.height - self.height) / 2;
-        outlined: false;
-        enabled: root.removable;
-        icon: @image-url("../assets/images/icons/remove.svg");
-        icon-color: root.removable ? Theme.text-secondary : Theme.text-muted;
-        accessible-name: @tr("Remove stop");
-        clicked => { root.removed(); }
+    VerticalLayout {
+        alignment: center;
+        IconButton {
+            unit: root.unit;
+            width: 2.2 * root.unit;
+            height: 2.2 * root.unit;
+            outlined: false;
+            enabled: root.removable;
+            icon: @image-url("../assets/images/icons/remove.svg");
+            icon-color: root.removable ? Theme.text-secondary : Theme.text-muted;
+            accessible-name: @tr("Remove stop");
+            clicked => { root.removed(); }
+        }
     }
 }
 

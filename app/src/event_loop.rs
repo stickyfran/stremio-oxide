@@ -393,6 +393,7 @@ pub fn start_event_loop(
     native_playback_bridge: Option<NativePlaybackBridge>,
     navigation: NavigationController,
     discord_rpc: Arc<crate::discord::DiscordRpc>,
+    server_readiness: crate::server_readiness::ServerReadiness,
 ) {
     tokio::spawn(async move {
         // Never drop the runtime receiver. Aborting this task during shutdown
@@ -426,7 +427,7 @@ pub fn start_event_loop(
                                 }
                             }
                             Ok(RuntimeEvent::CoreEvent(event)) => {
-                                handle_core_event(event, &ui_weak);
+                                handle_core_event(event, &runtime, &ui_weak);
                             }
                             Err(_) => break,
                         }
@@ -649,6 +650,33 @@ pub fn start_event_loop(
                     let player_sync_needed = fields.contains(&AppModelField::Player);
                     let streaming_stats_sync_needed =
                         first_render || fields.contains(&AppModelField::StreamingServer);
+                    let server_warning_update = (first_render
+                        || fields.contains(&AppModelField::StreamingServer)
+                        || fields.contains(&AppModelField::Ctx))
+                    .then(|| models::board::should_show_server_warning(&model, &server_readiness));
+                    let should_auto_reload_server = if fields
+                        .contains(&AppModelField::StreamingServer)
+                    {
+                        match &model.streaming_server.settings {
+                            Loadable::Ready(_) => {
+                                models::board::reset_server_settings_auto_retry();
+                                false
+                            }
+                            Loadable::Err(_) => {
+                                server_readiness.is_ready()
+                                    && model
+                                        .streaming_server
+                                        .selected
+                                        .transport_url
+                                        .as_str()
+                                        .trim_end_matches('/')
+                                        == server_readiness.current_url().trim_end_matches('/')
+                            }
+                            Loadable::Loading => false,
+                        }
+                    } else {
+                        false
+                    };
 
                     if first_render {
                         first_render = false;
@@ -836,6 +864,21 @@ pub fn start_event_loop(
                     let playback_selections_for_sync = playback_selections.clone();
                     let last_stream_fingerprint_clone = last_stream_fingerprint.clone();
                     let last_details_id_clone = last_details_id.clone();
+                    let server_readiness_for_sync = server_readiness.clone();
+                    if should_auto_reload_server
+                        && models::board::note_server_settings_auto_retry() <= 2
+                    {
+                        let rt_reload = runtime.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            rt_reload.dispatch(RuntimeAction {
+                                field: Some(AppModelField::StreamingServer),
+                                action: Action::StreamingServer(
+                                    stremio_core::runtime::msg::ActionStreamingServer::Reload,
+                                ),
+                            });
+                        });
+                    }
 
                     #[cfg(debug_assertions)]
                     let dispatch_queued = std::time::Instant::now();
@@ -930,6 +973,9 @@ pub fn start_event_loop(
                                 }
                             }
 
+                            if let Some(show_warning) = server_warning_update {
+                                ui.set_board_show_server_warning(show_warning);
+                            }
                             if board_sync_needed
                                 || discover_sync_needed
                                 || library_sync_needed
@@ -1108,6 +1154,7 @@ pub fn start_event_loop(
                                         ads,
                                         &ui_weak_for_sync,
                                         &runtime_for_sync,
+                                        Some(&server_readiness_for_sync),
                                     );
                                 }
                             } else if discover_tab && discover_sync_needed {
@@ -1227,22 +1274,37 @@ pub fn start_event_loop(
                         "core state projected and queued"
                     );
                 }
-                RuntimeEvent::CoreEvent(event) => handle_core_event(event, &ui_weak),
+                RuntimeEvent::CoreEvent(event) => handle_core_event(event, &runtime, &ui_weak),
             }
         }
     });
 }
 
-fn handle_core_event(event: Event, ui_weak: &slint::Weak<MainWindow>) {
-    if let Event::Error { error, .. } = &event {
-        tracing::warn!("core error event received");
+fn handle_core_event(
+    event: Event,
+    runtime: &Arc<Runtime<DesktopEnv, AppModel>>,
+    ui_weak: &slint::Weak<MainWindow>,
+) {
+    if let Event::Error { error, source } = &event {
+        tracing::warn!(?error, "core error event received");
+        if let stremio_core::models::ctx::CtxError::Env(env_error) = error
+            && crate::error_messages::is_network_transport_error(&env_error.message())
+        {
+            models::board::trigger_connectivity_check(runtime.clone(), ui_weak.clone(), None);
+        }
         let ui_weak = ui_weak.clone();
-        let message = format!("{error:?}");
+        let error = error.clone();
+        let source = source.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui_weak.upgrade() {
-                ui.set_error_message(message.into());
                 ui.set_loading(false);
                 ui.set_details_loading(false);
+                if let Some(message) =
+                    crate::error_messages::humanize_core_error(&error, &source, ui.get_app_offline())
+                {
+                    ui.set_error_message(message.into());
+                    ui.set_error_action_label("".into());
+                }
             }
         });
     } else {

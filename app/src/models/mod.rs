@@ -338,7 +338,11 @@ pub(crate) fn project_catalog_section(
         None | Some(Loadable::Loading) => (true, String::new(), false),
         Some(Loadable::Ready(_)) => (false, String::new(), true),
         Some(Loadable::Err(ResourceError::EmptyContent)) => return None,
-        Some(Loadable::Err(error)) => (false, error.to_string(), false),
+        Some(Loadable::Err(error)) => (
+            false,
+            crate::error_messages::humanize_resource_error(error, false),
+            false,
+        ),
     };
 
     let mut cards = Vec::with_capacity(CATALOG_PREVIEW_SIZE);

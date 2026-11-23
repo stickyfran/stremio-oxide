@@ -291,13 +291,23 @@ pub fn setup(
                             }
                             Err(e) => {
                                 tracing::error!("Failed to fetch manifest: {:?}", e);
+                                let raw_err = format!("{e:?}");
+                                if crate::error_messages::is_network_transport_error(&raw_err) {
+                                    crate::models::board::trigger_connectivity_check(
+                                        rt.clone(),
+                                        ui_weak.clone(),
+                                        None,
+                                    );
+                                }
                                 let ui_weak = ui_weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(ui) = ui_weak.upgrade() {
                                         ui.set_loading(false);
-                                        ui.set_error_message(
-                                            format!("Failed to fetch manifest: {:?}", e).into(),
+                                        let msg = crate::error_messages::humanize_raw_error(
+                                            &raw_err,
+                                            ui.get_app_offline(),
                                         );
+                                        ui.set_error_message(msg.into());
                                     }
                                 });
                             }
@@ -309,7 +319,12 @@ pub fn setup(
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_weak.upgrade() {
                                 ui.set_loading(false);
-                                ui.set_error_message("Invalid URL format".into());
+                                let msg = if crate::localization::is_spanish() {
+                                    "La URL del addon no es válida."
+                                } else {
+                                    "Invalid addon URL format."
+                                };
+                                ui.set_error_message(msg.into());
                             }
                         });
                     }
@@ -580,7 +595,10 @@ pub fn sync_details(ui: &MainWindow, details: &AddonDetails, ui_weak: &slint::We
             Loadable::Err(load_error) => {
                 loading = false;
                 if descriptor.is_none() {
-                    error = format!("Failed to load addon manifest: {load_error:?}");
+                    error = crate::error_messages::humanize_env_error(
+                        load_error,
+                        ui.get_app_offline(),
+                    );
                 }
             }
         }

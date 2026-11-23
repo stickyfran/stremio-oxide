@@ -46,32 +46,41 @@ component StreamingServerWarning inherits Rectangle {
             overflow: elide;
         }
 
-        PillButton {
-            width: 7 * root.unit;
-            height: 3 * root.unit;
-            unit: root.unit;
-            label: @tr("Install");
-            surface-color: Theme.background.with-alpha(0.28);
-            hover-color: Theme.background.with-alpha(0.45);
-            clicked => { root.dismiss(); }
+        VerticalLayout {
+            alignment: center;
+            PillButton {
+                width: 8.5 * root.unit;
+                height: 3 * root.unit;
+                unit: root.unit;
+                label: @tr("RETRY" => "Retry");
+                surface-color: Theme.background.with-alpha(0.28);
+                hover-color: Theme.background.with-alpha(0.45);
+                clicked => { root.reload(); }
+            }
         }
-        PillButton {
-            width: 7 * root.unit;
-            height: 3 * root.unit;
-            unit: root.unit;
-            label: @tr("Later");
-            surface-color: Theme.background.with-alpha(0.28);
-            hover-color: Theme.background.with-alpha(0.45);
-            clicked => { root.reload(); }
+        VerticalLayout {
+            alignment: center;
+            PillButton {
+                width: 10.5 * root.unit;
+                height: 3 * root.unit;
+                unit: root.unit;
+                label: @tr("SERVER_WARNING_SETTINGS" => "Settings");
+                surface-color: Theme.background.with-alpha(0.28);
+                hover-color: Theme.background.with-alpha(0.45);
+                clicked => { root.open-settings(); }
+            }
         }
-        PillButton {
-            width: 13 * root.unit;
-            height: 3 * root.unit;
-            unit: root.unit;
-            label: @tr("Don't show again");
-            surface-color: Theme.background.with-alpha(0.28);
-            hover-color: Theme.background.with-alpha(0.45);
-            clicked => { root.open-settings(); }
+        VerticalLayout {
+            alignment: center;
+            PillButton {
+                width: 8 * root.unit;
+                height: 3 * root.unit;
+                unit: root.unit;
+                label: @tr("SERVER_WARNING_HIDE" => "Dismiss");
+                surface-color: Theme.background.with-alpha(0.28);
+                hover-color: Theme.background.with-alpha(0.45);
+                clicked => { root.dismiss(); }
+            }
         }
     }
 }
@@ -277,12 +286,15 @@ export component BoardPage inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            PillButton {
-                width: 7 * root.unit;
-                height: 2.5 * root.unit;
-                unit: root.unit;
-                label: @tr("RETRY" => "Retry");
-                clicked => { root.retry(); }
+            VerticalLayout {
+                alignment: center;
+                PillButton {
+                    width: 7 * root.unit;
+                    height: 2.5 * root.unit;
+                    unit: root.unit;
+                    label: @tr("RETRY" => "Retry");
+                    clicked => { root.retry(); }
+                }
             }
         }
     }

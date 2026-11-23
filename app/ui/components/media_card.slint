@@ -350,12 +350,15 @@ export component MediaCard inherits Rectangle {
                 spacing: 0.05 * root.unit;
                 alignment: center;
 
-                Image {
-                    width: 0.8 * root.unit;
-                    height: 0.8 * root.unit;
-                    source: @image-url("../assets/images/icons/add.svg");
-                    colorize: Theme.primary-accent;
-                    image-fit: contain;
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        width: 0.8 * root.unit;
+                        height: 0.8 * root.unit;
+                        source: @image-url("../assets/images/icons/add.svg");
+                        colorize: Theme.primary-accent;
+                        image-fit: contain;
+                    }
                 }
                 Text {
                     text: root.item.new-videos > 0 ? root.item.new-videos : root.new-videos;

@@ -195,16 +195,18 @@ export component TrailerHoverPopup inherits Rectangle {
                                 alignment: center;
                                 spacing: 0.5 * root.unit;
 
-                                for index in 3 : Rectangle {
-                                    width: 0.6 * root.unit;
-                                    height: 0.6 * root.unit;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: self.width / 2;
-                                    background: #ff0000;
-                                    opacity: root.loading
-                                        ? (root.pulse-tick == index ? 0.95 : 0.25)
-                                        : 0;
-                                    animate opacity { duration: Theme.motion-control; }
+                                for index in 3 : VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 0.6 * root.unit;
+                                        height: 0.6 * root.unit;
+                                        border-radius: self.width / 2;
+                                        background: #ff0000;
+                                        opacity: root.loading
+                                            ? (root.pulse-tick == index ? 0.95 : 0.25)
+                                            : 0;
+                                        animate opacity { duration: Theme.motion-control; }
+                                    }
                                 }
                             }
                         }
@@ -498,13 +500,15 @@ export component TrailerHoverPopup inherits Rectangle {
                         if (root.rating != "") : HorizontalLayout {
                             spacing: 0.25 * root.unit;
 
-                            Image {
-                                width: 0.9 * root.unit;
-                                height: 0.9 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                source: @image-url("../assets/images/icons/imdb.svg");
-                                colorize: Theme.imdb;
-                                image-fit: contain;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 0.9 * root.unit;
+                                    height: 0.9 * root.unit;
+                                    source: @image-url("../assets/images/icons/imdb.svg");
+                                    colorize: Theme.imdb;
+                                    image-fit: contain;
+                                }
                             }
                             Text {
                                 text: root.rating;

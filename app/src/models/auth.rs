@@ -79,7 +79,12 @@ pub fn setup(ui: &MainWindow, runtime: &Arc<Runtime<DesktopEnv, AppModel>>) {
         move |email, password| {
             if !is_valid_email(email.as_str()) {
                 if let Some(ui) = ui_weak.upgrade() {
-                    ui.set_error_message("Please enter a valid email address".into());
+                    let msg = if crate::localization::is_spanish() {
+                        "Ingresá un correo electrónico válido."
+                    } else {
+                        "Please enter a valid email address"
+                    };
+                    ui.set_error_message(msg.into());
                 }
                 return;
             }
@@ -110,7 +115,12 @@ pub fn setup(ui: &MainWindow, runtime: &Arc<Runtime<DesktopEnv, AppModel>>) {
         move |email, password, tos, privacy, marketing| {
             if !is_valid_email(email.as_str()) {
                 if let Some(ui) = ui_weak.upgrade() {
-                    ui.set_error_message("Please enter a valid email address".into());
+                    let msg = if crate::localization::is_spanish() {
+                        "Ingresá un correo electrónico válido."
+                    } else {
+                        "Please enter a valid email address"
+                    };
+                    ui.set_error_message(msg.into());
                 }
                 return;
             }
@@ -312,6 +322,7 @@ pub fn setup(ui: &MainWindow, runtime: &Arc<Runtime<DesktopEnv, AppModel>>) {
             let rt = runtime.clone();
             let ui_weak = ui_weak.clone();
             tokio::spawn(async move {
+                core_env::clear_degraded_auth_profile(&core_env::active_profile_scope());
                 rt.dispatch(RuntimeAction {
                     field: None,
                     action: Action::Ctx(ActionCtx::Logout),

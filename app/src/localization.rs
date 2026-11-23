@@ -1,12 +1,42 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{LazyLock, RwLock},
+};
 
 use chrono::{DateTime, Datelike, Utc};
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
 use unic_langid::LanguageIdentifier;
 
 const ENGLISH: &str = include_str!("../i18n/en.ftl");
+const SPANISH: &str = include_str!("../i18n/es.ftl");
 const PORTUGUESE: &str = include_str!("../i18n/pt.ftl");
 const ARABIC: &str = include_str!("../i18n/ar.ftl");
+
+static ACTIVE_LOCALE: LazyLock<RwLock<String>> = LazyLock::new(|| {
+    let initial = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
+    RwLock::new(initial)
+});
+
+pub fn set_active_locale(locale: &str) {
+    let trimmed = locale.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    *ACTIVE_LOCALE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = trimmed.to_owned();
+}
+
+pub fn active_locale() -> String {
+    ACTIVE_LOCALE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+pub fn is_spanish() -> bool {
+    active_locale().to_ascii_lowercase().starts_with("es")
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MessageKey {
@@ -76,6 +106,7 @@ impl Localizer {
         let fallback_locale: LanguageIdentifier = "en-US".parse().expect("valid locale");
         let locale: LanguageIdentifier = locale.parse().unwrap_or_else(|_| fallback_locale.clone());
         let (resource, supported_locale) = match locale.language.as_str() {
+            "es" => (SPANISH, "es-ES"),
             "pt" => (PORTUGUESE, "pt-BR"),
             "ar" => (ARABIC, "ar"),
             _ => (ENGLISH, "en-US"),
@@ -110,7 +141,7 @@ impl Localizer {
     pub fn format_number(&self, value: i64) -> String {
         let negative = value.is_negative();
         let digits = value.unsigned_abs().to_string();
-        let separator = if self.locale.language.as_str() == "pt" {
+        let separator = if matches!(self.locale.language.as_str(), "pt" | "es") {
             '.'
         } else {
             ','
@@ -135,8 +166,9 @@ impl Localizer {
 
     pub fn format_date(&self, value: DateTime<Utc>) -> String {
         let formatted = match self.locale.language.as_str() {
-            "pt" => format!("{:02}/{:02}/{}", value.day(), value.month(), value.year()),
-            "ar" => format!("{:02}/{:02}/{}", value.day(), value.month(), value.year()),
+            "es" | "pt" | "ar" => {
+                format!("{:02}/{:02}/{}", value.day(), value.month(), value.year())
+            }
             _ => format!("{:02}/{:02}/{}", value.month(), value.day(), value.year()),
         };
         if self.locale.language.as_str() == "ar" {

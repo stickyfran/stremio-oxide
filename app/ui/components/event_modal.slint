@@ -65,11 +65,14 @@ export component EventModal inherits Rectangle {
             spacing: 1.25 * root.unit;
             alignment: center;
 
-            if (root.artwork.width > 0) : Image {
-                width: min(30 * root.unit, parent.width);
-                height: 20 * root.unit;
-                source: root.artwork;
-                image-fit: contain;
+            if (root.artwork.width > 0) : HorizontalLayout {
+                alignment: center;
+                Image {
+                    width: min(30 * root.unit, parent.width);
+                    height: 20 * root.unit;
+                    source: root.artwork;
+                    image-fit: contain;
+                }
             }
 
             Text {
@@ -95,12 +98,15 @@ export component EventModal inherits Rectangle {
             if (root.addon-name != "") : VerticalLayout {
                 spacing: 0.5 * root.unit;
                 alignment: center;
-                Image {
-                    width: 2 * root.unit;
-                    height: 2 * root.unit;
-                    source: @image-url("../assets/images/icons/addons.svg");
-                    colorize: Theme.primary-accent;
-                    image-fit: contain;
+                HorizontalLayout {
+                    alignment: center;
+                    Image {
+                        width: 2 * root.unit;
+                        height: 2 * root.unit;
+                        source: @image-url("../assets/images/icons/addons.svg");
+                        colorize: Theme.primary-accent;
+                        image-fit: contain;
+                    }
                 }
                 Text {
                     text: root.addon-name;
@@ -110,27 +116,36 @@ export component EventModal inherits Rectangle {
                 }
             }
 
-            if (root.addon-manifest-url != "" || root.external-url != "") : ButtonSurface {
-                height: 3.5 * root.unit;
-                min-width: 10 * root.unit;
-                border-radius: self.height / 2;
-                background: self.has-hover ? transparent : Theme.primary-foreground;
-                border-width: 2px;
-                border-color: Theme.primary-foreground;
-                accessible-name: root.addon-manifest-url != "" ? @tr("INSTALL_ADDON") : @tr("LEARN_MORE");
-                clicked => {
-                    root.action-requested(
-                        root.event-id,
-                        root.addon-manifest-url != "" ? root.addon-manifest-url : root.external-url
-                    );
-                }
-                Text {
-                    text: root.addon-manifest-url != "" ? @tr("INSTALL_ADDON") : @tr("LEARN_MORE");
-                    color: Theme.primary-accent;
-                    font-size: root.unit;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+            if (root.addon-manifest-url != "" || root.external-url != "") : HorizontalLayout {
+                alignment: center;
+                ButtonSurface {
+                    height: 3.5 * root.unit;
+                    min-width: 10 * root.unit;
+                    preferred-width: max(10 * root.unit, action-label.preferred-width + 3 * root.unit);
+                    border-radius: self.height / 2;
+                    background: self.has-hover ? transparent : Theme.primary-foreground;
+                    border-width: 2px;
+                    border-color: Theme.primary-foreground;
+                    accessible-name: root.addon-manifest-url != "" ? @tr("INSTALL_ADDON") : @tr("LEARN_MORE");
+                    clicked => {
+                        root.action-requested(
+                            root.event-id,
+                            root.addon-manifest-url != "" ? root.addon-manifest-url : root.external-url
+                        );
+                    }
+                    HorizontalLayout {
+                        padding-left: 1.5 * root.unit;
+                        padding-right: 1.5 * root.unit;
+                        alignment: center;
+                        action-label := Text {
+                            text: root.addon-manifest-url != "" ? @tr("INSTALL_ADDON") : @tr("LEARN_MORE");
+                            color: Theme.primary-accent;
+                            font-size: root.unit;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
         }

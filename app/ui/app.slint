@@ -392,6 +392,10 @@ export component MainWindow inherits Window {
     in property <image> anonymous-icon: @image-url("assets/images/anonymous.png");
     in-out property <bool> loading: false;
     in-out property <string> error-message: "";
+    in-out property <string> error-action-label: "";
+    in-out property <bool> app-offline: false;
+    callback app-retry-connection();
+    callback error-action-clicked();
 
     // Plugin system
     in-out property <[PluginAction]> plugin-actions: [];
@@ -417,6 +421,9 @@ export component MainWindow inherits Window {
     in-out property <[DiscoverRow]> discover-rows: [];
     in-out property <int> discover-column-count: 6;
     in-out property <bool> discover-has-next-page: false;
+    in-out property <string> discover-load-error: "";
+    in-out property <int> settings-scroll-target-category: -1;
+    callback discover-retry();
     in-out property <[LibraryRow]> library-rows: [];
     in-out property <[LibraryRow]> local-library-rows: [];
     in-out property <string> local-library-root-path: "";
@@ -706,6 +713,8 @@ export component MainWindow inherits Window {
     in-out property <[string]> detail-episode-names: [];
     in-out property <int> detail-active-episode-idx: 0;
     in-out property <string> detail-pending-download-scope: "";
+    in-out property <bool> detail-pending-download-replace: false;
+    in-out property <bool> detail-download-replace-active: false;
     in-out property <bool> detail-is-in-library: false;
     in-out property <bool> detail-notifications-enabled: true;
     in-out property <image> detail-background;
@@ -1165,7 +1174,7 @@ export component MainWindow inherits Window {
     callback downloads-open-folder();
     callback downloads-refresh();
     callback downloads-refresh-silent();
-    callback downloads-request-download-episode(string, int, int);
+    callback downloads-request-download-episode(string, int, int, bool);
     callback onboarding-completed();
     callback play-url-magnet-from-clipboard();
 
@@ -1632,31 +1641,33 @@ export component MainWindow inherits Window {
                             spacing: root.ui-unit;
                             alignment: start;
 
-                            Rectangle {
-                                width: 4 * root.ui-unit;
-                                height: 4 * root.ui-unit;
-                                border-radius: self.width / 2;
-                                background: Theme.text-primary;
-                                clip: true;
-                                y: (parent.height - self.height) / 2;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 4 * root.ui-unit;
+                                    height: 4 * root.ui-unit;
+                                    border-radius: self.width / 2;
+                                    background: Theme.text-primary;
+                                    clip: true;
 
-                                if (username == "" || username == "Guest") : Image {
-                                    source: anonymous-icon;
-                                    width: parent.width;
-                                    height: parent.height;
-                                    image-fit: cover;
-                                }
-                                if (username != "" && username != "Guest" && has-avatar-image && avatar-image.width > 0) : Image {
-                                    source: avatar-image;
-                                    width: parent.width;
-                                    height: parent.height;
-                                    image-fit: cover;
-                                }
-                                if (username != "" && username != "Guest" && (!has-avatar-image || avatar-image.width <= 0)) : Image {
-                                    source: default-avatar-icon;
-                                    width: parent.width;
-                                    height: parent.height;
-                                    image-fit: cover;
+                                    if (username == "" || username == "Guest") : Image {
+                                        source: anonymous-icon;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
+                                    }
+                                    if (username != "" && username != "Guest" && has-avatar-image && avatar-image.width > 0) : Image {
+                                        source: avatar-image;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
+                                    }
+                                    if (username != "" && username != "Guest" && (!has-avatar-image || avatar-image.width <= 0)) : Image {
+                                        source: default-avatar-icon;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
+                                    }
                                 }
                             }
 
@@ -1847,7 +1858,7 @@ export component MainWindow inherits Window {
                             : root.board-loading;
                         show-server-warning: root.board-show-server-warning;
                         has-errors: root.board-has-errors;
-                        offline: root.board-offline;
+                        offline: false;
                         retry => { board-retry(); }
                         item-selected(id, media-type, video-id) => {
                             board-item-selected(id, media-type, video-id);
@@ -1890,6 +1901,7 @@ export component MainWindow inherits Window {
                             ? [] : discover-rows;
                         column-count: discover-column-count;
                         has-next-page: discover-has-next-page;
+                        load-error: root.discover-load-error;
                         loading: root.debug-preview-enabled && root.debug-preview-page == 1
                             ? root.debug-preview-state == "loading"
                             : loading;
@@ -1980,6 +1992,7 @@ export component MainWindow inherits Window {
                         extra-changed(name, value) => { discover-extra-changed(name, value); }
                         install-selected-addon => { discover-install-selected-addon(); }
                         metadata-filter-selected(value) => { discover-metadata-filter-selected(value); }
+                        retry => { discover-retry(); }
                         poster-requested(url) => { request-poster(url); }
                         play-preview => { play-preview(); }
                         toggle-library-preview => { toggle-library-preview(); }
@@ -2174,6 +2187,7 @@ export component MainWindow inherits Window {
                                 root.settings-active-category = self.active-category;
                             }
                         }
+                        scroll-target-category <=> root.settings-scroll-target-category;
                         torrent-cache-size: torrent-cache-size;
                         server-url: server-url;
                         interface-language: settings-interface-language;
@@ -2447,7 +2461,7 @@ export component MainWindow inherits Window {
                         open-downloads-folder => { root.downloads-open-folder(); }
                         retry => { root.downloads-refresh(); }
                         dismiss-error => { root.downloads-error = ""; }
-                        request-download-episode(meta-id, season, episode) => { root.downloads-request-download-episode(meta-id, season, episode); }
+                        request-download-episode(meta-id, season, episode, replace-active) => { root.downloads-request-download-episode(meta-id, season, episode, replace-active); }
                     }
                 }
             }
@@ -2634,6 +2648,8 @@ export component MainWindow inherits Window {
             episode-names: detail-episode-names;
             active-episode-idx <=> root.detail-active-episode-idx;
             pending-download-scope <=> root.detail-pending-download-scope;
+            pending-download-replace <=> root.detail-pending-download-replace;
+            download-modal-replace-active <=> root.detail-download-replace-active;
             episodes: detail-episodes;
             in-stream-view: root.debug-preview-enabled && root.debug-preview-page == 7
                 ? (root.debug-preview-state == "series-streams"
@@ -3677,11 +3693,14 @@ export component MainWindow inherits Window {
                 alignment: center;
 
                 // Status indicator dot
-                Rectangle {
-                    width: 0.65 * root.ui-unit;
-                    height: 0.65 * root.ui-unit;
-                    border-radius: 0.325 * root.ui-unit;
-                    background: root.update-installing ? Theme.warning : Theme.accent;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 0.65 * root.ui-unit;
+                        height: 0.65 * root.ui-unit;
+                        border-radius: 0.325 * root.ui-unit;
+                        background: root.update-installing ? Theme.warning : Theme.accent;
+                    }
                 }
 
                 // Title and version
@@ -3706,27 +3725,33 @@ export component MainWindow inherits Window {
                 }
 
                 // Expand / Collapse notes button
-                if (!root.update-installing) : PillButton {
-                    height: 2.2 * root.ui-unit;
-                    unit: root.ui-unit;
-                    label: root.update-dialog-open ? @tr("Menos") : @tr("Notas");
-                    surface-color: Theme.overlay;
-                    accent-color: Theme.text-primary;
-                    clicked => {
-                        root.update-dialog-open = !root.update-dialog-open;
+                if (!root.update-installing) : VerticalLayout {
+                    alignment: center;
+                    PillButton {
+                        height: 2.2 * root.ui-unit;
+                        unit: root.ui-unit;
+                        label: root.update-dialog-open ? @tr("Menos") : @tr("Notas");
+                        surface-color: Theme.overlay;
+                        accent-color: Theme.text-primary;
+                        clicked => {
+                            root.update-dialog-open = !root.update-dialog-open;
+                        }
                     }
                 }
 
                 // Dismiss button
-                if (!root.update-installing) : IconAction {
-                    width: 2.2 * root.ui-unit;
-                    height: 2.2 * root.ui-unit;
-                    unit: root.ui-unit;
-                    icon-source: @image-url("assets/images/icons/close.svg");
-                    accessible-name: @tr("BUTTON_CLOSE" => "Close");
-                    clicked => {
-                        root.update-dialog-open = false;
-                        root.updater-banner-dismissed = true;
+                if (!root.update-installing) : VerticalLayout {
+                    alignment: center;
+                    IconAction {
+                        width: 2.2 * root.ui-unit;
+                        height: 2.2 * root.ui-unit;
+                        unit: root.ui-unit;
+                        icon-source: @image-url("assets/images/icons/close.svg");
+                        accessible-name: @tr("BUTTON_CLOSE" => "Close");
+                        clicked => {
+                            root.update-dialog-open = false;
+                            root.updater-banner-dismissed = true;
+                        }
                     }
                 }
             }
@@ -3818,6 +3843,143 @@ export component MainWindow inherits Window {
         }
     }
 
+    // Global Offline Banner across all non-player views
+    if (root.app-offline && !root.effective-show-player && !root.show-auth-page) : Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.ui-unit;
+        z: 2400;
+        width: min(parent.width - 4 * root.ui-unit, 46 * root.ui-unit);
+        height: offline-layout.preferred-height;
+        border-radius: Theme.border-radius;
+        background: Theme.warning;
+        drop-shadow-blur: 18px;
+        drop-shadow-color: #00000080;
+        drop-shadow-offset-y: 4px;
+
+        offline-layout := HorizontalLayout {
+            padding-left: 1.25 * root.ui-unit;
+            padding-right: 0.75 * root.ui-unit;
+            padding-top: 0.6 * root.ui-unit;
+            padding-bottom: 0.6 * root.ui-unit;
+            spacing: 0.9 * root.ui-unit;
+            alignment: center;
+
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    width: 1.4 * root.ui-unit;
+                    height: 1.4 * root.ui-unit;
+                    source: @image-url("assets/images/icons/warning.svg");
+                    colorize: Theme.primary-foreground;
+                    image-fit: contain;
+                }
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: @tr("BOARD_OFFLINE" => "No internet connection. Retrying automatically…");
+                color: Theme.primary-foreground;
+                font-size: 0.95 * root.ui-unit;
+                font-weight: 600;
+                wrap: word-wrap;
+                vertical-alignment: center;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                PillButton {
+                    width: 8.5 * root.ui-unit;
+                    height: 2.5 * root.ui-unit;
+                    unit: root.ui-unit;
+                    label: @tr("RETRY" => "Retry");
+                    surface-color: Theme.background.with-alpha(0.28);
+                    hover-color: Theme.background.with-alpha(0.45);
+                    clicked => { root.app-retry-connection(); }
+                }
+            }
+        }
+    }
+
+    // Global non-blocking Error / OS Credential Vault Toast Banner
+    if (root.error-message != "" && !root.show-auth-page && !root.effective-show-player) : Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.app-offline ? 5.5 * root.ui-unit : root.ui-unit;
+        z: 2450;
+        width: min(parent.width - 4 * root.ui-unit, 52 * root.ui-unit);
+        height: toast-layout.preferred-height;
+        border-radius: Theme.border-radius;
+        background: Theme.card-background;
+        border-width: 1px;
+        border-color: Theme.danger.with-alpha(0.75);
+        drop-shadow-blur: 22px;
+        drop-shadow-color: #00000090;
+        drop-shadow-offset-y: 5px;
+
+        toast-layout := HorizontalLayout {
+            padding-left: 1.25 * root.ui-unit;
+            padding-right: 0.75 * root.ui-unit;
+            padding-top: 0.75 * root.ui-unit;
+            padding-bottom: 0.75 * root.ui-unit;
+            spacing: 0.9 * root.ui-unit;
+            alignment: center;
+
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    width: 1.4 * root.ui-unit;
+                    height: 1.4 * root.ui-unit;
+                    source: @image-url("assets/images/icons/warning.svg");
+                    colorize: Theme.danger;
+                    image-fit: contain;
+                }
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.error-message;
+                color: Theme.text-primary;
+                font-size: 0.92 * root.ui-unit;
+                wrap: word-wrap;
+                vertical-alignment: center;
+            }
+
+            if (root.error-action-label != "") : VerticalLayout {
+                alignment: center;
+                PillButton {
+                    height: 2.5 * root.ui-unit;
+                    unit: root.ui-unit;
+                    label: root.error-action-label;
+                    clicked => { root.error-action-clicked(); }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                ButtonSurface {
+                    width: 2.2 * root.ui-unit;
+                    height: 2.2 * root.ui-unit;
+                    border-radius: self.width / 2;
+                    background: self.has-hover ? Theme.overlay-hover : transparent;
+                    accessible-name: @tr("CLOSE" => "Close");
+                    clicked => {
+                        root.error-message = "";
+                        root.error-action-label = "";
+                    }
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: "×";
+                        color: Theme.text-secondary;
+                        font-size: 1.3 * root.ui-unit;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+
     if (root.debug-preview-enabled) : AppDebugMenu {
         x: root.debug-menu-open ? root.ui-unit : (root.effective-show-player ? root.ui-unit : (Theme.vertical-nav-bar-size - self.width) / 2);
         y: root.effective-show-player ? 4.5 * root.ui-unit : parent.height - self.height - root.ui-unit;
@@ -3866,22 +4028,22 @@ export component MainWindow inherits Window {
                 root.downloads-error = state == "downloads-error" ? "download database operation failed" : "";
                 if (state == "downloads-active") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "2.4 GB / 8.5 GB (14.2 MB/s)", progress: 0.28, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: true, has-failed: false, error-message: "", can-pause: true, can-resume: false, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "2.4 GB / 8.5 GB (14.2 MB/s)", progress: 0.28, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: true, is-paused: false, has-failed: false, error-message: "", can-pause: true, can-resume: false, can-cancel: true, can-change-source: true, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-paused") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Paused", progress: 0.45, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, has-failed: false, error-message: "", can-pause: false, can-resume: true, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Paused", progress: 0.45, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, is-paused: true, has-failed: false, error-message: "", can-pause: false, can-resume: true, can-cancel: true, can-change-source: true, can-play: false, can-delete: false, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-completed") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Completed", progress: 1.0, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, has-failed: false, error-message: "", can-pause: false, can-resume: false, can-play: true, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Completed", progress: 1.0, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, is-paused: false, has-failed: false, error-message: "", can-pause: false, can-resume: false, can-cancel: false, can-change-source: false, can-play: true, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-cancelled") {
                     root.download-items = [
-                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Cancelled", progress: 0.15, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, has-failed: false, error-message: "", can-pause: false, can-resume: true, can-play: false, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
+                        { id: "mock-1", meta-id: "mock-1", is-series: false, title: "Spider-Man: Far from Home", poster: @image-url(""), has-poster: false, poster-url: "", coverage: "Película completa", status: "Cancelled", progress: 0.15, size-formatted: "8.5 GB", subtitles-info: "ES, EN", has-subtitles: true, is-downloading: false, is-paused: false, has-failed: false, error-message: "", can-pause: false, can-resume: true, can-cancel: false, can-change-source: false, can-play: false, can-delete: true, downloaded-seasons: [], all-seasons: [], episodes: [] }
                     ];
                 }
                 if (state == "downloads-empty" || state == "downloads-loading" || state == "downloads-error") {

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use futures::{FutureExt, future};
 use http::Request;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -38,7 +38,10 @@ fn get_doh_client() -> &'static reqwest::Client {
 }
 
 pub use dns::{DnsProvider, active_dns_provider, configure_dns, shared_dns_resolver};
-pub use http_cache::{ConnectivitySnapshot, connectivity_snapshot, probe_connectivity};
+pub use http_cache::{
+    ConnectivitySnapshot, connectivity_snapshot, mark_network_offline, probe_connectivity,
+    probe_internet_connectivity, watch_network_online,
+};
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static TOKIO_HANDLE: OnceLock<Handle> = OnceLock::new();
@@ -316,6 +319,7 @@ impl DesktopEnv {
         };
 
         let url_str = parts.uri.to_string();
+        let is_remote = !http_cache::is_loopback_url(&url_str);
         let log_url = sanitized_url_for_log(&url_str);
         tracing::debug!(method = ?parts.method, url = %log_url, "Sending Core API request");
 
@@ -334,10 +338,18 @@ impl DesktopEnv {
             let start = std::time::Instant::now();
             match req_builder.send().await {
                 Ok(resp) if resp.status().is_server_error() && retries < 2 && parts.method == http::Method::GET => {
+                    if is_remote {
+                        http_cache::note_network_response();
+                    }
                     retries += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
                 }
-                Ok(resp) => break (resp, start.elapsed().as_millis()),
+                Ok(resp) => {
+                    if is_remote {
+                        http_cache::note_network_response();
+                    }
+                    break (resp, start.elapsed().as_millis());
+                }
                 Err(_) if retries < 2 && parts.method == http::Method::GET => {
                     retries += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(200 * retries as u64)).await;
@@ -369,6 +381,9 @@ impl DesktopEnv {
                                                     bypass_builder = bypass_builder.json(&body);
                                                 }
                                                 if let Ok(bypass_resp) = bypass_builder.send().await {
+                                                    if is_remote {
+                                                        http_cache::note_network_response();
+                                                    }
                                                     break (bypass_resp, start.elapsed().as_millis());
                                                 }
                                             }
@@ -379,6 +394,9 @@ impl DesktopEnv {
                         }
                     }
 
+                    if is_remote {
+                        http_cache::note_network_failure();
+                    }
                     let error = error.without_url();
                     tracing::error!(url = %log_url, error = %error, "Core API request failed");
                     return Err(EnvError::Fetch(error.to_string()));
@@ -453,10 +471,56 @@ static PROFILE_VAULT_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 static CREDENTIAL_STORE: OnceLock<Arc<dyn credential_store::CredentialStore>> = OnceLock::new();
 static ACTIVE_PROFILE_ID: LazyLock<RwLock<String>> =
     LazyLock::new(|| RwLock::new("default".to_owned()));
+static DEGRADED_AUTH_PROFILES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 const AUTH_VAULT_SENTINEL: &str = "__STREMIO_NATIVE_OS_VAULT__";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProfileVaultRecovery {
+    Complete,
+    AuthUnavailable(credential_store::CredentialError),
+}
+
+pub struct LoadedProfileScope {
+    pub profile: Option<stremio_core::types::profile::Profile>,
+    pub recovery: ProfileVaultRecovery,
+}
 
 pub fn install_credential_store(store: Arc<dyn credential_store::CredentialStore>) {
     let _ = CREDENTIAL_STORE.set(store);
+}
+
+pub fn credential_vault_health() -> credential_store::VaultHealth {
+    credential_store().health()
+}
+
+pub fn reset_credential_vault_cooldown() {
+    credential_store().reset_native_cooldown();
+}
+
+pub fn clear_degraded_auth_profile(profile_id: &str) {
+    DEGRADED_AUTH_PROFILES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(profile_id);
+}
+
+fn mark_degraded_auth_profile(profile_id: &str, degraded: bool) {
+    let mut guard = DEGRADED_AUTH_PROFILES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if degraded {
+        guard.insert(profile_id.to_owned());
+    } else {
+        guard.remove(profile_id);
+    }
+}
+
+fn is_degraded_auth_profile(profile_id: &str) -> bool {
+    DEGRADED_AUTH_PROFILES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(profile_id)
 }
 
 pub fn set_active_profile_scope(profile_id: impl Into<String>) {
@@ -468,6 +532,13 @@ pub fn set_active_profile_scope(profile_id: impl Into<String>) {
 pub async fn load_profile_scope(
     profile_id: &str,
 ) -> Result<Option<stremio_core::types::profile::Profile>, EnvError> {
+    let loaded = load_profile_scope_resilient(profile_id).await?;
+    Ok(loaded.profile)
+}
+
+pub async fn load_profile_scope_resilient(
+    profile_id: &str,
+) -> Result<LoadedProfileScope, EnvError> {
     let conn = get_db_conn().await?;
     let mut rows = conn
         .query(
@@ -490,14 +561,21 @@ pub async fn load_profile_scope(
     // round trips can take seconds and must not stall catalog cache reads.
     drop(conn);
     let Some(value) = value else {
-        return Ok(None);
+        mark_degraded_auth_profile(profile_id, false);
+        return Ok(LoadedProfileScope {
+            profile: None,
+            recovery: ProfileVaultRecovery::Complete,
+        });
     };
     let mut raw: serde_json::Value =
         serde_json::from_str(&value).map_err(|error| EnvError::Serde(error.to_string()))?;
-    rehydrate_profile_from_vault(profile_id, &mut raw).await?;
-    serde_json::from_value(raw)
-        .map(Some)
-        .map_err(|error| EnvError::Serde(error.to_string()))
+    let recovery = rehydrate_profile_from_vault_detailed(profile_id, &mut raw).await?;
+    let profile =
+        serde_json::from_value(raw).map_err(|error| EnvError::Serde(error.to_string()))?;
+    Ok(LoadedProfileScope {
+        profile: Some(profile),
+        recovery,
+    })
 }
 
 pub fn active_profile_scope() -> String {
@@ -537,26 +615,82 @@ fn vault_reference(profile_id: &str) -> Result<credential_store::CredentialRef, 
 }
 
 pub async fn delete_profile_credential(profile_id: &str) -> Result<(), EnvError> {
+    clear_degraded_auth_profile(profile_id);
     let reference = vault_reference(profile_id)?;
     match credential_store().delete(&reference).await {
         Ok(()) | Err(credential_store::CredentialError::Missing) => Ok(()),
+        Err(
+            error @ (credential_store::CredentialError::Locked
+            | credential_store::CredentialError::Unavailable
+            | credential_store::CredentialError::OperationFailed),
+        ) => {
+            tracing::warn!(
+                %error,
+                profile_id,
+                "credential vault unavailable while deleting profile credential"
+            );
+            Ok(())
+        }
         Err(error) => Err(credential_error("delete profile credential", error)),
     }
+}
+
+async fn load_stored_profile_auth(profile_id: &str) -> Option<serde_json::Value> {
+    let Ok(conn) = get_db_conn().await else {
+        return None;
+    };
+    let mut rows = conn
+        .query(
+            "SELECT value FROM profile_core_storage WHERE profile_id = ? AND key = ?",
+            (profile_id, PROFILE_STORAGE_KEY),
+        )
+        .await
+        .ok()?;
+    let value = rows
+        .next()
+        .await
+        .ok()?
+        .and_then(|row| row.get::<String>(0).ok());
+    while let Ok(Some(_)) = rows.next().await {}
+    drop(rows);
+    drop(conn);
+    let raw: serde_json::Value = serde_json::from_str(&value?).ok()?;
+    raw.get("auth").cloned().filter(|auth| !auth.is_null())
 }
 
 async fn prepare_profile_for_storage(
     profile_id: &str,
     value: &mut serde_json::Value,
+    preserved_auth: Option<serde_json::Value>,
+) -> Result<(), EnvError> {
+    prepare_profile_for_storage_with_store(
+        profile_id,
+        value,
+        preserved_auth,
+        credential_store().as_ref(),
+    )
+    .await
+}
+
+async fn prepare_profile_for_storage_with_store(
+    profile_id: &str,
+    value: &mut serde_json::Value,
+    preserved_auth: Option<serde_json::Value>,
+    store: &dyn credential_store::CredentialStore,
 ) -> Result<(), EnvError> {
     let reference = vault_reference(profile_id)?;
     match profile_auth_key(value) {
-        Some(key) if key.as_str() == Some(AUTH_VAULT_SENTINEL) => Ok(()),
+        Some(key) if key.as_str() == Some(AUTH_VAULT_SENTINEL) => {
+            mark_degraded_auth_profile(profile_id, false);
+            Ok(())
+        }
         Some(key) => {
+            mark_degraded_auth_profile(profile_id, false);
             let secret =
                 serde_json::to_vec(key).map_err(|error| EnvError::Serde(error.to_string()))?;
             vault_bounded(
                 "vault put",
-                credential_store().put(
+                store.put(
                     &reference,
                     credential_store::SecretKind::StremioAuth,
                     credential_store::SecretValue::new(secret),
@@ -567,45 +701,105 @@ async fn prepare_profile_for_storage(
             *key = serde_json::Value::String(AUTH_VAULT_SENTINEL.to_owned());
             Ok(())
         }
-        None => vault_bounded("vault delete", credential_store().delete(&reference))
-            .await
-            .map_err(|error| credential_error("delete profile credential", error)),
+        None => {
+            if is_degraded_auth_profile(profile_id)
+                && let Some(auth) = preserved_auth
+                && let Some(obj) = value.as_object_mut()
+            {
+                obj.insert("auth".to_owned(), auth);
+                return Ok(());
+            }
+            match vault_bounded("vault delete", store.delete(&reference)).await {
+                Ok(()) | Err(credential_store::CredentialError::Missing) => Ok(()),
+                Err(
+                    error @ (credential_store::CredentialError::Locked
+                    | credential_store::CredentialError::Unavailable
+                    | credential_store::CredentialError::OperationFailed),
+                ) => {
+                    tracing::warn!(
+                        %error,
+                        profile_id,
+                        "credential vault unavailable while saving guest profile; skipping delete"
+                    );
+                    Ok(())
+                }
+                Err(error) => Err(credential_error("delete profile credential", error)),
+            }
+        }
     }
 }
 
-async fn rehydrate_profile_from_vault(
+async fn rehydrate_profile_from_vault_detailed(
     profile_id: &str,
     raw: &mut serde_json::Value,
-) -> Result<(), EnvError> {
+) -> Result<ProfileVaultRecovery, EnvError> {
+    rehydrate_profile_from_vault_with_store(profile_id, raw, credential_store().as_ref()).await
+}
+
+async fn rehydrate_profile_from_vault_with_store(
+    profile_id: &str,
+    raw: &mut serde_json::Value,
+    store: &dyn credential_store::CredentialStore,
+) -> Result<ProfileVaultRecovery, EnvError> {
     let Some(key) = profile_auth_key(raw) else {
-        return Ok(());
+        mark_degraded_auth_profile(profile_id, false);
+        return Ok(ProfileVaultRecovery::Complete);
     };
     let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
     let reference = vault_reference(profile_id)?;
     if key.as_str() == Some(AUTH_VAULT_SENTINEL) {
-        let secret = vault_bounded("vault get", credential_store().get(&reference))
-            .await
-            .map_err(|error| credential_error("read profile credential", error))?;
-        *key = serde_json::from_slice(secret.expose())
-            .map_err(|error| EnvError::Serde(error.to_string()))?;
-        return Ok(());
+        match vault_bounded("vault get", store.get(&reference)).await {
+            Ok(secret) => {
+                *key = serde_json::from_slice(secret.expose())
+                    .map_err(|error| EnvError::Serde(error.to_string()))?;
+                mark_degraded_auth_profile(profile_id, false);
+                return Ok(ProfileVaultRecovery::Complete);
+            }
+            Err(
+                error @ (credential_store::CredentialError::Missing
+                | credential_store::CredentialError::Locked
+                | credential_store::CredentialError::Unavailable
+                | credential_store::CredentialError::OperationFailed
+                | credential_store::CredentialError::WorkerStopped),
+            ) => {
+                tracing::warn!(
+                    %error,
+                    profile_id,
+                    "could not read profile auth from OS vault; continuing without auth while preserving sentinel"
+                );
+                if let Some(obj) = raw.as_object_mut() {
+                    obj.insert("auth".to_owned(), serde_json::Value::Null);
+                }
+                mark_degraded_auth_profile(profile_id, true);
+                return Ok(ProfileVaultRecovery::AuthUnavailable(error));
+            }
+            Err(error) => return Err(credential_error("read profile credential", error)),
+        }
     }
 
-    // One-time plaintext migration: write the native vault first, then replace
-    // the SQLite value within a transaction before returning hydrated data.
+    // One-time plaintext migration: write the vault first, then replace the
+    // SQLite value within a transaction before returning hydrated data.
     let plaintext = key.clone();
     let secret =
         serde_json::to_vec(&plaintext).map_err(|error| EnvError::Serde(error.to_string()))?;
-    vault_bounded(
+    if let Err(error) = vault_bounded(
         "vault migrate",
-        credential_store().put(
+        store.put(
             &reference,
             credential_store::SecretKind::StremioAuth,
             credential_store::SecretValue::new(secret),
         ),
     )
     .await
-    .map_err(|error| credential_error("migrate profile credential", error))?;
+    {
+        tracing::warn!(
+            %error,
+            profile_id,
+            "could not migrate profile auth to vault; continuing with existing stored auth"
+        );
+        mark_degraded_auth_profile(profile_id, false);
+        return Ok(ProfileVaultRecovery::Complete);
+    }
     *key = serde_json::Value::String(AUTH_VAULT_SENTINEL.to_owned());
     let redacted =
         serde_json::to_string(raw).map_err(|error| EnvError::Serde(error.to_string()))?;
@@ -635,7 +829,8 @@ async fn rehydrate_profile_from_vault(
     if let Some(key) = profile_auth_key(raw) {
         *key = plaintext;
     }
-    Ok(())
+    mark_degraded_auth_profile(profile_id, false);
+    Ok(ProfileVaultRecovery::Complete)
 }
 
 #[cfg(feature = "in-process")]
@@ -991,7 +1186,7 @@ impl Env for DesktopEnv {
             let mut json: serde_json::Value = serde_json::from_str(&value_str)
                 .map_err(|error| EnvError::Serde(error.to_string()))?;
             if key == PROFILE_STORAGE_KEY {
-                rehydrate_profile_from_vault(&profile_id, &mut json).await?;
+                let _ = rehydrate_profile_from_vault_detailed(&profile_id, &mut json).await?;
             }
             serde_json::from_value(json)
                 .map(Some)
@@ -1012,16 +1207,36 @@ impl Env for DesktopEnv {
         };
         bounded("set_storage", STORAGE_OP_TIMEOUT, async move {
             if key == PROFILE_STORAGE_KEY && value_json.is_none() {
+                clear_degraded_auth_profile(&profile_id);
                 let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
                 let reference = vault_reference(&profile_id)?;
-                vault_bounded("vault delete", credential_store().delete(&reference))
-                    .await
-                    .map_err(|error| credential_error("delete profile credential", error))?;
+                match vault_bounded("vault delete", credential_store().delete(&reference)).await {
+                    Ok(()) | Err(credential_store::CredentialError::Missing) => {}
+                    Err(
+                        error @ (credential_store::CredentialError::Locked
+                        | credential_store::CredentialError::Unavailable
+                        | credential_store::CredentialError::OperationFailed),
+                    ) => {
+                        tracing::warn!(
+                            %error,
+                            profile_id,
+                            "credential vault unavailable while clearing profile storage"
+                        );
+                    }
+                    Err(error) => return Err(credential_error("delete profile credential", error)),
+                }
             }
             if let Some(mut value) = value_json {
                 if key == PROFILE_STORAGE_KEY {
+                    let preserved_auth = if profile_auth_key(&mut value).is_none()
+                        && is_degraded_auth_profile(&profile_id)
+                    {
+                        load_stored_profile_auth(&profile_id).await
+                    } else {
+                        None
+                    };
                     let _vault_guard = PROFILE_VAULT_LOCK.lock().await;
-                    prepare_profile_for_storage(&profile_id, &mut value).await?;
+                    prepare_profile_for_storage(&profile_id, &mut value, preserved_auth).await?;
                 }
                 let val = serde_json::to_string(&value)
                     .map_err(|error| EnvError::Serde(error.to_string()))?;
@@ -1231,5 +1446,56 @@ mod tests {
             sanitized_url_for_log("definitely not a URL"),
             "<invalid-url>"
         );
+    }
+
+    #[test]
+    fn is_loopback_url_identifies_local_and_remote_hosts() {
+        assert!(super::http_cache::is_loopback_url("http://127.0.0.1:11470/settings"));
+        assert!(super::http_cache::is_loopback_url("http://localhost:11470/"));
+        assert!(super::http_cache::is_loopback_url("http://[::1]:11470/"));
+        assert!(!super::http_cache::is_loopback_url("https://api.strem.io/"));
+        assert!(!super::http_cache::is_loopback_url("https://v3-cinemeta.strem.io/manifest.json"));
+    }
+
+    #[tokio::test]
+    async fn degraded_auth_profile_preserves_vault_sentinel_on_settings_save() {
+        let store = credential_store::MemoryCredentialStore::default();
+        store
+            .force_error(Some(credential_store::CredentialError::Locked))
+            .await;
+
+        let profile_id = "test-degraded-vault-profile";
+        let mut raw = serde_json::json!({
+            "auth": {
+                "key": super::AUTH_VAULT_SENTINEL,
+                "user": { "_id": "u1", "email": "user@example.com" }
+            },
+            "addons": []
+        });
+        let stored_auth = raw.get("auth").cloned();
+
+        let recovery =
+            super::rehydrate_profile_from_vault_with_store(profile_id, &mut raw, &store)
+                .await
+                .expect("degraded load must not error");
+        assert_eq!(
+            recovery,
+            super::ProfileVaultRecovery::AuthUnavailable(credential_store::CredentialError::Locked)
+        );
+        assert!(raw["auth"].is_null());
+        assert!(super::is_degraded_auth_profile(profile_id));
+
+        // Saving settings with auth=null in memory must preserve the sentinel in DB
+        // rather than deleting the user's credential from SQLite/vault.
+        let mut to_save = raw.clone();
+        super::prepare_profile_for_storage_with_store(profile_id, &mut to_save, stored_auth, &store)
+            .await
+            .expect("saving while degraded succeeds");
+        assert_eq!(
+            to_save["auth"]["key"].as_str(),
+            Some(super::AUTH_VAULT_SENTINEL)
+        );
+
+        super::clear_degraded_auth_profile(profile_id);
     }
 }

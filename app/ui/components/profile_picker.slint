@@ -70,24 +70,28 @@ export component ProfilePicker inherits Rectangle {
                     padding-right: 18px;
                     spacing: 14px;
                     alignment: center;
-                    Rectangle {
-                        width: 48px;
-                        height: 48px;
-                        border-radius: 24px;
-                        background: Theme.accent.with-alpha(0.22);
-                        Text {
-                            width: parent.width;
-                            height: parent.height;
-                            text: profile.role == "Kids" ? "K" : (profile.role == "Owner" ? "O" : "S");
-                            color: Theme.text-primary;
-                            font-size: 20px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 48px;
+                            height: 48px;
+                            border-radius: 24px;
+                            background: Theme.accent.with-alpha(0.22);
+                            Text {
+                                width: parent.width;
+                                height: parent.height;
+                                text: profile.role == "Kids" ? "K" : (profile.role == "Owner" ? "O" : "S");
+                                color: Theme.text-primary;
+                                font-size: 20px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                     VerticalLayout {
                         horizontal-stretch: 1;
+                        alignment: center;
                         spacing: 2px;
                         Text {
                             text: profile.name;
@@ -133,12 +137,15 @@ export component ProfilePicker inherits Rectangle {
             wrap: word-wrap;
         }
 
-        PillButton {
-            width: 220px;
-            unit: 16px;
-            label: @tr("Continue");
-            enabled: root.selected-id != "";
-            clicked => { root.selected(root.selected-id, root.pin); }
+        HorizontalLayout {
+            alignment: center;
+            PillButton {
+                width: 220px;
+                unit: 16px;
+                label: @tr("Continue");
+                enabled: root.selected-id != "";
+                clicked => { root.selected(root.selected-id, root.pin); }
+            }
         }
     }
 }

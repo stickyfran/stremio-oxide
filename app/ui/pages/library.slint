@@ -318,66 +318,80 @@ export component LibraryPage inherits Rectangle {
                 font-size: 1.6 * root.unit;
                 horizontal-alignment: center;
             }
-            Image {
-                x: (parent.width - self.width) / 2;
-                width: 8 * root.unit;
-                height: 6 * root.unit;
-                source: @image-url("../assets/images/icons/cloud-library.svg");
-                colorize: Theme.primary-foreground;
-                opacity: 0.35;
-                image-fit: contain;
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    width: 8 * root.unit;
+                    height: 6 * root.unit;
+                    source: @image-url("../assets/images/icons/cloud-library.svg");
+                    colorize: Theme.primary-foreground;
+                    opacity: 0.35;
+                    image-fit: contain;
+                }
             }
             HorizontalLayout {
-                x: (parent.width - self.width) / 2;
-                width: 36 * root.unit;
-                height: 5 * root.unit;
-                spacing: 3 * root.unit;
+                alignment: center;
                 HorizontalLayout {
-                    horizontal-stretch: 1;
-                    spacing: root.unit;
-                    Image {
-                        width: 3 * root.unit;
-                        source: @image-url("../assets/images/icons/cloud-sync.svg");
-                        colorize: Theme.primary-foreground;
-                        opacity: 0.45;
-                        image-fit: contain;
-                    }
-                    Text {
+                    width: 36 * root.unit;
+                    height: 5 * root.unit;
+                    spacing: 3 * root.unit;
+                    HorizontalLayout {
                         horizontal-stretch: 1;
-                        text: @tr("Access your favorite movies and TV shows anytime, anywhere");
-                        color: Theme.primary-foreground;
-                        font-size: root.unit;
-                        wrap: word-wrap;
-                        vertical-alignment: center;
+                        spacing: root.unit;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                width: 3 * root.unit;
+                                height: 3 * root.unit;
+                                source: @image-url("../assets/images/icons/cloud-sync.svg");
+                                colorize: Theme.primary-foreground;
+                                opacity: 0.45;
+                                image-fit: contain;
+                            }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: @tr("Access your favorite movies and TV shows anytime, anywhere");
+                            color: Theme.primary-foreground;
+                            font-size: root.unit;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
                     }
-                }
-                HorizontalLayout {
-                    horizontal-stretch: 1;
-                    spacing: root.unit;
-                    Image {
-                        width: 3 * root.unit;
-                        source: @image-url("../assets/images/icons/person.svg");
-                        colorize: Theme.primary-foreground;
-                        opacity: 0.45;
-                        image-fit: contain;
-                    }
-                    Text {
+                    HorizontalLayout {
                         horizontal-stretch: 1;
-                        text: @tr("Recommendations tailored to your viewing history");
-                        color: Theme.primary-foreground;
-                        font-size: root.unit;
-                        wrap: word-wrap;
-                        vertical-alignment: center;
+                        spacing: root.unit;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                width: 3 * root.unit;
+                                height: 3 * root.unit;
+                                source: @image-url("../assets/images/icons/person.svg");
+                                colorize: Theme.primary-foreground;
+                                opacity: 0.45;
+                                image-fit: contain;
+                            }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: @tr("Recommendations tailored to your viewing history");
+                            color: Theme.primary-foreground;
+                            font-size: root.unit;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
-            PillButton {
-                x: (parent.width - self.width) / 2;
-                width: 12 * root.unit;
-                unit: root.unit;
-                label: @tr("BUTTON_LOGIN" => "Log in");
-                primary: true;
-                clicked => { root.request-login(); }
+            HorizontalLayout {
+                alignment: center;
+                PillButton {
+                    width: 12 * root.unit;
+                    unit: root.unit;
+                    label: @tr("BUTTON_LOGIN" => "Log in");
+                    primary: true;
+                    clicked => { root.request-login(); }
+                }
             }
         }
 
@@ -525,12 +539,15 @@ export component LibraryPage inherits Rectangle {
                     padding-left: root.unit;
                     padding-right: root.unit;
 
-                    Image {
-                        width: 1.1 * root.unit;
-                        height: 1.1 * root.unit;
-                        source: @image-url("../assets/images/icons/hourglass.svg");
-                        colorize: Theme.primary-accent;
-                        image-fit: contain;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            width: 1.1 * root.unit;
+                            height: 1.1 * root.unit;
+                            source: @image-url("../assets/images/icons/hourglass.svg");
+                            colorize: Theme.primary-accent;
+                            image-fit: contain;
+                        }
                     }
                     Text {
                         text: @tr("Loading...");

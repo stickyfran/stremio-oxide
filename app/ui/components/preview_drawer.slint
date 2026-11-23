@@ -698,13 +698,15 @@ export component MediaPreviewDrawer inherits Rectangle {
                         // IMDb
                         if (root.rating-imdb != "") : HorizontalLayout {
                             spacing: 0.4 * root.unit;
-                            Image {
-                                width: 2.2 * root.unit;
-                                height: 1.2 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                source: @image-url("../assets/images/icons/imdb.svg");
-                                colorize: Theme.imdb;
-                                image-fit: contain;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 2.2 * root.unit;
+                                    height: 1.2 * root.unit;
+                                    source: @image-url("../assets/images/icons/imdb.svg");
+                                    colorize: Theme.imdb;
+                                    image-fit: contain;
+                                }
                             }
                             Text {
                                 text: root.rating-imdb;
@@ -718,12 +720,14 @@ export component MediaPreviewDrawer inherits Rectangle {
                         // Rotten Tomatoes (con Skeleton mientras carga)
                         if (root.rating-rt != "") : HorizontalLayout {
                             spacing: 0.4 * root.unit;
-                            Image {
-                                width: 1.2 * root.unit;
-                                height: 1.2 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                source: @image-url("../assets/images/icons/rotten-tomatoes.svg");
-                                image-fit: contain;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 1.2 * root.unit;
+                                    height: 1.2 * root.unit;
+                                    source: @image-url("../assets/images/icons/rotten-tomatoes.svg");
+                                    image-fit: contain;
+                                }
                             }
                             Text {
                                 text: root.rating-rt;
@@ -735,32 +739,38 @@ export component MediaPreviewDrawer inherits Rectangle {
                         }
                         if (root.ratings-loading && root.rating-rt == "") : HorizontalLayout {
                             spacing: 0.4 * root.unit;
-                            Rectangle {
-                                width: 1.2 * root.unit;
-                                height: 1.2 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 0.2 * root.unit;
-                                background: Theme.card-border;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 1.2 * root.unit;
+                                    height: 1.2 * root.unit;
+                                    border-radius: 0.2 * root.unit;
+                                    background: Theme.card-border;
+                                }
                             }
-                            Rectangle {
-                                width: 2.2 * root.unit;
-                                height: 0.8 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 0.2 * root.unit;
-                                background: Theme.card-border;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 2.2 * root.unit;
+                                    height: 0.8 * root.unit;
+                                    border-radius: 0.2 * root.unit;
+                                    background: Theme.card-border;
+                                }
                             }
                         }
 
                         // Metacritic ("M") (con Skeleton mientras carga)
                         if (root.rating-metacritic != "") : HorizontalLayout {
                             spacing: 0.4 * root.unit;
-                            Image {
-                                width: 1.2 * root.unit;
-                                height: 1.2 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                source: @image-url("../assets/images/icons/metacritic.svg");
-                                colorize: Theme.metacritic;
-                                image-fit: contain;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 1.2 * root.unit;
+                                    height: 1.2 * root.unit;
+                                    source: @image-url("../assets/images/icons/metacritic.svg");
+                                    colorize: Theme.metacritic;
+                                    image-fit: contain;
+                                }
                             }
                             Text {
                                 text: root.rating-metacritic;
@@ -772,19 +782,23 @@ export component MediaPreviewDrawer inherits Rectangle {
                         }
                         if (root.ratings-loading && root.rating-metacritic == "") : HorizontalLayout {
                             spacing: 0.4 * root.unit;
-                            Rectangle {
-                                width: 1.2 * root.unit;
-                                height: 1.2 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 0.2 * root.unit;
-                                background: Theme.card-border;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 1.2 * root.unit;
+                                    height: 1.2 * root.unit;
+                                    border-radius: 0.2 * root.unit;
+                                    background: Theme.card-border;
+                                }
                             }
-                            Rectangle {
-                                width: 1.8 * root.unit;
-                                height: 0.8 * root.unit;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 0.2 * root.unit;
-                                background: Theme.card-border;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 1.8 * root.unit;
+                                    height: 0.8 * root.unit;
+                                    border-radius: 0.2 * root.unit;
+                                    background: Theme.card-border;
+                                }
                             }
                         }
                     }
