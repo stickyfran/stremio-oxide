@@ -90,7 +90,9 @@ rustix = { path = "vendor/rustix" }
 [profile.release]
 opt-level = 3
 lto = "thin"
-codegen-units = 2
+# `app.slint` generates an ~82 MB Rust file; 16 codegen units with ThinLTO keeps
+# cross-unit inlining while preventing 16 GB CI runners from OOM/swap thrashing.
+codegen-units = 16
 panic = "abort"
 strip = true
 

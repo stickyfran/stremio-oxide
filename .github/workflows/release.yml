@@ -149,6 +149,8 @@ jobs:
           "STREMIO_MPV_DIR=$mpvDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "windows-x64"
       - name: Build release
         run: cargo build --locked --release --package stremio-native
         env:
@@ -357,7 +359,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: aarch64-pc-windows-msvc
+          shared-key: "windows-arm64"
       - name: Build release
         run: cargo build --locked --release --package stremio-native --target aarch64-pc-windows-msvc
         env:
@@ -436,11 +438,16 @@ jobs:
       PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/x64-linux-v3-static-release/lib/pkgconfig
       LIBTORRENT_STATIC: "1"
       CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_RELEASE_RUSTFLAGS: "-Zthreads=2"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           submodules: recursive
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          df -h
       - name: Configure swap space
         run: |
           SWAP_DIR="/mnt"
@@ -456,6 +463,8 @@ jobs:
           toolchain: nightly-2026-07-31
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "linux-x64"
       - name: Restore apt cache
         id: apt-cache
         uses: actions/cache/restore@v6
@@ -544,6 +553,7 @@ jobs:
       PKG_CONFIG_PATH: ${{ github.workspace }}/vcpkg_installed/arm64-linux-static-release/lib/pkgconfig
       LIBTORRENT_STATIC: "1"
       CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_RELEASE_RUSTFLAGS: "-Zthreads=2"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -565,7 +575,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: linux-arm64
+          shared-key: "linux-arm64"
       - name: Restore apt cache
         id: apt-cache
         uses: actions/cache/restore@v6
@@ -783,7 +793,16 @@ jobs:
           toolchain: nightly-2026-07-31
       - name: Install dependencies
         run: |
-          brew install mpv pkg-config cmake ninja
+          brew install mpv libarchive pkg-config cmake ninja
+          EXTRA_PKG_CONFIG=""
+          for formula in libarchive openssl@3 mpv; do
+            prefix="$(brew --prefix "$formula" 2>/dev/null || true)"
+            if [ -n "$prefix" ] && [ -d "$prefix/lib/pkgconfig" ]; then
+              EXTRA_PKG_CONFIG="${EXTRA_PKG_CONFIG:+${EXTRA_PKG_CONFIG}:}$prefix/lib/pkgconfig"
+            fi
+          done
+          echo "PKG_CONFIG_PATH=${EXTRA_PKG_CONFIG}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          PKG_CONFIG_PATH="${EXTRA_PKG_CONFIG}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" pkg-config --cflags --libs mpv
       - name: Build release
         run: |
           cargo build --locked --release --package stremio-native
