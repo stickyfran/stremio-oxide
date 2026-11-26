@@ -1197,6 +1197,12 @@ async fn finish_startup(
         native_playback_bridge.clone(),
         navigation.clone(),
     );
+    // The initial tab is selected before the downloads callbacks exist, so a
+    // cold start directly on Downloads would show the empty state until the
+    // user switched tabs. Project the list once the callbacks are installed.
+    if matches!(Tab::try_from(config.active_tab), Ok(Tab::Downloads)) {
+        tokio::spawn(downloads::project_active_profile(ui.as_weak()));
+    }
     local_library::setup(&ui, native_playback_bridge.clone(), navigation.clone());
     setup_live_profile_switch(
         &ui,
