@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { PillButton } from "../components/button.slint";
+import { ButtonSurface, PillButton } from "../components/button.slint";
 import { EmptyState } from "../components/feedback.slint";
 import { FallbackImage } from "../components/fallback_image.slint";
 import { ModalDialog } from "../components/overlays.slint";
@@ -186,7 +186,7 @@ export component DownloadsPage inherits Rectangle {
                 text: @tr("DOWNLOADS_TITLE" => "Descargas");
                 color: Theme.text-primary;
                 font-size: 2 * root.unit;
-                font-weight: 700;
+                font-weight: 500;
                 vertical-alignment: center;
             }
 
@@ -231,8 +231,8 @@ export component DownloadsPage inherits Rectangle {
                             text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
                                 + (root.eta-text != "" ? " · " + root.eta-text : "");
                             color: Theme.text-primary;
-                            font-size: 0.86 * root.unit;
-                            font-weight: 600;
+                            font-size: 0.875 * root.unit;
+                            font-weight: 500;
                             vertical-alignment: center;
                             overflow: elide;
                         }
@@ -245,8 +245,8 @@ export component DownloadsPage inherits Rectangle {
                                 text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
                                     + (root.eta-text != "" ? " · " + root.eta-text : "");
                                 color: Theme.text-primary;
-                                font-size: 0.80 * root.unit;
-                                font-weight: 600;
+                                font-size: 0.8125 * root.unit;
+                                font-weight: 500;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -254,7 +254,7 @@ export component DownloadsPage inherits Rectangle {
                             Text {
                                 text: root.current-text;
                                 color: Theme.text-secondary;
-                                font-size: 0.70 * root.unit;
+                                font-size: 0.75 * root.unit;
                                 overflow: elide;
                                 vertical-alignment: center;
                             }
@@ -303,7 +303,7 @@ export component DownloadsPage inherits Rectangle {
                             height: parent.height;
                             text: root.disk-usage-text;
                             color: Theme.text-secondary;
-                            font-size: 0.86 * root.unit;
+                            font-size: 0.875 * root.unit;
                             vertical-alignment: center;
                             overflow: elide;
                         }
@@ -319,8 +319,9 @@ export component DownloadsPage inherits Rectangle {
                     width: 10.5 * root.unit;
                     height: 2.75 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
                     label: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
-                    label-font-size: 0.88 * root.unit;
+                    label-font-size: 0.875 * root.unit;
                     clicked => { root.open-downloads-folder(); }
                 }
             }
@@ -342,7 +343,7 @@ export component DownloadsPage inherits Rectangle {
                     horizontal-stretch: 1;
                     text: root.error;
                     color: Theme.text-primary;
-                    font-size: 0.88 * root.unit;
+                    font-size: 0.875 * root.unit;
                     wrap: word-wrap;
                     vertical-alignment: center;
                 }
@@ -353,20 +354,32 @@ export component DownloadsPage inherits Rectangle {
                         width: 8.5 * root.unit;
                         height: 2.5 * root.unit;
                         unit: root.unit;
+                        label-font-weight: 500;
                         label: @tr("RETRY" => "Reintentar");
-                        label-font-size: 0.84 * root.unit;
+                        label-font-size: 0.8125 * root.unit;
                         clicked => { root.retry(); }
                     }
                 }
 
                 VerticalLayout {
                     alignment: center;
-                    PillButton {
+                    ButtonSurface {
                         width: 2.75 * root.unit;
                         height: 2.5 * root.unit;
-                        unit: root.unit;
-                        label: "×";
-                        outlined: true;
+                        accessible-name: @tr("DISMISS" => "Cerrar aviso");
+                        border-radius: self.height / 2;
+                        border-width: 1px;
+                        border-color: dl-hairline;
+                        background: self.has-hover ? dl-surface-hover : transparent;
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 1 * root.unit;
+                            height: 1 * root.unit;
+                            source: @image-url("../assets/images/icons/close.svg");
+                            colorize: Theme.text-secondary;
+                            image-fit: contain;
+                        }
                         clicked => { root.dismiss-error(); }
                     }
                 }
@@ -378,14 +391,14 @@ export component DownloadsPage inherits Rectangle {
             unit: root.unit;
             icon-source: @image-url("../assets/images/icons/download.svg");
             title: @tr("DOWNLOADS_EMPTY" => "No hay descargas aún");
-            message: @tr("DOWNLOADS_EMPTY_HINT" => "Descarga una película o serie para tenerla disponible sin conexión con subtítulos.");
+            message: @tr("DOWNLOADS_EMPTY_HINT" => "Descargá una película o serie para tenerla disponible sin conexión con subtítulos.");
         }
 
         if (root.loading) : Text {
             vertical-stretch: 1;
-            text: @tr("LOADING" => "Loading…");
+            text: @tr("LOADING" => "Cargando…");
             color: Theme.text-secondary;
-            font-size: root.unit;
+            font-size: 0.875 * root.unit;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -493,19 +506,18 @@ export component DownloadsPage inherits Rectangle {
                                         horizontal-stretch: 1;
                                         text: item.title;
                                         color: Theme.text-primary;
-                                        font-size: 1.35 * root.unit;
-                                        font-weight: 750;
+                                        font-size: 1.25 * root.unit;
+                                        font-weight: 600;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
 
-                                    // Type text (sin recuadro/squircle ni bordes, alineado al mismo renglón, grisáceo e itálica)
+                                    // Type caption: quiet text on the same line
                                     Text {
                                         horizontal-stretch: 0;
                                         text: item.is-series ? "Serie" : "Película";
                                         color: Theme.text-muted;
-                                        font-size: 0.92 * root.unit;
-                                        font-italic: true;
+                                        font-size: 0.8125 * root.unit;
                                         font-weight: 500;
                                         vertical-alignment: center;
                                     }
@@ -530,8 +542,8 @@ export component DownloadsPage inherits Rectangle {
                                                 Text {
                                                     text: item.coverage;
                                                     color: Theme.text-secondary;
-                                                    font-size: 0.85 * root.unit;
-                                                    font-weight: 600;
+                                                    font-size: 0.8125 * root.unit;
+                                                    font-weight: 500;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -573,8 +585,8 @@ export component DownloadsPage inherits Rectangle {
                                                 Text {
                                                     text: "Visto";
                                                     color: Theme.text-secondary;
-                                                    font-size: 0.78 * root.unit;
-                                                    font-weight: 650;
+                                                    font-size: 0.75 * root.unit;
+                                                    font-weight: 500;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -604,8 +616,8 @@ export component DownloadsPage inherits Rectangle {
                                         color: card.hovered-ep-info != ""
                                             ? Theme.text-primary
                                             : (item.has-failed ? dl-error-text : (item.is-paused && !item.is-downloading ? dl-paused : Theme.text-secondary));
-                                        font-size: 0.88 * root.unit;
-                                        font-weight: card.hovered-ep-info != "" ? 650 : 500;
+                                        font-size: 0.875 * root.unit;
+                                        font-weight: card.hovered-ep-info != "" ? 500 : 400;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
@@ -646,8 +658,8 @@ export component DownloadsPage inherits Rectangle {
                                                     height: parent.height;
                                                     text: item.subtitles-info;
                                                     color: Theme.text-secondary;
-                                                    font-size: 0.8 * root.unit;
-                                                    font-weight: 600;
+                                                    font-size: 0.75 * root.unit;
+                                                    font-weight: 500;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -691,8 +703,9 @@ export component DownloadsPage inherits Rectangle {
                                         width: 9.5 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
+                                        label-font-weight: 500;
                                         label: @tr("CTX_PLAY" => "Reproducir");
-                                        label-font-size: 0.86 * root.unit;
+                                        label-font-size: 0.875 * root.unit;
                                         primary: true;
                                         clicked => { root.play(item.id); }
                                     }
@@ -700,24 +713,30 @@ export component DownloadsPage inherits Rectangle {
                                         width: 7.5 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
+                                        label-font-weight: 500;
                                         label: @tr("PAUSE" => "Pausar");
-                                        label-font-size: 0.86 * root.unit;
+                                        label-font-size: 0.875 * root.unit;
                                         clicked => { root.pause(item.id); }
                                     }
                                     if (item.can-resume) : PillButton {
                                         width: 8.75 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
+                                        label-font-weight: 500;
                                         label: item.has-failed && !item.is-paused ? @tr("RETRY" => "Reintentar") : @tr("RESUME" => "Reanudar");
-                                        label-font-size: 0.86 * root.unit;
+                                        label-font-size: 0.875 * root.unit;
                                         clicked => { root.resume(item.id); }
                                     }
                                     if (item.is-series) : PillButton {
                                         width: 9.5 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
-                                        label: card.is-expanded ? @tr("COLLAPSE" => "Ocultar ▲") : @tr("EXPAND" => "Capítulos ▼");
-                                        label-font-size: 0.86 * root.unit;
+                                        label-font-weight: 500;
+                                        label: card.is-expanded ? @tr("COLLAPSE" => "Ocultar") : @tr("EXPAND" => "Capítulos");
+                                        label-font-size: 0.875 * root.unit;
+                                        icon-source: card.is-expanded ? @image-url("../assets/images/icons/chevron-up.svg") : @image-url("../assets/images/icons/chevron-down.svg");
+                                        show-icon: true;
+                                        icon-size: 1 * root.unit;
                                         clicked => {
                                             if (root.expanded-id == item.id) {
                                                 root.expanded-id = "";
@@ -730,8 +749,9 @@ export component DownloadsPage inherits Rectangle {
                                         width: 7.75 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
+                                        label-font-weight: 500;
                                         label: @tr("DELETE" => "Eliminar");
-                                        label-font-size: 0.86 * root.unit;
+                                        label-font-size: 0.875 * root.unit;
                                         outlined: true;
                                         hover-color: Theme.danger.with-alpha(0.2);
                                         hover-outline-color: Theme.danger;
@@ -747,8 +767,9 @@ export component DownloadsPage inherits Rectangle {
                                         width: 10.5 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
+                                        label-font-weight: 500;
                                         label: "Cambiar fuente";
-                                        label-font-size: 0.84 * root.unit;
+                                        label-font-size: 0.8125 * root.unit;
                                         outlined: true;
                                         clicked => {
                                             root.request-download-episode(
@@ -763,8 +784,9 @@ export component DownloadsPage inherits Rectangle {
                                         width: 7.75 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
+                                        label-font-weight: 500;
                                         label: @tr("CANCEL" => "Cancelar");
-                                        label-font-size: 0.86 * root.unit;
+                                        label-font-size: 0.875 * root.unit;
                                         outlined: true;
                                         hover-color: Theme.danger.with-alpha(0.2);
                                         hover-outline-color: Theme.danger;
@@ -774,8 +796,9 @@ export component DownloadsPage inherits Rectangle {
                                         width: 7.75 * root.unit;
                                         height: 2.75 * root.unit;
                                         unit: root.unit;
+                                        label-font-weight: 500;
                                         label: @tr("DELETE" => "Eliminar");
-                                        label-font-size: 0.86 * root.unit;
+                                        label-font-size: 0.875 * root.unit;
                                         outlined: true;
                                         hover-color: Theme.danger.with-alpha(0.2);
                                         hover-outline-color: Theme.danger;
@@ -803,7 +826,7 @@ export component DownloadsPage inherits Rectangle {
                                     horizontal-stretch: 1;
                                     text: item.error-message;
                                     color: dl-error-text;
-                                    font-size: 0.84 * root.unit;
+                                    font-size: 0.8125 * root.unit;
                                     wrap: word-wrap;
                                 }
                             }
@@ -830,25 +853,25 @@ export component DownloadsPage inherits Rectangle {
                                     horizontal-stretch: 0;
                                     text: @tr("ALL_CHAPTERS" => "Todos los capítulos");
                                     color: Theme.text-primary;
-                                    font-size: 0.95 * root.unit;
-                                    font-weight: 700;
+                                    font-size: 0.875 * root.unit;
+                                    font-weight: 600;
                                 }
 
                                 Text {
                                     horizontal-stretch: 1;
                                     horizontal-alignment: right;
-                                    text: card.hovered-ep-info != "" ? card.hovered-ep-info : @tr("CHAPTER_HINT" => "Iluminados: descargados · Click en capítulo o temporada para gestionar");
+                                    text: card.hovered-ep-info != "" ? card.hovered-ep-info : @tr("CHAPTER_HINT" => "Descargados · Elegí un capítulo o temporada para gestionar");
                                     color: card.hovered-ep-info != "" ? Theme.text-primary : Theme.text-muted;
-                                    font-size: 0.82 * root.unit;
-                                    font-weight: card.hovered-ep-info != "" ? 650 : 450;
+                                    font-size: 0.8125 * root.unit;
+                                    font-weight: card.hovered-ep-info != "" ? 500 : 400;
                                     overflow: elide;
                                 }
                             }
 
                             if (item.all-seasons.length == 0) : Text {
-                                text: @tr("NO_SEASONS_AVAILABLE" => "No hay información de capítulos disponible para esta serie.");
+                                text: @tr("NO_SEASONS_AVAILABLE" => "Sin datos de capítulos.");
                                 color: Theme.text-secondary;
-                                font-size: 0.88 * root.unit;
+                                font-size: 0.875 * root.unit;
                                 wrap: word-wrap;
                             }
 
@@ -865,7 +888,7 @@ export component DownloadsPage inherits Rectangle {
                                     height: parent.height;
                                     spacing: 0.75 * root.unit;
 
-                                // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Clickable!) - squircle sin borde
+                                // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Tocable) - squircle sin borde
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 0;
@@ -878,7 +901,7 @@ export component DownloadsPage inherits Rectangle {
                                         season-pill-touch := TouchArea {
                                             mouse-cursor: MouseCursor.pointer;
                                             moved => {
-                                                card.hovered-ep-info = s.season-label + (s.season-year != "" ? " (" + s.season-year + ")" : "") + (s.has-active || s.has-paused ? " — Click para pausar, cancelar o cambiar fuente" : (s.has-downloaded ? " — Click para descargar o eliminar temporada" : " — Click para buscar y descargar temporada"));
+                                                card.hovered-ep-info = s.season-label + (s.season-year != "" ? " (" + s.season-year + ")" : "") + (s.has-active || s.has-paused ? " · Elegí para pausar, cancelar o cambiar fuente" : (s.has-downloaded ? " · Elegí para descargar o eliminar temporada" : " · Elegí para buscar y descargar temporada"));
                                             }
                                             clicked => {
                                                 root.prompt-download-meta-id = item.meta-id;
@@ -906,9 +929,9 @@ export component DownloadsPage inherits Rectangle {
                                             width: 100%;
                                             height: 100%;
                                             text: s.season-year != "" ? (s.season-label + " · " + s.season-year) : s.season-label;
-                                            color: season-pill-touch.has-hover ? Theme.text-primary : Theme.text-primary;
-                                            font-size: 0.86 * root.unit;
-                                            font-weight: 750;
+                                            color: Theme.text-primary;
+                                            font-size: 0.875 * root.unit;
+                                            font-weight: 600;
                                             horizontal-alignment: center;
                                             vertical-alignment: center;
                                         }
@@ -971,7 +994,7 @@ export component DownloadsPage inherits Rectangle {
                                                     ep-title-measure := Text {
                                                         visible: false;
                                                         text: ep.title;
-                                                        font-size: 0.78 * root.unit;
+                                                        font-size: 0.75 * root.unit;
                                                     }
 
                                                     if (ep.is-downloading) : Rectangle {
@@ -1004,14 +1027,14 @@ export component DownloadsPage inherits Rectangle {
                                                         card.hovered-ep-info = s.season-label + " · E" + ep.episode-num
                                                             + (ep.title != "" ? ": " + ep.title : "")
                                                             + (ep.is-downloaded
-                                                                ? " (Descargado — click para reproducir, click derecho para opciones)"
+                                                                ? " (Descargado · Elegí para reproducir, clic derecho para opciones)"
                                                                 : (ep.is-downloading
-                                                                    ? " (Descargando " + Math.round(ep.progress * 100) + "% — click para pausar, cancelar o cambiar fuente)"
+                                                                    ? " (Descargando " + Math.round(ep.progress * 100) + "% · Elegí para pausar, cancelar o cambiar fuente)"
                                                                     : (ep.is-paused
-                                                                        ? " (Pausado " + Math.round(ep.progress * 100) + "% — click para reanudar, cancelar o cambiar fuente)"
+                                                                        ? " (Pausado " + Math.round(ep.progress * 100) + "% · Elegí para reanudar, cancelar o cambiar fuente)"
                                                                         : (ep.is-failed
                                                                             ? " (Error: " + ep.error-message + ")"
-                                                                            : " (No descargado — click para descargar)"))));
+                                                                            : " (No descargado · Elegí para descargar)"))));
                                                     }
                                                     clicked => {
                                                         if (ep.is-downloaded) {
@@ -1143,8 +1166,8 @@ export component DownloadsPage inherits Rectangle {
                                                                     : (ep.is-paused
                                                                         ? dl-paused
                                                                         : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted))));
-                                                        font-size: 0.88 * root.unit;
-                                                        font-weight: ep.is-downloaded || ep.is-downloading || ep.is-paused || ep.is-failed ? 750 : 550;
+                                                        font-size: 0.875 * root.unit;
+                                                        font-weight: 500;
                                                         vertical-alignment: center;
                                                     }
 
@@ -1153,7 +1176,7 @@ export component DownloadsPage inherits Rectangle {
                                                         height: parent.height;
                                                         text: ep.title;
                                                         color: Theme.text-primary;
-                                                        font-size: 0.76 * root.unit;
+                                                        font-size: 0.75 * root.unit;
                                                         font-weight: 500;
                                                         vertical-alignment: center;
                                                         overflow: elide;
@@ -1213,8 +1236,8 @@ export component DownloadsPage inherits Rectangle {
                     Text {
                         text: root.prompt-download-title;
                         color: Theme.text-primary;
-                        font-size: 1.1 * root.unit;
-                        font-weight: 700;
+                        font-size: 1.25 * root.unit;
+                        font-weight: 600;
                         overflow: elide;
                     }
 
@@ -1223,8 +1246,8 @@ export component DownloadsPage inherits Rectangle {
                             ? ((root.prompt-download-season-label != "" ? root.prompt-download-season-label : ("Temporada " + root.prompt-download-season)) + (root.prompt-download-season-year != "" ? (" · " + root.prompt-download-season-year) : ""))
                             : ((root.prompt-download-season-label != "" ? root.prompt-download-season-label : ("Temporada " + root.prompt-download-season)) + " · Episodio " + root.prompt-download-episode + (root.prompt-download-ep-title != "" ? (": " + root.prompt-download-ep-title) : ""));
                         color: Theme.text-secondary;
-                        font-size: 0.92 * root.unit;
-                        font-weight: 650;
+                        font-size: 0.8125 * root.unit;
+                        font-weight: 500;
                         overflow: elide;
                     }
                 }
@@ -1244,7 +1267,7 @@ export component DownloadsPage inherits Rectangle {
                         horizontal-stretch: 1;
                         text: root.prompt-download-error;
                         color: dl-error-text;
-                        font-size: 0.88 * root.unit;
+                        font-size: 0.875 * root.unit;
                         wrap: word-wrap;
                     }
                 }
@@ -1253,21 +1276,21 @@ export component DownloadsPage inherits Rectangle {
             if (!root.prompt-download-is-failed) : Text {
                 text: root.prompt-download-episode == 0
                     ? (root.prompt-download-season-has-active
-                        ? "Esta temporada tiene capítulos descargándose. Podés pausarlos, cancelar los pendientes o elegir una fuente diferente."
+                        ? "Hay capítulos descargándose. Podés pausarlos, cancelar los pendientes o cambiar de fuente."
                         : (root.prompt-download-season-has-paused
-                            ? "Esta temporada tiene descargas pausadas. Podés reanudarlas, cancelarlas o cambiar la fuente."
+                            ? "Hay descargas pausadas. Podés reanudarlas, cancelarlas o cambiar de fuente."
                             : (root.prompt-download-season-has-dl
-                                ? "Podés buscar fuentes para descargar la temporada completa o eliminar los capítulos ya descargados de esta temporada."
-                                : "¿Deseás buscar fuentes para descargar esta temporada?")))
+                                ? "Podés descargar la temporada completa o eliminar los capítulos ya descargados."
+                                : "¿Buscar fuentes para descargar esta temporada?")))
                     : (root.prompt-download-is-downloaded
-                        ? "Este capítulo ya está descargado en tu equipo. ¿Deseás reproducirlo o eliminarlo del disco?"
+                        ? "Ya está en tu equipo. Podés reproducirlo o eliminarlo."
                         : (root.prompt-download-is-downloading
-                            ? ("Este capítulo se está descargando (" + Math.round(root.prompt-download-progress * 100) + "%). Podés pausar, cancelar o elegir otra fuente.")
+                            ? ("Se está descargando (" + Math.round(root.prompt-download-progress * 100) + "%). Podés pausar, cancelar o cambiar de fuente.")
                             : (root.prompt-download-is-paused
-                                ? ("La descarga de este capítulo está pausada (" + Math.round(root.prompt-download-progress * 100) + "%). Podés reanudarla, cancelarla o cambiar de fuente.")
-                                : "Este capítulo no está descargado aún. Podés buscar fuentes para descargar solo este capítulo o toda la temporada.")));
+                                ? ("Pausado (" + Math.round(root.prompt-download-progress * 100) + "%). Podés reanudar, cancelar o cambiar de fuente.")
+                                : "No está descargado. Podés bajar solo este capítulo o la temporada completa.")));
                 color: Theme.text-secondary;
-                font-size: 0.9 * root.unit;
+                font-size: 0.875 * root.unit;
                 wrap: word-wrap;
             }
 
@@ -1279,6 +1302,8 @@ export component DownloadsPage inherits Rectangle {
                 PillButton {
                     width: 6.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("CLOSE" => "Cerrar");
                     outlined: true;
                     clicked => { root.prompt-download-open = false; }
@@ -1288,6 +1313,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode == 0 && root.prompt-download-season-has-dl) : PillButton {
                     width: 11.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Eliminar temporada";
                     outlined: true;
                     hover-color: Theme.danger.with-alpha(0.2);
@@ -1301,6 +1328,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode == 0 && (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)) : PillButton {
                     width: 7.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("CANCEL" => "Cancelar");
                     outlined: true;
                     hover-color: Theme.danger.with-alpha(0.2);
@@ -1314,6 +1343,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode == 0 && root.prompt-download-season-has-active) : PillButton {
                     width: 7.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("PAUSE" => "Pausar");
                     outlined: true;
                     clicked => {
@@ -1325,6 +1356,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode == 0 && !root.prompt-download-season-has-active && root.prompt-download-season-has-paused) : PillButton {
                     width: 8.25 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("RESUME" => "Reanudar");
                     outlined: true;
                     clicked => {
@@ -1336,6 +1369,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode == 0 && (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)) : PillButton {
                     width: 10.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Cambiar fuente";
                     primary: true;
                     clicked => {
@@ -1347,6 +1382,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode == 0 && !root.prompt-download-season-has-active && !root.prompt-download-season-has-paused) : PillButton {
                     width: 12.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Descargar temporada";
                     primary: true;
                     clicked => {
@@ -1359,6 +1396,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-downloaded) : PillButton {
                     width: 11.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Eliminar capítulo";
                     outlined: true;
                     hover-color: Theme.danger.with-alpha(0.2);
@@ -1372,6 +1411,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-downloaded) : PillButton {
                     width: 11.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Reproducir";
                     primary: true;
                     clicked => {
@@ -1384,6 +1425,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
                     width: 8.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("CANCEL" => "Cancelar");
                     outlined: true;
                     hover-color: Theme.danger.with-alpha(0.2);
@@ -1397,6 +1440,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
                     width: 8.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("PAUSE" => "Pausar");
                     outlined: true;
                     clicked => {
@@ -1408,6 +1453,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
                     width: 11.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Cambiar fuente";
                     primary: true;
                     clicked => {
@@ -1420,6 +1467,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
                     width: 8.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("CANCEL" => "Cancelar");
                     outlined: true;
                     hover-color: Theme.danger.with-alpha(0.2);
@@ -1433,6 +1482,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
                     width: 11.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Cambiar fuente";
                     outlined: true;
                     clicked => {
@@ -1444,6 +1495,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
                     width: 9.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: @tr("RESUME" => "Reanudar");
                     primary: true;
                     clicked => {
@@ -1456,6 +1509,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
                     width: 8 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Eliminar";
                     outlined: true;
                     hover-color: Theme.danger.with-alpha(0.2);
@@ -1469,6 +1524,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
                     width: 9 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Reintentar";
                     outlined: true;
                     clicked => {
@@ -1480,6 +1537,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
                     width: 11.5 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Cambiar fuente";
                     primary: true;
                     clicked => {
@@ -1492,6 +1551,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
                     width: 13 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Descargar temporada";
                     outlined: true;
                     clicked => {
@@ -1503,6 +1564,8 @@ export component DownloadsPage inherits Rectangle {
                 if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
                     width: 13 * root.unit;
                     unit: root.unit;
+                    label-font-weight: 500;
+                    label-font-size: 0.875 * root.unit;
                     label: "Buscar y descargar";
                     primary: true;
                     clicked => {
