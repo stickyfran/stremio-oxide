@@ -185,48 +185,65 @@ export component DownloadsPage inherits Rectangle {
 
                 Rectangle {
                     height: 2.8 * root.unit;
-                    max-width: 22 * root.unit;
+                    max-width: 28 * root.unit;
                     clip: true;
                     border-radius: Theme.border-radius;
-                    background: Theme.primary-accent.with-alpha(0.16);
+                    background: Theme.card-background;
                     border-width: 1px;
-                    border-color: Theme.primary-accent.with-alpha(0.45);
+                    border-color: Theme.card-border;
 
                     HorizontalLayout {
-                        padding-left: 1 * root.unit;
-                        padding-right: 1.2 * root.unit;
-                        spacing: 0.8 * root.unit;
+                        height: 100%;
+                        padding-left: 1.1 * root.unit;
+                        padding-right: 1.1 * root.unit;
+                        spacing: 0.7 * root.unit;
                         alignment: center;
 
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 0.8 * root.unit;
-                                height: 0.8 * root.unit;
-                                border-radius: self.height / 2;
-                                background: Theme.accent;
-                                opacity: 0.35 + 0.65 * abs(sin(animation-tick() / 600ms * 180deg));
+                        Rectangle {
+                            width: 1.15 * root.unit;
+                            height: parent.height;
+                            background: transparent;
+
+                            Image {
+                                x: 0px;
+                                y: (parent.height - self.height) / 2;
+                                width: 1.15 * root.unit;
+                                height: 1.15 * root.unit;
+                                source: @image-url("../assets/images/icons/download.svg");
+                                colorize: Theme.text-secondary;
+                                image-fit: contain;
                             }
                         }
 
-                        VerticalLayout {
+                        if (root.current-text == "") : Text {
+                            height: parent.height;
+                            text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
+                                + (root.eta-text != "" ? " · " + root.eta-text : "");
+                            color: Theme.text-primary;
+                            font-size: 0.86 * root.unit;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        if (root.current-text != "") : VerticalLayout {
                             alignment: center;
-                            spacing: 0.1 * root.unit;
+                            spacing: 0.06 * root.unit;
 
                             Text {
                                 text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
                                     + (root.eta-text != "" ? " · " + root.eta-text : "");
-                                color: Theme.primary-foreground;
-                                font-size: 0.82 * root.unit;
-                                font-weight: 650;
+                                color: Theme.text-primary;
+                                font-size: 0.80 * root.unit;
+                                font-weight: 600;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
-                            if (root.current-text != "") : Text {
+                            Text {
                                 text: root.current-text;
                                 color: Theme.text-secondary;
-                                font-size: 0.72 * root.unit;
+                                font-size: 0.70 * root.unit;
                                 overflow: elide;
                                 vertical-alignment: center;
                             }
@@ -249,26 +266,33 @@ export component DownloadsPage inherits Rectangle {
                     border-color: Theme.card-border;
 
                     HorizontalLayout {
-                        padding-left: 1.2 * root.unit;
-                        padding-right: 1.2 * root.unit;
-                        spacing: 0.8 * root.unit;
+                        height: 100%;
+                        padding-left: 1.1 * root.unit;
+                        padding-right: 1.1 * root.unit;
+                        spacing: 0.7 * root.unit;
                         alignment: center;
 
-                        VerticalLayout {
-                            alignment: center;
+                        Rectangle {
+                            width: 1.15 * root.unit;
+                            height: parent.height;
+                            background: transparent;
+
                             Image {
-                                width: 1.2 * root.unit;
-                                height: 1.2 * root.unit;
+                                x: 0px;
+                                y: (parent.height - self.height) / 2;
+                                width: 1.15 * root.unit;
+                                height: 1.15 * root.unit;
                                 source: @image-url("../assets/images/icons/download.svg");
-                                colorize: Theme.accent;
+                                colorize: Theme.text-secondary;
                                 image-fit: contain;
                             }
                         }
 
                         Text {
+                            height: parent.height;
                             text: root.disk-usage-text;
                             color: Theme.text-secondary;
-                            font-size: 0.9 * root.unit;
+                            font-size: 0.86 * root.unit;
                             vertical-alignment: center;
                             overflow: elide;
                         }
@@ -375,11 +399,9 @@ export component DownloadsPage inherits Rectangle {
                     border-width: 1px;
                     border-color: item.has-failed
                         ? Theme.danger.with-alpha(0.55)
-                        : (item.is-downloading
-                            ? Theme.primary-accent.with-alpha(0.55)
-                            : (item.is-paused
-                                ? #f59e0b.with-alpha(0.55)
-                                : (row-area.has-hover ? Theme.primary-accent.with-alpha(0.4) : Theme.card-border)));
+                        : (item.is-paused
+                            ? #f59e0b.with-alpha(0.45)
+                            : (row-area.has-hover ? Theme.divider : Theme.card-border));
                     background: row-area.has-hover ? #1c1a2d : Theme.card-background;
                     clip: true;
 
@@ -817,16 +839,17 @@ export component DownloadsPage inherits Rectangle {
                                 wrap: word-wrap;
                             }
 
-                            for s in item.all-seasons : Rectangle {
+                            for s in item.all-seasons : season-row := Rectangle {
                                 property <bool> season-visible: card.is-expanded || s.has-downloaded || s.has-active || s.has-paused || s.has-failed;
                                 visible: self.season-visible;
-                                height: self.season-visible ? 3.1 * root.unit : 0px;
+                                width: 100%;
+                                height: self.season-visible ? 3.5 * root.unit : 0px;
                                 clip: true;
                                 background: transparent;
 
                                 HorizontalLayout {
-                                    width: 100%;
-                                    height: 3.1 * root.unit;
+                                    width: parent.width;
+                                    height: parent.height;
                                     spacing: 0.8 * root.unit;
 
                                 // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Clickable!) - squircle sin borde
@@ -880,58 +903,71 @@ export component DownloadsPage inherits Rectangle {
                                 }
 
                                 // Horizontal strip of episodes: E1 E2 E3 ... EN (scrollable so long seasons never clip)
-                                ep-scroll := ScrollView {
+                                ep-viewport := Rectangle {
                                     horizontal-stretch: 1;
-                                    height: 3.1 * root.unit;
-                                    viewport-width: max(self.visible-width, ep-strip.preferred-width);
-                                    viewport-height: self.visible-height;
-                                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-                                    horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
+                                    min-width: 0px;
+                                    height: parent.height;
+                                    background: transparent;
+                                    clip: true;
 
-                                    ep-strip := HorizontalLayout {
-                                        spacing: 0.45 * root.unit;
-                                        alignment: start;
+                                    ep-scroll := ScrollView {
+                                        x: 0px;
+                                        y: 0px;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        viewport-width: max(parent.width, ep-strip.preferred-width);
+                                        viewport-height: parent.height;
+                                        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                                        horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
+                                        mouse-drag-pan-enabled: true;
 
-                                        for ep in s.episodes : VerticalLayout {
-                                            alignment: center;
-                                            horizontal-stretch: 0;
-                                            Rectangle {
-                                                width: ep-grid-touch.has-hover && ep.title != ""
-                                                    ? min(22 * root.unit, 4.0 * root.unit + ep-title-measure.preferred-width + 1.4 * root.unit)
-                                                    : 4.0 * root.unit;
-                                                height: 2.8 * root.unit;
-                                                border-radius: 6px;
-                                                border-width: ep.is-failed || ep.is-downloading || ep.is-paused ? 1px : 0px;
-                                                border-color: ep.is-failed
-                                                    ? Theme.danger.with-alpha(0.65)
-                                                    : (ep.is-downloading
-                                                        ? #38bdf8.with-alpha(0.55)
-                                                        : (ep.is-paused ? #f59e0b.with-alpha(0.65) : transparent));
-                                                clip: true;
-                                                animate width { duration: Theme.motion-panel; easing: ease-out; }
-                                                background: ep.is-downloaded
-                                                    ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
-                                                    : (ep.is-downloading
-                                                        ? (ep-grid-touch.has-hover ? #0284c7.with-alpha(0.45) : #0ea5e9.with-alpha(0.24))
-                                                        : (ep.is-paused
-                                                            ? (ep-grid-touch.has-hover ? #f59e0b.with-alpha(0.40) : #f59e0b.with-alpha(0.24))
-                                                            : (ep.is-failed
-                                                                ? (ep-grid-touch.has-hover ? Theme.danger.with-alpha(0.42) : Theme.danger.with-alpha(0.24))
-                                                                : (ep-grid-touch.has-hover ? #28283c : #181824))));
+                                        ep-strip := HorizontalLayout {
+                                            x: 0px;
+                                            y: (ep-viewport.height - self.height) / 2;
+                                            height: 2.8 * root.unit;
+                                            spacing: 0.45 * root.unit;
+                                            alignment: start;
 
-                                                ep-title-measure := Text {
-                                                    visible: false;
-                                                    text: ep.title;
-                                                    font-size: 0.78 * root.unit;
-                                                }
+                                            for ep in s.episodes : VerticalLayout {
+                                                alignment: center;
+                                                horizontal-stretch: 0;
+                                                Rectangle {
+                                                    width: ep-grid-touch.has-hover && ep.title != ""
+                                                        ? min(22 * root.unit, 4.4 * root.unit + ep-title-measure.preferred-width + 1.4 * root.unit)
+                                                        : 4.4 * root.unit;
+                                                    height: 2.8 * root.unit;
+                                                    border-radius: 6px;
+                                                    border-width: ep.is-failed || ep.is-downloading || ep.is-paused ? 1px : 0px;
+                                                    border-color: ep.is-failed
+                                                        ? Theme.danger.with-alpha(0.65)
+                                                        : (ep.is-downloading
+                                                            ? Theme.primary-accent.with-alpha(0.45)
+                                                            : (ep.is-paused ? #f59e0b.with-alpha(0.65) : transparent));
+                                                    clip: true;
+                                                    animate width { duration: Theme.motion-panel; easing: ease-out; }
+                                                    background: ep.is-downloaded
+                                                        ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
+                                                        : (ep.is-downloading
+                                                            ? (ep-grid-touch.has-hover ? #2c2848 : #201d35)
+                                                            : (ep.is-paused
+                                                                ? (ep-grid-touch.has-hover ? #f59e0b.with-alpha(0.40) : #f59e0b.with-alpha(0.24))
+                                                                : (ep.is-failed
+                                                                    ? (ep-grid-touch.has-hover ? Theme.danger.with-alpha(0.42) : Theme.danger.with-alpha(0.24))
+                                                                    : (ep-grid-touch.has-hover ? #28283c : #181824))));
 
-                                                if (ep.is-downloading) : Rectangle {
-                                                    x: 0px;
-                                                    y: parent.height - 3px;
-                                                    width: parent.width * max(0.08, min(1.0, ep.progress));
-                                                    height: 3px;
-                                                    background: #38bdf8;
-                                                }
+                                                    ep-title-measure := Text {
+                                                        visible: false;
+                                                        text: ep.title;
+                                                        font-size: 0.78 * root.unit;
+                                                    }
+
+                                                    if (ep.is-downloading) : Rectangle {
+                                                        x: 0px;
+                                                        y: parent.height - 3px;
+                                                        width: parent.width * max(0.08, min(1.0, ep.progress));
+                                                        height: 3px;
+                                                        background: Theme.accent;
+                                                    }
 
                                                 if (ep.is-paused) : Rectangle {
                                                     x: 0px;
@@ -1025,6 +1061,8 @@ export component DownloadsPage inherits Rectangle {
                                                 HorizontalLayout {
                                                     width: 100%;
                                                     height: 100%;
+                                                    padding-left: 0.5 * root.unit;
+                                                    padding-right: 0.5 * root.unit;
                                                     alignment: center;
                                                     spacing: 0.3 * root.unit;
 
@@ -1074,7 +1112,7 @@ export component DownloadsPage inherits Rectangle {
                                                             colorize: ep.is-failed
                                                                 ? #fecaca
                                                                 : (ep.is-downloading
-                                                                    ? #7dd3fc
+                                                                    ? Theme.text-primary
                                                                     : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted));
                                                             image-fit: contain;
                                                         }
@@ -1088,7 +1126,7 @@ export component DownloadsPage inherits Rectangle {
                                                             : (ep.is-failed
                                                                 ? #fecaca
                                                                 : (ep.is-downloading
-                                                                    ? #bae6fd
+                                                                    ? Theme.text-primary
                                                                     : (ep.is-paused
                                                                         ? #fef3c7
                                                                         : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted))));
@@ -1109,6 +1147,7 @@ export component DownloadsPage inherits Rectangle {
                                                     }
                                                 }
                                             }
+                                        }
                                         }
                                     }
                                 }

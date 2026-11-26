@@ -33,14 +33,14 @@ export component StreamRow inherits Rectangle {
     border-width: 1px;
     border-color: root.selected
         ? Theme.accent.with-alpha(0.85)
-        : (root.row-hovered ? Theme.primary-accent.with-alpha(0.65) : Theme.divider);
+        : (root.row-hovered ? Theme.primary-accent.with-alpha(0.75) : Theme.divider);
     clip: true;
     private property <bool> download-hovered: false;
     private property <bool> play-hovered: false;
     property <bool> row-hovered: row-area.has-hover || root.download-hovered || root.play-hovered;
     background: root.selected
-        ? (root.row-hovered ? Theme.primary-accent.with-alpha(0.24) : Theme.primary-accent.with-alpha(0.18))
-        : (root.row-hovered ? Theme.primary-accent.with-alpha(0.14) : Theme.overlay-hover);
+        ? (root.row-hovered ? Theme.primary-accent.with-alpha(0.26) : Theme.primary-accent.with-alpha(0.18))
+        : (root.row-hovered ? Theme.card-background.brighter(0.55) : Theme.card-background.with-alpha(0.90));
 
     animate background { duration: Theme.motion-fast; }
     animate border-color { duration: Theme.motion-fast; }
@@ -65,7 +65,6 @@ export component StreamRow inherits Rectangle {
         padding-top: 0.55 * root.unit;
         padding-bottom: 0.55 * root.unit;
         spacing: 0.85 * root.unit;
-        alignment: start;
 
         VerticalLayout {
             alignment: center;
@@ -184,6 +183,7 @@ export component StreamRow inherits Rectangle {
 
         VerticalLayout {
             horizontal-stretch: 1;
+            min-width: 0px;
             alignment: center;
             spacing: 0.32 * root.unit;
 
@@ -308,14 +308,13 @@ export component StreamRow inherits Rectangle {
         }
 
         if (!root.selection-mode) : VerticalLayout {
+            horizontal-stretch: 0;
             alignment: center;
             width: 5.8 * root.unit;
 
             actions-container := HorizontalLayout {
                 spacing: 0.45 * root.unit;
                 alignment: end;
-                opacity: (root.selected || root.row-hovered) ? 1.0 : 0.85;
-                animate opacity { duration: 150ms; easing: ease-out; }
 
                 download-button := ButtonSurface {
                     width: 2.6 * root.unit;
@@ -360,6 +359,7 @@ export component StreamRow inherits Rectangle {
         }
 
         if (root.selection-mode) : VerticalLayout {
+            horizontal-stretch: 0;
             alignment: center;
             width: 2.2 * root.unit;
 
