@@ -122,6 +122,17 @@ export component DownloadsPage inherits Rectangle {
 
     background: transparent;
 
+    // Neutral ramp for this screen. The brand violet stays in Theme and is
+    // used only for the primary action and the active progress; these
+    // surfaces are graphite so the posters and the progress carry the color.
+    private property <color> dl-surface: #141416;
+    private property <color> dl-surface-raised: #1b1b1e;
+    private property <color> dl-surface-hover: #222226;
+    private property <color> dl-hairline: #ffffff14;
+    private property <color> dl-hairline-strong: #ffffff26;
+    private property <color> dl-paused: #d6a13a;
+    private property <color> dl-error-text: #f0a8a8;
+
     private property <float> content-fade-opacity: 1.0;
     private property <bool> content-fade-in-pending: false;
     private property <int> has-items-state: root.items.length > 0 ? 1 : 0;
@@ -160,14 +171,14 @@ export component DownloadsPage inherits Rectangle {
     }
 
     VerticalLayout {
-        padding-left: 3 * root.unit;
-        padding-right: 3 * root.unit;
-        padding-top: 2.5 * root.unit;
+        padding-left: 2 * root.unit;
+        padding-right: 2 * root.unit;
+        padding-top: 2 * root.unit;
         padding-bottom: 2 * root.unit;
         spacing: 1.5 * root.unit;
 
         HorizontalLayout {
-            height: 3.2 * root.unit;
+            height: 3.25 * root.unit;
             spacing: 1.5 * root.unit;
 
             Text {
@@ -184,31 +195,31 @@ export component DownloadsPage inherits Rectangle {
                 horizontal-stretch: 0;
 
                 Rectangle {
-                    height: 2.8 * root.unit;
+                    height: 2.75 * root.unit;
                     max-width: 28 * root.unit;
                     clip: true;
                     border-radius: Theme.border-radius;
-                    background: Theme.card-background;
+                    background: dl-surface;
                     border-width: 1px;
-                    border-color: Theme.card-border;
+                    border-color: dl-hairline;
 
                     HorizontalLayout {
                         height: 100%;
-                        padding-left: 1.1 * root.unit;
-                        padding-right: 1.1 * root.unit;
-                        spacing: 0.7 * root.unit;
+                        padding-left: 1 * root.unit;
+                        padding-right: 1 * root.unit;
+                        spacing: 0.75 * root.unit;
                         alignment: center;
 
                         Rectangle {
-                            width: 1.15 * root.unit;
+                            width: 1.25 * root.unit;
                             height: parent.height;
                             background: transparent;
 
                             Image {
                                 x: 0px;
                                 y: (parent.height - self.height) / 2;
-                                width: 1.15 * root.unit;
-                                height: 1.15 * root.unit;
+                                width: 1 * root.unit;
+                                height: 1 * root.unit;
                                 source: @image-url("../assets/images/icons/download.svg");
                                 colorize: Theme.text-secondary;
                                 image-fit: contain;
@@ -228,7 +239,7 @@ export component DownloadsPage inherits Rectangle {
 
                         if (root.current-text != "") : VerticalLayout {
                             alignment: center;
-                            spacing: 0.06 * root.unit;
+                            spacing: 0.125 * root.unit;
 
                             Text {
                                 text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
@@ -257,31 +268,31 @@ export component DownloadsPage inherits Rectangle {
                 horizontal-stretch: 0;
 
                 Rectangle {
-                    height: 2.8 * root.unit;
+                    height: 2.75 * root.unit;
                     max-width: 24 * root.unit;
                     clip: true;
                     border-radius: Theme.border-radius;
-                    background: Theme.card-background;
+                    background: dl-surface;
                     border-width: 1px;
-                    border-color: Theme.card-border;
+                    border-color: dl-hairline;
 
                     HorizontalLayout {
                         height: 100%;
-                        padding-left: 1.1 * root.unit;
-                        padding-right: 1.1 * root.unit;
-                        spacing: 0.7 * root.unit;
+                        padding-left: 1 * root.unit;
+                        padding-right: 1 * root.unit;
+                        spacing: 0.75 * root.unit;
                         alignment: center;
 
                         Rectangle {
-                            width: 1.15 * root.unit;
+                            width: 1.25 * root.unit;
                             height: parent.height;
                             background: transparent;
 
                             Image {
                                 x: 0px;
                                 y: (parent.height - self.height) / 2;
-                                width: 1.15 * root.unit;
-                                height: 1.15 * root.unit;
+                                width: 1 * root.unit;
+                                height: 1 * root.unit;
                                 source: @image-url("../assets/images/icons/download.svg");
                                 colorize: Theme.text-secondary;
                                 image-fit: contain;
@@ -306,7 +317,7 @@ export component DownloadsPage inherits Rectangle {
 
                 PillButton {
                     width: 10.5 * root.unit;
-                    height: 2.8 * root.unit;
+                    height: 2.75 * root.unit;
                     unit: root.unit;
                     label: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
                     label-font-size: 0.88 * root.unit;
@@ -318,13 +329,13 @@ export component DownloadsPage inherits Rectangle {
         if (root.error != "") : Rectangle {
             height: error-banner-row.preferred-height;
             border-radius: Theme.border-radius;
-            background: Theme.danger.with-alpha(0.16);
+            background: Theme.danger.with-alpha(0.10);
             border-width: 1px;
-            border-color: Theme.danger.with-alpha(0.45);
+            border-color: Theme.danger.with-alpha(0.25);
 
             error-banner-row := HorizontalLayout {
-                padding: 0.9 * root.unit;
-                spacing: 0.8 * root.unit;
+                padding: 1 * root.unit;
+                spacing: 0.75 * root.unit;
                 alignment: start;
 
                 Text {
@@ -340,7 +351,7 @@ export component DownloadsPage inherits Rectangle {
                     alignment: center;
                     PillButton {
                         width: 8.5 * root.unit;
-                        height: 2.6 * root.unit;
+                        height: 2.5 * root.unit;
                         unit: root.unit;
                         label: @tr("RETRY" => "Reintentar");
                         label-font-size: 0.84 * root.unit;
@@ -351,8 +362,8 @@ export component DownloadsPage inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     PillButton {
-                        width: 2.8 * root.unit;
-                        height: 2.6 * root.unit;
+                        width: 2.75 * root.unit;
+                        height: 2.5 * root.unit;
                         unit: root.unit;
                         label: "×";
                         outlined: true;
@@ -386,8 +397,8 @@ export component DownloadsPage inherits Rectangle {
 
             items-layout := VerticalLayout {
                 alignment: start;
-                spacing: 1.0 * root.unit;
-                padding-bottom: 2.0 * root.unit;
+                spacing: 1 * root.unit;
+                padding-bottom: 2 * root.unit;
 
                 for item in root.items : card := Rectangle {
                     property <bool> is-expanded: root.expanded-id == item.id;
@@ -398,11 +409,11 @@ export component DownloadsPage inherits Rectangle {
                     border-radius: Theme.border-radius;
                     border-width: 1px;
                     border-color: item.has-failed
-                        ? Theme.danger.with-alpha(0.55)
+                        ? Theme.danger.with-alpha(0.30)
                         : (item.is-paused
-                            ? #f59e0b.with-alpha(0.45)
-                            : (row-area.has-hover ? Theme.divider : Theme.card-border));
-                    background: row-area.has-hover ? #1c1a2d : Theme.card-background;
+                            ? dl-paused.with-alpha(0.30)
+                            : (row-area.has-hover ? dl-hairline-strong : dl-hairline));
+                    background: row-area.has-hover ? dl-surface-hover : dl-surface;
                     clip: true;
 
                     animate background, border-color { duration: Theme.motion-fast; }
@@ -427,26 +438,26 @@ export component DownloadsPage inherits Rectangle {
                         x: 0px;
                         y: 0px;
                         width: 100%;
-                        padding-left: 1.4 * root.unit;
-                        padding-right: 1.4 * root.unit;
-                        padding-top: 1.2 * root.unit;
-                        padding-bottom: 1.2 * root.unit;
-                        spacing: 0.9 * root.unit;
+                        padding-left: 1.5 * root.unit;
+                        padding-right: 1.5 * root.unit;
+                        padding-top: 1.25 * root.unit;
+                        padding-bottom: 1.25 * root.unit;
+                        spacing: 1 * root.unit;
                         alignment: start;
 
                         // Main Header Row (Poster, Meta Column, Actions)
                         HorizontalLayout {
-                            height: 8.2 * root.unit;
-                            spacing: 1.4 * root.unit;
+                            height: 8.25 * root.unit;
+                            spacing: 1.5 * root.unit;
 
                             // Poster
                             poster-container := Rectangle {
-                                width: 5.6 * root.unit;
-                                height: 8.2 * root.unit;
+                                width: 5.5 * root.unit;
+                                height: 8.25 * root.unit;
                                 border-radius: 8px;
-                                background: #141322;
+                                background: dl-surface-raised;
                                 border-width: 1px;
-                                border-color: Theme.card-border;
+                                border-color: dl-hairline;
                                 clip: true;
 
                                 FallbackImage {
@@ -457,8 +468,8 @@ export component DownloadsPage inherits Rectangle {
                                     Image {
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
-                                        width: 2.2 * root.unit;
-                                        height: 2.2 * root.unit;
+                                        width: 2 * root.unit;
+                                        height: 2 * root.unit;
                                         source: item.is-series ? @image-url("../assets/images/icons/series.svg") : @image-url("../assets/images/icons/movies.svg");
                                         colorize: Theme.text-secondary;
                                         image-fit: contain;
@@ -474,8 +485,8 @@ export component DownloadsPage inherits Rectangle {
 
                                 // Line 1: Title and Type Badge
                                 HorizontalLayout {
-                                    height: 2.2 * root.unit;
-                                    spacing: 0.8 * root.unit;
+                                    height: 2.25 * root.unit;
+                                    spacing: 0.75 * root.unit;
                                     alignment: start;
 
                                     Text {
@@ -502,20 +513,20 @@ export component DownloadsPage inherits Rectangle {
 
                                 // Fallback line 2 if movie or no downloaded season items yet:
                                 if (!item.is-series || item.downloaded-seasons.length == 0) : HorizontalLayout {
-                                    height: 2.2 * root.unit;
-                                    spacing: 0.6 * root.unit;
+                                    height: 2.25 * root.unit;
+                                    spacing: 0.5 * root.unit;
                                     alignment: start;
 
                                     if (item.coverage != "") : VerticalLayout {
                                         alignment: center;
                                         Rectangle {
-                                            height: 1.9 * root.unit;
+                                            height: 2 * root.unit;
                                             border-radius: 4px;
-                                            background: Theme.control-background;
+                                            background: dl-surface-raised;
 
                                             HorizontalLayout {
-                                                padding-left: 0.6 * root.unit;
-                                                padding-right: 0.6 * root.unit;
+                                                padding-left: 0.5 * root.unit;
+                                                padding-right: 0.5 * root.unit;
                                                 Text {
                                                     text: item.coverage;
                                                     color: Theme.text-secondary;
@@ -530,38 +541,38 @@ export component DownloadsPage inherits Rectangle {
 
                                 // Line 3: Status (or Hovered Episode Info), Subtitles Badge
                                 HorizontalLayout {
-                                    height: 1.8 * root.unit;
-                                    spacing: 1.0 * root.unit;
+                                    height: 1.75 * root.unit;
+                                    spacing: 1 * root.unit;
                                     alignment: start;
 
                                     if (item.watched) : VerticalLayout {
                                         alignment: center;
                                         Rectangle {
-                                            height: 1.7 * root.unit;
+                                            height: 1.75 * root.unit;
                                             border-radius: 4px;
-                                            background: Theme.primary-accent.with-alpha(0.22);
+                                            background: transparent;
 
                                             HorizontalLayout {
                                                 height: 100%;
-                                                padding-left: 0.45 * root.unit;
+                                                padding-left: 0.5 * root.unit;
                                                 padding-right: 0.5 * root.unit;
-                                                spacing: 0.3 * root.unit;
+                                                spacing: 0.25 * root.unit;
                                                 alignment: center;
 
                                                 VerticalLayout {
                                                     alignment: center;
                                                     Image {
-                                                        width: 0.8 * root.unit;
-                                                        height: 0.8 * root.unit;
+                                                        width: 1 * root.unit;
+                                                        height: 1 * root.unit;
                                                         source: @image-url("../assets/images/icons/checkmark.svg");
-                                                        colorize: Theme.primary-foreground;
+                                                        colorize: Theme.text-secondary;
                                                         image-fit: contain;
                                                     }
                                                 }
 
                                                 Text {
                                                     text: "Visto";
-                                                    color: Theme.primary-foreground;
+                                                    color: Theme.text-secondary;
                                                     font-size: 0.78 * root.unit;
                                                     font-weight: 650;
                                                     vertical-alignment: center;
@@ -574,15 +585,15 @@ export component DownloadsPage inherits Rectangle {
                                         alignment: center;
                                         Rectangle {
                                             width: 5 * root.unit;
-                                            height: 0.35 * root.unit;
+                                            height: 0.25 * root.unit;
                                             border-radius: self.height / 2;
-                                            background: Theme.control-background;
+                                            background: dl-surface-raised;
 
                                             Rectangle {
                                                 width: parent.width * min(1.0, item.watch-progress);
                                                 height: parent.height;
                                                 border-radius: self.height / 2;
-                                                background: Theme.accent;
+                                                background: Theme.text-secondary;
                                             }
                                         }
                                     }
@@ -591,8 +602,8 @@ export component DownloadsPage inherits Rectangle {
                                         horizontal-stretch: 1;
                                         text: card.hovered-ep-info != "" ? card.hovered-ep-info : item.status;
                                         color: card.hovered-ep-info != ""
-                                            ? #c4b5fd
-                                            : (item.has-failed ? #fca5a5 : (item.is-paused && !item.is-downloading ? #fde68a : Theme.text-secondary));
+                                            ? Theme.text-primary
+                                            : (item.has-failed ? dl-error-text : (item.is-paused && !item.is-downloading ? dl-paused : Theme.text-secondary));
                                         font-size: 0.88 * root.unit;
                                         font-weight: card.hovered-ep-info != "" ? 650 : 500;
                                         overflow: elide;
@@ -602,29 +613,29 @@ export component DownloadsPage inherits Rectangle {
                                     if (item.has-subtitles) : VerticalLayout {
                                         alignment: center;
                                         Rectangle {
-                                            height: 1.7 * root.unit;
+                                            height: 1.75 * root.unit;
                                             border-radius: 4px;
-                                            background: Theme.control-background;
+                                            background: dl-surface-raised;
                                             border-width: 1px;
-                                            border-color: Theme.divider;
+                                            border-color: dl-hairline;
 
                                             HorizontalLayout {
                                                 height: 100%;
                                                 padding-left: 0.5 * root.unit;
                                                 padding-right: 0.5 * root.unit;
-                                                spacing: 0.35 * root.unit;
+                                                spacing: 0.25 * root.unit;
                                                 alignment: center;
 
                                                 Rectangle {
-                                                    width: 0.9 * root.unit;
+                                                    width: 1 * root.unit;
                                                     height: parent.height;
                                                     background: transparent;
 
                                                     Image {
                                                         x: 0px;
                                                         y: (parent.height - self.height) / 2;
-                                                        width: 0.9 * root.unit;
-                                                        height: 0.9 * root.unit;
+                                                        width: 1 * root.unit;
+                                                        height: 1 * root.unit;
                                                         source: @image-url("../assets/images/icons/subtitles.svg");
                                                         colorize: Theme.text-secondary;
                                                         image-fit: contain;
@@ -648,7 +659,7 @@ export component DownloadsPage inherits Rectangle {
                                 Rectangle {
                                     height: 4px;
                                     border-radius: 2px;
-                                    background: Theme.overlay-color;
+                                    background: dl-surface-raised;
                                     clip: true;
 
                                     Rectangle {
@@ -659,7 +670,9 @@ export component DownloadsPage inherits Rectangle {
                                         border-radius: parent.border-radius;
                                         background: item.has-failed && !item.is-downloading
                                             ? Theme.danger
-                                            : (item.is-paused && !item.is-downloading ? #f59e0b : Theme.accent);
+                                            : (item.is-paused && !item.is-downloading
+                                                ? dl-paused
+                                                : (item.is-downloading ? Theme.accent : Theme.text-secondary));
                                     }
                                 }
                             }
@@ -668,15 +681,15 @@ export component DownloadsPage inherits Rectangle {
                             VerticalLayout {
                                 alignment: center;
                                 horizontal-stretch: 0;
-                                spacing: 0.45 * root.unit;
+                                spacing: 0.5 * root.unit;
 
                                 HorizontalLayout {
                                     alignment: end;
-                                    spacing: 0.6 * root.unit;
+                                    spacing: 0.5 * root.unit;
 
                                     if (item.can-play) : PillButton {
-                                        width: 9.4 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: 9.5 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: @tr("CTX_PLAY" => "Reproducir");
                                         label-font-size: 0.86 * root.unit;
@@ -684,24 +697,24 @@ export component DownloadsPage inherits Rectangle {
                                         clicked => { root.play(item.id); }
                                     }
                                     if (item.can-pause) : PillButton {
-                                        width: 7.6 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: 7.5 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: @tr("PAUSE" => "Pausar");
                                         label-font-size: 0.86 * root.unit;
                                         clicked => { root.pause(item.id); }
                                     }
                                     if (item.can-resume) : PillButton {
-                                        width: 8.8 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: 8.75 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: item.has-failed && !item.is-paused ? @tr("RETRY" => "Reintentar") : @tr("RESUME" => "Reanudar");
                                         label-font-size: 0.86 * root.unit;
                                         clicked => { root.resume(item.id); }
                                     }
                                     if (item.is-series) : PillButton {
-                                        width: 9.6 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: 9.5 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: card.is-expanded ? @tr("COLLAPSE" => "Ocultar ▲") : @tr("EXPAND" => "Capítulos ▼");
                                         label-font-size: 0.86 * root.unit;
@@ -714,8 +727,8 @@ export component DownloadsPage inherits Rectangle {
                                         }
                                     }
                                     if (item.can-delete && !item.can-change-source && !item.can-cancel) : PillButton {
-                                        width: 7.8 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: 7.75 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: @tr("DELETE" => "Eliminar");
                                         label-font-size: 0.86 * root.unit;
@@ -728,11 +741,11 @@ export component DownloadsPage inherits Rectangle {
 
                                 if (item.can-change-source || item.can-cancel) : HorizontalLayout {
                                     alignment: end;
-                                    spacing: 0.6 * root.unit;
+                                    spacing: 0.5 * root.unit;
 
                                     if (item.can-change-source) : PillButton {
                                         width: 10.5 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: "Cambiar fuente";
                                         label-font-size: 0.84 * root.unit;
@@ -747,8 +760,8 @@ export component DownloadsPage inherits Rectangle {
                                         }
                                     }
                                     if (item.can-cancel) : PillButton {
-                                        width: 7.8 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: 7.75 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: @tr("CANCEL" => "Cancelar");
                                         label-font-size: 0.86 * root.unit;
@@ -758,8 +771,8 @@ export component DownloadsPage inherits Rectangle {
                                         clicked => { root.cancel(item.id); }
                                     }
                                     if (item.can-delete && (!item.can-cancel || item.can-play || item.has-failed)) : PillButton {
-                                        width: 7.8 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: 7.75 * root.unit;
+                                        height: 2.75 * root.unit;
                                         unit: root.unit;
                                         label: @tr("DELETE" => "Eliminar");
                                         label-font-size: 0.86 * root.unit;
@@ -775,21 +788,21 @@ export component DownloadsPage inherits Rectangle {
                         if (item.error-message != "") : Rectangle {
                             height: card-error-layout.preferred-height;
                             border-radius: 6px;
-                            background: Theme.danger.with-alpha(0.14);
+                            background: Theme.danger.with-alpha(0.10);
                             border-width: 1px;
-                            border-color: Theme.danger.with-alpha(0.38);
+                            border-color: Theme.danger.with-alpha(0.25);
 
                             card-error-layout := HorizontalLayout {
-                                padding-left: 0.9 * root.unit;
-                                padding-right: 0.9 * root.unit;
-                                padding-top: 0.6 * root.unit;
-                                padding-bottom: 0.6 * root.unit;
-                                spacing: 0.6 * root.unit;
+                                padding-left: 1 * root.unit;
+                                padding-right: 1 * root.unit;
+                                padding-top: 0.5 * root.unit;
+                                padding-bottom: 0.5 * root.unit;
+                                spacing: 0.5 * root.unit;
 
                                 Text {
                                     horizontal-stretch: 1;
                                     text: item.error-message;
-                                    color: #fecaca;
+                                    color: dl-error-text;
                                     font-size: 0.84 * root.unit;
                                     wrap: word-wrap;
                                 }
@@ -799,19 +812,19 @@ export component DownloadsPage inherits Rectangle {
                         // Single chapter list: collapsed shows seasons that have at
                         // least one download; expanded shows every season.
                         if (item.is-series) : VerticalLayout {
-                            spacing: 0.8 * root.unit;
-                            padding-top: 0.6 * root.unit;
+                            spacing: 0.75 * root.unit;
+                            padding-top: 0.5 * root.unit;
 
                             Rectangle {
                                 height: 1px;
-                                background: Theme.divider;
+                                background: dl-hairline;
                             }
 
                             if (card.is-expanded) : HorizontalLayout {
                                 alignment: space-between;
-                                spacing: 1.0 * root.unit;
-                                padding-top: 0.2 * root.unit;
-                                padding-bottom: 0.2 * root.unit;
+                                spacing: 1 * root.unit;
+                                padding-top: 0.25 * root.unit;
+                                padding-bottom: 0.25 * root.unit;
 
                                 Text {
                                     horizontal-stretch: 0;
@@ -825,7 +838,7 @@ export component DownloadsPage inherits Rectangle {
                                     horizontal-stretch: 1;
                                     horizontal-alignment: right;
                                     text: card.hovered-ep-info != "" ? card.hovered-ep-info : @tr("CHAPTER_HINT" => "Iluminados: descargados · Click en capítulo o temporada para gestionar");
-                                    color: card.hovered-ep-info != "" ? #c4b5fd : Theme.text-muted;
+                                    color: card.hovered-ep-info != "" ? Theme.text-primary : Theme.text-muted;
                                     font-size: 0.82 * root.unit;
                                     font-weight: card.hovered-ep-info != "" ? 650 : 450;
                                     overflow: elide;
@@ -850,17 +863,17 @@ export component DownloadsPage inherits Rectangle {
                                 HorizontalLayout {
                                     width: parent.width;
                                     height: parent.height;
-                                    spacing: 0.8 * root.unit;
+                                    spacing: 0.75 * root.unit;
 
                                 // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Clickable!) - squircle sin borde
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 0;
                                     Rectangle {
-                                        width: s.season-year != "" ? 7.0 * root.unit : 3.8 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: s.season-year != "" ? 7 * root.unit : 3.75 * root.unit;
+                                        height: 2.75 * root.unit;
                                         border-radius: 6px;
-                                        background: season-pill-touch.has-hover ? #28263d : Theme.control-background;
+                                        background: season-pill-touch.has-hover ? dl-surface-hover : dl-surface-raised;
 
                                         season-pill-touch := TouchArea {
                                             mouse-cursor: MouseCursor.pointer;
@@ -893,7 +906,7 @@ export component DownloadsPage inherits Rectangle {
                                             width: 100%;
                                             height: 100%;
                                             text: s.season-year != "" ? (s.season-label + " · " + s.season-year) : s.season-label;
-                                            color: season-pill-touch.has-hover ? #c4b5fd : Theme.text-primary;
+                                            color: season-pill-touch.has-hover ? Theme.text-primary : Theme.text-primary;
                                             font-size: 0.86 * root.unit;
                                             font-weight: 750;
                                             horizontal-alignment: center;
@@ -924,8 +937,8 @@ export component DownloadsPage inherits Rectangle {
                                         ep-strip := HorizontalLayout {
                                             x: 0px;
                                             y: (ep-viewport.height - self.height) / 2;
-                                            height: 2.8 * root.unit;
-                                            spacing: 0.45 * root.unit;
+                                            height: 2.75 * root.unit;
+                                            spacing: 0.5 * root.unit;
                                             alignment: start;
 
                                             for ep in s.episodes : VerticalLayout {
@@ -933,27 +946,27 @@ export component DownloadsPage inherits Rectangle {
                                                 horizontal-stretch: 0;
                                                 Rectangle {
                                                     width: ep-grid-touch.has-hover && ep.title != ""
-                                                        ? min(22 * root.unit, 4.4 * root.unit + ep-title-measure.preferred-width + 1.4 * root.unit)
-                                                        : 4.4 * root.unit;
-                                                    height: 2.8 * root.unit;
+                                                        ? min(22 * root.unit, 4.5 * root.unit + ep-title-measure.preferred-width + 1.5 * root.unit)
+                                                        : 4.5 * root.unit;
+                                                    height: 2.75 * root.unit;
                                                     border-radius: 6px;
                                                     border-width: ep.is-failed || ep.is-downloading || ep.is-paused ? 1px : 0px;
                                                     border-color: ep.is-failed
-                                                        ? Theme.danger.with-alpha(0.65)
+                                                        ? Theme.danger.with-alpha(0.35)
                                                         : (ep.is-downloading
-                                                            ? Theme.primary-accent.with-alpha(0.45)
-                                                            : (ep.is-paused ? #f59e0b.with-alpha(0.65) : transparent));
+                                                            ? Theme.primary-accent.with-alpha(0.35)
+                                                            : (ep.is-paused ? dl-paused.with-alpha(0.35) : transparent));
                                                     clip: true;
                                                     animate width { duration: Theme.motion-panel; easing: ease-out; }
                                                     background: ep.is-downloaded
-                                                        ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
+                                                        ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
                                                         : (ep.is-downloading
-                                                            ? (ep-grid-touch.has-hover ? #2c2848 : #201d35)
+                                                            ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
                                                             : (ep.is-paused
-                                                                ? (ep-grid-touch.has-hover ? #f59e0b.with-alpha(0.40) : #f59e0b.with-alpha(0.24))
+                                                                ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
                                                                 : (ep.is-failed
-                                                                    ? (ep-grid-touch.has-hover ? Theme.danger.with-alpha(0.42) : Theme.danger.with-alpha(0.24))
-                                                                    : (ep-grid-touch.has-hover ? #28283c : #181824))));
+                                                                    ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
+                                                                    : (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface))));
 
                                                     ep-title-measure := Text {
                                                         visible: false;
@@ -974,7 +987,7 @@ export component DownloadsPage inherits Rectangle {
                                                     y: parent.height - 3px;
                                                     width: parent.width * max(0.08, min(1.0, ep.progress));
                                                     height: 3px;
-                                                    background: #f59e0b;
+                                                    background: dl-paused;
                                                 }
 
                                                 if (!ep.is-downloading && !ep.is-paused && ep.watch-progress > 0) : Rectangle {
@@ -982,7 +995,7 @@ export component DownloadsPage inherits Rectangle {
                                                     y: parent.height - 3px;
                                                     width: parent.width * min(1.0, ep.watch-progress);
                                                     height: 3px;
-                                                    background: Theme.accent;
+                                                    background: Theme.text-secondary;
                                                 }
 
                                                 ep-grid-touch := TouchArea {
@@ -1049,12 +1062,12 @@ export component DownloadsPage inherits Rectangle {
                                                 }
 
                                                 if (ep.watched) : Image {
-                                                    x: parent.width - 0.95 * root.unit;
-                                                    y: 0.2 * root.unit;
-                                                    width: 0.65 * root.unit;
-                                                    height: 0.65 * root.unit;
+                                                    x: parent.width - 1 * root.unit;
+                                                    y: 0.25 * root.unit;
+                                                    width: 1 * root.unit;
+                                                    height: 1 * root.unit;
                                                     source: @image-url("../assets/images/icons/checkmark.svg");
-                                                    colorize: Theme.primary-foreground;
+                                                    colorize: Theme.text-secondary;
                                                     image-fit: contain;
                                                 }
 
@@ -1064,53 +1077,53 @@ export component DownloadsPage inherits Rectangle {
                                                     padding-left: 0.5 * root.unit;
                                                     padding-right: 0.5 * root.unit;
                                                     alignment: center;
-                                                    spacing: 0.3 * root.unit;
+                                                    spacing: 0.25 * root.unit;
 
                                                     if (ep.is-downloaded) : Rectangle {
-                                                        width: 0.85 * root.unit;
+                                                        width: 1 * root.unit;
                                                         height: parent.height;
                                                         background: transparent;
 
                                                         Image {
                                                             x: 0px;
                                                             y: (parent.height - self.height) / 2;
-                                                            width: 0.85 * root.unit;
-                                                            height: 0.85 * root.unit;
+                                                            width: 1 * root.unit;
+                                                            height: 1 * root.unit;
                                                             source: @image-url("../assets/images/icons/play.svg");
-                                                            colorize: Theme.primary-foreground;
+                                                            colorize: Theme.text-primary;
                                                             image-fit: contain;
                                                         }
                                                     }
 
                                                     if (ep.is-paused) : Rectangle {
-                                                        width: 0.85 * root.unit;
+                                                        width: 1 * root.unit;
                                                         height: parent.height;
                                                         background: transparent;
 
                                                         Image {
                                                             x: 0px;
                                                             y: (parent.height - self.height) / 2;
-                                                            width: 0.85 * root.unit;
-                                                            height: 0.85 * root.unit;
+                                                            width: 1 * root.unit;
+                                                            height: 1 * root.unit;
                                                             source: @image-url("../assets/images/icons/pause.svg");
-                                                            colorize: #fde68a;
+                                                            colorize: dl-paused;
                                                             image-fit: contain;
                                                         }
                                                     }
 
                                                     if (!ep.is-downloaded && !ep.is-paused) : Rectangle {
-                                                        width: 0.85 * root.unit;
+                                                        width: 1 * root.unit;
                                                         height: parent.height;
                                                         background: transparent;
 
                                                         Image {
                                                             x: 0px;
                                                             y: (parent.height - self.height) / 2;
-                                                            width: 0.85 * root.unit;
-                                                            height: 0.85 * root.unit;
+                                                            width: 1 * root.unit;
+                                                            height: 1 * root.unit;
                                                             source: @image-url("../assets/images/icons/download.svg");
                                                             colorize: ep.is-failed
-                                                                ? #fecaca
+                                                                ? dl-error-text
                                                                 : (ep.is-downloading
                                                                     ? Theme.text-primary
                                                                     : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted));
@@ -1122,13 +1135,13 @@ export component DownloadsPage inherits Rectangle {
                                                         height: parent.height;
                                                         text: "E" + ep.episode-num;
                                                         color: ep.is-downloaded
-                                                            ? Theme.primary-foreground
+                                                            ? Theme.text-primary
                                                             : (ep.is-failed
-                                                                ? #fecaca
+                                                                ? dl-error-text
                                                                 : (ep.is-downloading
                                                                     ? Theme.text-primary
                                                                     : (ep.is-paused
-                                                                        ? #fef3c7
+                                                                        ? dl-paused
                                                                         : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted))));
                                                         font-size: 0.88 * root.unit;
                                                         font-weight: ep.is-downloaded || ep.is-downloading || ep.is-paused || ep.is-failed ? 750 : 550;
@@ -1139,7 +1152,7 @@ export component DownloadsPage inherits Rectangle {
                                                         horizontal-stretch: 1;
                                                         height: parent.height;
                                                         text: ep.title;
-                                                        color: ep.is-downloaded ? Theme.primary-foreground : Theme.text-primary;
+                                                        color: Theme.text-primary;
                                                         font-size: 0.76 * root.unit;
                                                         font-weight: 500;
                                                         vertical-alignment: center;
@@ -1182,20 +1195,20 @@ export component DownloadsPage inherits Rectangle {
 
         VerticalLayout {
             padding: 0px;
-            spacing: 1.2 * root.unit;
+            spacing: 1.25 * root.unit;
 
             Rectangle {
-                height: 5.0 * root.unit;
+                height: 5 * root.unit;
                 border-radius: Theme.border-radius;
-                background: Theme.control-background;
+                background: dl-surface-raised;
                 border-width: 1px;
-                border-color: Theme.divider;
+                border-color: dl-hairline;
 
                 VerticalLayout {
-                    padding-left: 1.2 * root.unit;
-                    padding-right: 1.2 * root.unit;
+                    padding-left: 1.25 * root.unit;
+                    padding-right: 1.25 * root.unit;
                     alignment: center;
-                    spacing: 0.35 * root.unit;
+                    spacing: 0.25 * root.unit;
 
                     Text {
                         text: root.prompt-download-title;
@@ -1209,7 +1222,7 @@ export component DownloadsPage inherits Rectangle {
                         text: root.prompt-download-episode == 0
                             ? ((root.prompt-download-season-label != "" ? root.prompt-download-season-label : ("Temporada " + root.prompt-download-season)) + (root.prompt-download-season-year != "" ? (" · " + root.prompt-download-season-year) : ""))
                             : ((root.prompt-download-season-label != "" ? root.prompt-download-season-label : ("Temporada " + root.prompt-download-season)) + " · Episodio " + root.prompt-download-episode + (root.prompt-download-ep-title != "" ? (": " + root.prompt-download-ep-title) : ""));
-                        color: Theme.accent;
+                        color: Theme.text-secondary;
                         font-size: 0.92 * root.unit;
                         font-weight: 650;
                         overflow: elide;
@@ -1220,17 +1233,17 @@ export component DownloadsPage inherits Rectangle {
             if (root.prompt-download-is-failed && root.prompt-download-error != "") : Rectangle {
                 height: prompt-error-box.preferred-height;
                 border-radius: Theme.border-radius;
-                background: Theme.danger.with-alpha(0.16);
+                background: Theme.danger.with-alpha(0.10);
                 border-width: 1px;
-                border-color: Theme.danger.with-alpha(0.45);
+                border-color: Theme.danger.with-alpha(0.25);
 
                 prompt-error-box := HorizontalLayout {
-                    padding: 0.85 * root.unit;
+                    padding: 0.75 * root.unit;
 
                     Text {
                         horizontal-stretch: 1;
                         text: root.prompt-download-error;
-                        color: #fecaca;
+                        color: dl-error-text;
                         font-size: 0.88 * root.unit;
                         wrap: word-wrap;
                     }
@@ -1259,7 +1272,7 @@ export component DownloadsPage inherits Rectangle {
             }
 
             HorizontalLayout {
-                spacing: 0.65 * root.unit;
+                spacing: 0.75 * root.unit;
                 alignment: end;
                 padding-top: 0.5 * root.unit;
 
@@ -1310,7 +1323,7 @@ export component DownloadsPage inherits Rectangle {
                 }
 
                 if (root.prompt-download-episode == 0 && !root.prompt-download-season-has-active && root.prompt-download-season-has-paused) : PillButton {
-                    width: 8.2 * root.unit;
+                    width: 8.25 * root.unit;
                     unit: root.unit;
                     label: @tr("RESUME" => "Reanudar");
                     outlined: true;
@@ -1441,7 +1454,7 @@ export component DownloadsPage inherits Rectangle {
 
                 // Case 5: Failed episode clicked (episode > 0 && is-failed)
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 8.0 * root.unit;
+                    width: 8 * root.unit;
                     unit: root.unit;
                     label: "Eliminar";
                     outlined: true;
@@ -1454,7 +1467,7 @@ export component DownloadsPage inherits Rectangle {
                 }
 
                 if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 9.0 * root.unit;
+                    width: 9 * root.unit;
                     unit: root.unit;
                     label: "Reintentar";
                     outlined: true;
@@ -1477,7 +1490,7 @@ export component DownloadsPage inherits Rectangle {
 
                 // Case 6: Un-downloaded episode clicked
                 if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
-                    width: 13.0 * root.unit;
+                    width: 13 * root.unit;
                     unit: root.unit;
                     label: "Descargar temporada";
                     outlined: true;
@@ -1488,7 +1501,7 @@ export component DownloadsPage inherits Rectangle {
                 }
 
                 if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
-                    width: 13.0 * root.unit;
+                    width: 13 * root.unit;
                     unit: root.unit;
                     label: "Buscar y descargar";
                     primary: true;
