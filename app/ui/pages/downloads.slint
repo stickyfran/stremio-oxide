@@ -195,6 +195,27 @@ export component DownloadsPage inherits Rectangle {
         root.content-fade-in-pending = true;
     }
 
+    function open-season-prompt(item: DownloadItem, s: DownloadSeasonGroup) {
+        root.prompt-download-meta-id = item.meta-id;
+        root.prompt-download-title = item.title;
+        root.prompt-download-season = s.season;
+        root.prompt-download-episode = 0;
+        root.prompt-download-ep-title = "";
+        root.prompt-download-job-id = "";
+        root.prompt-download-is-downloaded = false;
+        root.prompt-download-is-downloading = false;
+        root.prompt-download-is-paused = false;
+        root.prompt-download-is-failed = false;
+        root.prompt-download-progress = 0.0;
+        root.prompt-download-error = "";
+        root.prompt-download-season-has-dl = s.has-downloaded;
+        root.prompt-download-season-has-active = s.has-active;
+        root.prompt-download-season-has-paused = s.has-paused;
+        root.prompt-download-season-label = s.season-label;
+        root.prompt-download-season-year = s.season-year;
+        root.prompt-download-open = true;
+    }
+
     init => {
         root.trigger-content-fade();
     }
@@ -452,6 +473,19 @@ export component DownloadsPage inherits Rectangle {
                                 root.play(item.id);
                             }
                         }
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                root.menu-x = self.absolute-position.x + self.mouse-x;
+                                root.menu-y = self.absolute-position.y + self.mouse-y;
+                                root.menu-target = item.id;
+                                root.menu-meta-id = item.meta-id;
+                                root.menu-is-series = item.is-series;
+                                root.menu-change-source = item.can-change-source;
+                                root.menu-cancel = item.can-cancel || item.is-paused;
+                                root.menu-delete = item.can-delete;
+                                root.menu-open = true;
+                            }
+                        }
                     }
 
                     card-content := VerticalLayout {
@@ -525,6 +559,14 @@ export component DownloadsPage inherits Rectangle {
                                         text: item.is-series ? "Serie" : "Película";
                                         color: Theme.text-muted;
                                         font-size: 0.8125 * root.unit;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
+                                    }
+
+                                    if (item.is-series) : Text {
+                                        text: card.is-expanded ? "Ocultar" : "Ver capítulos";
+                                        color: Theme.text-muted;
+                                        font-size: 0.75 * root.unit;
                                         font-weight: 500;
                                         vertical-alignment: center;
                                     }
@@ -702,6 +744,7 @@ export component DownloadsPage inherits Rectangle {
                                 spacing: 0.5 * root.unit;
 
                                 if (item.can-play || item.can-pause || item.can-resume) : ButtonSurface {
+                                    width: 9.5 * root.unit;
                                     height: 2.5 * root.unit;
                                     border-radius: 8px;
                                     background: dl-primary;
@@ -716,6 +759,7 @@ export component DownloadsPage inherits Rectangle {
                                                 : @tr("RESUME" => "Reanudar")));
 
                                     HorizontalLayout {
+                                        width: 100%;
                                         height: 100%;
                                         padding-left: 1.25 * root.unit;
                                         padding-right: 1.25 * root.unit;
@@ -830,9 +874,9 @@ export component DownloadsPage inherits Rectangle {
                             }
                         }
 
-                        // Single chapter list: collapsed shows seasons that have at
-                        // least one download; expanded shows every season.
-                        if (item.is-series) : VerticalLayout {
+                        // The chapter list only takes space when the series card is
+                        // expanded, so a long season does not hide the other titles.
+                        if (item.is-series && card.is-expanded) : VerticalLayout {
                             spacing: 0.75 * root.unit;
                             padding-top: 0.5 * root.unit;
 
@@ -874,10 +918,10 @@ export component DownloadsPage inherits Rectangle {
                             }
 
                             for s in item.all-seasons : season-row := Rectangle {
-                                property <bool> season-visible: card.is-expanded || s.has-downloaded || s.has-active || s.has-paused || s.has-failed;
-                                visible: self.season-visible;
+                                property <bool> season-visible: true;
+                                visible: true;
                                 width: 100%;
-                                height: self.season-visible ? 3.5 * root.unit : 0px;
+                                height: 3.5 * root.unit;
                                 clip: true;
                                 background: transparent;
 
@@ -902,24 +946,12 @@ export component DownloadsPage inherits Rectangle {
                                                 card.hovered-ep-info = s.season-label + (s.season-year != "" ? " (" + s.season-year + ")" : "") + (s.has-active || s.has-paused ? " · Elegí para pausar, cancelar o cambiar fuente" : (s.has-downloaded ? " · Elegí para descargar o eliminar temporada" : " · Elegí para buscar y descargar temporada"));
                                             }
                                             clicked => {
-                                                root.prompt-download-meta-id = item.meta-id;
-                                                root.prompt-download-title = item.title;
-                                                root.prompt-download-season = s.season;
-                                                root.prompt-download-episode = 0;
-                                                root.prompt-download-ep-title = "";
-                                                root.prompt-download-job-id = "";
-                                                root.prompt-download-is-downloaded = false;
-                                                root.prompt-download-is-downloading = false;
-                                                root.prompt-download-is-paused = false;
-                                                root.prompt-download-is-failed = false;
-                                                root.prompt-download-progress = 0.0;
-                                                root.prompt-download-error = "";
-                                                root.prompt-download-season-has-dl = s.has-downloaded;
-                                                root.prompt-download-season-has-active = s.has-active;
-                                                root.prompt-download-season-has-paused = s.has-paused;
-                                                root.prompt-download-season-label = s.season-label;
-                                                root.prompt-download-season-year = s.season-year;
-                                                root.prompt-download-open = true;
+                                                root.open-season-prompt(item, s);
+                                            }
+                                            pointer-event(event) => {
+                                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                                    root.open-season-prompt(item, s);
+                                                }
                                             }
                                         }
 
@@ -1340,6 +1372,7 @@ export component DownloadsPage inherits Rectangle {
                 }
 
                 ButtonSurface {
+                    width: 12.5 * root.unit;
                     height: 2.5 * root.unit;
                     border-radius: 8px;
                     background: dl-primary;
@@ -1362,6 +1395,7 @@ export component DownloadsPage inherits Rectangle {
                                         : "Buscar y descargar"))));
 
                     HorizontalLayout {
+                        width: 100%;
                         height: 100%;
                         padding-left: 1.25 * root.unit;
                         padding-right: 1.25 * root.unit;
