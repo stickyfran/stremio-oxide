@@ -415,7 +415,7 @@ export component DownloadsPage inherits Rectangle {
             items-layout := VerticalLayout {
                 width: 100%;
                 alignment: start;
-                spacing: 1 * root.unit;
+                spacing: 1.5 * root.unit;
                 padding-bottom: 2 * root.unit;
 
                 for item in root.items : card := Rectangle {
@@ -460,20 +460,20 @@ export component DownloadsPage inherits Rectangle {
                         width: 100%;
                         padding-left: 1.5 * root.unit;
                         padding-right: 1.5 * root.unit;
-                        padding-top: 1.25 * root.unit;
-                        padding-bottom: 1.25 * root.unit;
-                        spacing: 1 * root.unit;
+                        padding-top: 1.5 * root.unit;
+                        padding-bottom: 1.5 * root.unit;
+                        spacing: 1.25 * root.unit;
                         alignment: start;
 
                         // Main Header Row (Poster, Meta Column, Actions)
                         HorizontalLayout {
-                            height: 8.25 * root.unit;
+                            height: 9 * root.unit;
                             spacing: 1.5 * root.unit;
 
                             // Poster
                             poster-container := Rectangle {
-                                width: 5.5 * root.unit;
-                                height: 8.25 * root.unit;
+                                width: 6 * root.unit;
+                                height: 9 * root.unit;
                                 border-radius: 8px;
                                 background: dl-surface-raised;
                                 border-width: 1px;
@@ -716,7 +716,6 @@ export component DownloadsPage inherits Rectangle {
                                                 : @tr("RESUME" => "Reanudar")));
 
                                     HorizontalLayout {
-                                        width: 100%;
                                         height: 100%;
                                         padding-left: 1.25 * root.unit;
                                         padding-right: 1.25 * root.unit;
@@ -1363,7 +1362,6 @@ export component DownloadsPage inherits Rectangle {
                                         : "Buscar y descargar"))));
 
                     HorizontalLayout {
-                        width: 100%;
                         height: 100%;
                         padding-left: 1.25 * root.unit;
                         padding-right: 1.25 * root.unit;
