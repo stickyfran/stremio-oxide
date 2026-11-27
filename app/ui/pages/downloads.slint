@@ -1,9 +1,9 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { PillButton } from "../components/button.slint";
+import { ButtonSurface, PillButton } from "../components/button.slint";
 import { EmptyState } from "../components/feedback.slint";
 import { FallbackImage } from "../components/fallback_image.slint";
-import { ModalDialog } from "../components/overlays.slint";
+import { ContextMenuSurface, ModalDialog } from "../components/overlays.slint";
 
 export struct DownloadEpisodeChip {
     id: string,
@@ -78,6 +78,48 @@ export struct DownloadItem {
     episodes: [DownloadEpisodeItem],
 }
 
+component DownloadMenuRow inherits ButtonSurface {
+    in property <length> unit: Theme.root-font-size;
+    in property <string> label;
+    in property <image> icon-source;
+    in property <bool> destructive: false;
+    in property <brush> hover-color: Theme.overlay-hover;
+    in property <color> destructive-color: Theme.danger;
+
+    height: 2.5 * root.unit;
+    border-radius: 8px;
+    background: self.has-hover || self.has-focus ? root.hover-color : transparent;
+    accessible-name: root.label;
+
+    HorizontalLayout {
+        width: 100%;
+        height: 100%;
+        padding-left: 0.75 * root.unit;
+        padding-right: 0.75 * root.unit;
+        spacing: 0.625 * root.unit;
+        alignment: start;
+        cross-axis-alignment: center;
+
+        Image {
+            width: 1.0625 * root.unit;
+            height: 1.0625 * root.unit;
+            source: root.icon-source;
+            colorize: root.destructive ? root.destructive-color : Theme.text-secondary;
+            image-fit: contain;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.label;
+            color: root.destructive ? root.destructive-color : Theme.text-primary;
+            font-size: 0.875 * root.unit;
+            font-weight: 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
 export component DownloadsPage inherits Rectangle {
     in property <length> unit: Theme.root-font-size;
     in property <[DownloadItem]> items: [];
@@ -120,15 +162,75 @@ export component DownloadsPage inherits Rectangle {
     callback dismiss-error;
     callback request-download-episode(string, int, int, bool);
 
-    background: transparent;
+    background: dl-page;
+
+    // Neutral ramp for this screen. The brand violet stays in Theme and is
+    // used only for the primary action and the active progress; these
+    // surfaces are graphite so the posters and the progress carry the color.
+    private property <color> dl-surface: #141416;
+    private property <color> dl-surface-raised: #1b1b1e;
+    private property <color> dl-surface-hover: #222226;
+    private property <color> dl-hairline: #ffffff14;
+    private property <color> dl-hairline-strong: #ffffff26;
+    private property <color> dl-paused: #d6a13a;
+    private property <color> dl-error-text: #f0a8a8;
+    private property <color> dl-page: #0e0e10;
+    private property <color> dl-primary: #ededed;
+    private property <color> dl-primary-ink: #141416;
+
+    private property <bool> menu-open: false;
+    private property <length> menu-x: 0px;
+    private property <length> menu-y: 0px;
+    private property <string> menu-target: "";
+    private property <string> menu-meta-id: "";
+    private property <bool> menu-is-series: false;
+    private property <bool> menu-change-source: false;
+    private property <bool> menu-cancel: false;
+    private property <bool> menu-delete: false;
 
     private property <float> content-fade-opacity: 1.0;
     private property <bool> content-fade-in-pending: false;
     private property <int> has-items-state: root.items.length > 0 ? 1 : 0;
 
+    // Explicit page geometry. The list must always take the whole band between
+    // the title and the disk footer; relying on nested stretch layouts collapsed
+    // the viewport to the height of the first couple of rows.
+    private property <length> dl-pad: 2 * root.unit;
+    private property <length> dl-header-height: 3.25 * root.unit;
+    private property <length> dl-gap: 1.5 * root.unit;
+    private property <length> dl-footer-height: 2.25 * root.unit;
+    private property <length> dl-banner-height: root.error == "" ? 0px : 5.25 * root.unit;
+    private property <length> dl-list-top: root.dl-pad + root.dl-header-height + root.dl-gap
+        + (root.error == "" ? 0px : root.dl-banner-height + root.dl-gap);
+    private property <length> dl-list-height: max(
+        0px,
+        root.height - root.dl-list-top - root.dl-pad - root.dl-footer-height - root.dl-gap
+    );
+
     function trigger-content-fade() {
         root.content-fade-opacity = 0.0;
         root.content-fade-in-pending = true;
+    }
+
+    function open-season-prompt(item: DownloadItem, s: DownloadSeasonGroup) {
+        root.prompt-download-meta-id = item.meta-id;
+        root.prompt-download-title = item.title;
+        root.prompt-download-season = s.season;
+        root.prompt-download-episode = 0;
+        root.prompt-download-ep-title = "";
+        root.prompt-download-job-id = "";
+        root.prompt-download-is-downloaded = false;
+        root.prompt-download-is-downloading = false;
+        root.prompt-download-is-paused = false;
+        root.prompt-download-is-failed = false;
+        root.prompt-download-progress = 0.0;
+        root.prompt-download-error = "";
+        root.prompt-download-season-has-dl = s.has-downloaded;
+        root.prompt-download-season-has-active = s.has-active;
+        root.prompt-download-season-has-paused = s.has-paused;
+        root.prompt-download-season-label = s.season-label;
+        root.prompt-download-season-year = s.season-year;
+        root.prompt-download-open = true;
     }
 
     init => {
@@ -141,6 +243,12 @@ export component DownloadsPage inherits Rectangle {
 
     changed has-items-state => {
         root.trigger-content-fade();
+    }
+
+    changed prompt-download-open => {
+        if (root.prompt-download-open) {
+            root.menu-open = false;
+        }
     }
 
     Timer {
@@ -159,155 +267,121 @@ export component DownloadsPage inherits Rectangle {
         easing: ease-out;
     }
 
-    VerticalLayout {
-        padding-left: 3 * root.unit;
-        padding-right: 3 * root.unit;
-        padding-top: 2.5 * root.unit;
-        padding-bottom: 2 * root.unit;
+    HorizontalLayout {
+        x: root.dl-pad;
+        y: root.dl-pad;
+        width: root.width - 2 * root.dl-pad;
+        height: root.dl-header-height;
         spacing: 1.5 * root.unit;
-
-        HorizontalLayout {
-            height: 3.2 * root.unit;
-            spacing: 1.5 * root.unit;
 
             Text {
                 horizontal-stretch: 1;
                 text: @tr("DOWNLOADS_TITLE" => "Descargas");
                 color: Theme.text-primary;
                 font-size: 2 * root.unit;
-                font-weight: 700;
+                font-weight: 500;
                 vertical-alignment: center;
             }
 
-            if (root.active-count > 0) : VerticalLayout {
-                alignment: center;
+            HorizontalLayout {
                 horizontal-stretch: 0;
+                alignment: end;
+                spacing: 1 * root.unit;
 
-                Rectangle {
-                    height: 2.8 * root.unit;
-                    max-width: 22 * root.unit;
-                    clip: true;
-                    border-radius: Theme.border-radius;
-                    background: Theme.primary-accent.with-alpha(0.16);
-                    border-width: 1px;
-                    border-color: Theme.primary-accent.with-alpha(0.45);
+                if (root.active-count > 0) : HorizontalLayout {
+                    alignment: center;
+                    spacing: 0.5 * root.unit;
 
-                    HorizontalLayout {
-                        padding-left: 1 * root.unit;
-                        padding-right: 1.2 * root.unit;
-                        spacing: 0.8 * root.unit;
-                        alignment: center;
+                    Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.primary-accent;
+                    }
 
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle {
-                                width: 0.8 * root.unit;
-                                height: 0.8 * root.unit;
-                                border-radius: self.height / 2;
-                                background: Theme.accent;
-                                opacity: 0.35 + 0.65 * abs(sin(animation-tick() / 600ms * 180deg));
-                            }
-                        }
+                    Text {
+                        text: "Descargando " + root.active-count;
+                        color: Theme.text-primary;
+                        font-size: 0.8125 * root.unit;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
 
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 0.1 * root.unit;
+                    if (root.speed-text != "") : Text {
+                        text: "· " + root.speed-text;
+                        color: Theme.text-secondary;
+                        font-size: 0.8125 * root.unit;
+                        vertical-alignment: center;
+                    }
 
-                            Text {
-                                text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
-                                    + (root.eta-text != "" ? " · " + root.eta-text : "");
-                                color: Theme.primary-foreground;
-                                font-size: 0.82 * root.unit;
-                                font-weight: 650;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            if (root.current-text != "") : Text {
-                                text: root.current-text;
-                                color: Theme.text-secondary;
-                                font-size: 0.72 * root.unit;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-                        }
+                    if (root.eta-text != "") : Text {
+                        text: "· " + root.eta-text;
+                        color: Theme.text-secondary;
+                        font-size: 0.8125 * root.unit;
+                        vertical-alignment: center;
                     }
                 }
-            }
 
-            if (root.disk-usage-text != "") : VerticalLayout {
-                alignment: center;
-                horizontal-stretch: 0;
+                if (root.active-count > 0) : Rectangle {
+                    width: 1px;
+                    height: 1 * root.unit;
+                    background: dl-hairline;
+                }
 
-                Rectangle {
-                    height: 2.8 * root.unit;
-                    max-width: 24 * root.unit;
-                    clip: true;
-                    border-radius: Theme.border-radius;
-                    background: Theme.card-background;
-                    border-width: 1px;
-                    border-color: Theme.card-border;
+                ButtonSurface {
+                    height: 2 * root.unit;
+                    accessible-name: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
+                    border-radius: 6px;
+                    background: self.has-hover || self.has-focus ? dl-surface-hover : transparent;
 
                     HorizontalLayout {
-                        padding-left: 1.2 * root.unit;
-                        padding-right: 1.2 * root.unit;
-                        spacing: 0.8 * root.unit;
+                        padding-left: 0.5 * root.unit;
+                        padding-right: 0.5 * root.unit;
+                        spacing: 0.5 * root.unit;
                         alignment: center;
 
-                        VerticalLayout {
-                            alignment: center;
-                            Image {
-                                width: 1.2 * root.unit;
-                                height: 1.2 * root.unit;
-                                source: @image-url("../assets/images/icons/download.svg");
-                                colorize: Theme.accent;
-                                image-fit: contain;
-                            }
+                        Image {
+                            width: 1 * root.unit;
+                            height: 1 * root.unit;
+                            source: @image-url("../assets/images/icons/open-in-browser.svg");
+                            colorize: Theme.text-secondary;
+                            image-fit: contain;
                         }
 
                         Text {
-                            text: root.disk-usage-text;
+                            text: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
                             color: Theme.text-secondary;
-                            font-size: 0.9 * root.unit;
+                            font-size: 0.8125 * root.unit;
+                            font-weight: 500;
                             vertical-alignment: center;
-                            overflow: elide;
                         }
                     }
-                }
-            }
 
-            VerticalLayout {
-                alignment: center;
-                horizontal-stretch: 0;
-
-                PillButton {
-                    width: 10.5 * root.unit;
-                    height: 2.8 * root.unit;
-                    unit: root.unit;
-                    label: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
-                    label-font-size: 0.88 * root.unit;
                     clicked => { root.open-downloads-folder(); }
                 }
             }
         }
 
         if (root.error != "") : Rectangle {
-            height: error-banner-row.preferred-height;
+            x: root.dl-pad;
+            y: root.dl-pad + root.dl-header-height + root.dl-gap;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-banner-height;
             border-radius: Theme.border-radius;
-            background: Theme.danger.with-alpha(0.16);
+            background: Theme.danger.with-alpha(0.10);
             border-width: 1px;
-            border-color: Theme.danger.with-alpha(0.45);
+            border-color: Theme.danger.with-alpha(0.25);
 
             error-banner-row := HorizontalLayout {
-                padding: 0.9 * root.unit;
-                spacing: 0.8 * root.unit;
+                padding: 1 * root.unit;
+                spacing: 0.75 * root.unit;
                 alignment: start;
 
                 Text {
                     horizontal-stretch: 1;
                     text: root.error;
                     color: Theme.text-primary;
-                    font-size: 0.88 * root.unit;
+                    font-size: 0.875 * root.unit;
                     wrap: word-wrap;
                     vertical-alignment: center;
                 }
@@ -316,22 +390,34 @@ export component DownloadsPage inherits Rectangle {
                     alignment: center;
                     PillButton {
                         width: 8.5 * root.unit;
-                        height: 2.6 * root.unit;
+                        height: 2.5 * root.unit;
                         unit: root.unit;
+                        label-font-weight: 500;
                         label: @tr("RETRY" => "Reintentar");
-                        label-font-size: 0.84 * root.unit;
+                        label-font-size: 0.8125 * root.unit;
                         clicked => { root.retry(); }
                     }
                 }
 
                 VerticalLayout {
                     alignment: center;
-                    PillButton {
-                        width: 2.8 * root.unit;
-                        height: 2.6 * root.unit;
-                        unit: root.unit;
-                        label: "×";
-                        outlined: true;
+                    ButtonSurface {
+                        width: 2.75 * root.unit;
+                        height: 2.5 * root.unit;
+                        accessible-name: @tr("DISMISS" => "Cerrar aviso");
+                        border-radius: self.height / 2;
+                        border-width: 1px;
+                        border-color: dl-hairline;
+                        background: self.has-hover ? dl-surface-hover : transparent;
+                        Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: 1 * root.unit;
+                            height: 1 * root.unit;
+                            source: @image-url("../assets/images/icons/close.svg");
+                            colorize: Theme.text-secondary;
+                            image-fit: contain;
+                        }
                         clicked => { root.dismiss-error(); }
                     }
                 }
@@ -339,33 +425,45 @@ export component DownloadsPage inherits Rectangle {
         }
 
         if (!root.loading && root.items.length == 0 && root.error == "") : EmptyState {
-            vertical-stretch: 1;
+            x: root.dl-pad;
+            y: root.dl-list-top;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-list-height;
             unit: root.unit;
             icon-source: @image-url("../assets/images/icons/download.svg");
             title: @tr("DOWNLOADS_EMPTY" => "No hay descargas aún");
-            message: @tr("DOWNLOADS_EMPTY_HINT" => "Descarga una película o serie para tenerla disponible sin conexión con subtítulos.");
+            message: @tr("DOWNLOADS_EMPTY_HINT" => "Descargá una película o serie para tenerla disponible sin conexión con subtítulos.");
         }
 
         if (root.loading) : Text {
-            vertical-stretch: 1;
-            text: @tr("LOADING" => "Loading…");
+            x: root.dl-pad;
+            y: root.dl-list-top;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-list-height;
+            text: @tr("LOADING" => "Cargando…");
             color: Theme.text-secondary;
-            font-size: root.unit;
+            font-size: 0.875 * root.unit;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
 
         if (!root.loading && root.items.length > 0) : ScrollView {
-            vertical-stretch: 1;
+            x: root.dl-pad;
+            y: root.dl-list-top;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-list-height;
             viewport-width: self.visible-width;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            changed viewport-y => { root.menu-open = false; }
 
-            items-layout := VerticalLayout {
+            VerticalLayout {
+                width: 100%;
                 alignment: start;
-                spacing: 1.0 * root.unit;
-                padding-bottom: 2.0 * root.unit;
+                spacing: 1 * root.unit;
+                padding-bottom: 1 * root.unit;
 
                 for item in root.items : card := Rectangle {
+                    width: 100%;
                     property <bool> is-expanded: root.expanded-id == item.id;
                     property <string> hovered-ep-info: "";
                     // Auto-size to the real content: collapsed/expanded lists and
@@ -374,13 +472,11 @@ export component DownloadsPage inherits Rectangle {
                     border-radius: Theme.border-radius;
                     border-width: 1px;
                     border-color: item.has-failed
-                        ? Theme.danger.with-alpha(0.55)
-                        : (item.is-downloading
-                            ? Theme.primary-accent.with-alpha(0.55)
-                            : (item.is-paused
-                                ? #f59e0b.with-alpha(0.55)
-                                : (row-area.has-hover ? Theme.primary-accent.with-alpha(0.4) : Theme.card-border)));
-                    background: row-area.has-hover ? #1c1a2d : Theme.card-background;
+                        ? Theme.danger.with-alpha(0.30)
+                        : (item.is-paused
+                            ? dl-paused.with-alpha(0.30)
+                            : (row-area.has-hover ? dl-hairline-strong : dl-hairline));
+                    background: row-area.has-hover ? dl-surface-hover : dl-surface;
                     clip: true;
 
                     animate background, border-color { duration: Theme.motion-fast; }
@@ -389,6 +485,7 @@ export component DownloadsPage inherits Rectangle {
                     row-area := TouchArea {
                         mouse-cursor: MouseCursor.pointer;
                         clicked => {
+                            root.menu-open = false;
                             if (item.is-series) {
                                 if (root.expanded-id == item.id) {
                                     root.expanded-id = "";
@@ -399,32 +496,46 @@ export component DownloadsPage inherits Rectangle {
                                 root.play(item.id);
                             }
                         }
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                root.menu-x = self.absolute-position.x - root.absolute-position.x + self.mouse-x;
+                                root.menu-y = self.absolute-position.y - root.absolute-position.y + self.mouse-y;
+                                root.menu-target = item.id;
+                                root.menu-meta-id = item.meta-id;
+                                root.menu-is-series = item.is-series;
+                                root.menu-change-source = item.can-change-source;
+                                root.menu-cancel = item.can-cancel || item.is-paused;
+                                root.menu-delete = item.can-delete;
+                                root.menu-open = true;
+                            }
+                        }
                     }
 
                     card-content := VerticalLayout {
                         x: 0px;
                         y: 0px;
                         width: 100%;
-                        padding-left: 1.4 * root.unit;
-                        padding-right: 1.4 * root.unit;
-                        padding-top: 1.2 * root.unit;
-                        padding-bottom: 1.2 * root.unit;
-                        spacing: 0.9 * root.unit;
+                        padding-left: 1.25 * root.unit;
+                        padding-right: 1.25 * root.unit;
+                        padding-top: 1 * root.unit;
+                        padding-bottom: 1 * root.unit;
+                        spacing: 0.75 * root.unit;
                         alignment: start;
 
-                        // Main Header Row (Poster, Meta Column, Actions)
+                        // Compact main row: poster, meta and actions. Keeping this
+                        // row short is what lets four or more downloads fit at once.
                         HorizontalLayout {
-                            height: 8.2 * root.unit;
-                            spacing: 1.4 * root.unit;
+                            height: 4.5 * root.unit;
+                            spacing: 1 * root.unit;
 
                             // Poster
                             poster-container := Rectangle {
-                                width: 5.6 * root.unit;
-                                height: 8.2 * root.unit;
-                                border-radius: 8px;
-                                background: #141322;
+                                width: 3 * root.unit;
+                                height: 4.5 * root.unit;
+                                border-radius: 6px;
+                                background: dl-surface-raised;
                                 border-width: 1px;
-                                border-color: Theme.card-border;
+                                border-color: dl-hairline;
                                 clip: true;
 
                                 FallbackImage {
@@ -435,8 +546,8 @@ export component DownloadsPage inherits Rectangle {
                                     Image {
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
-                                        width: 2.2 * root.unit;
-                                        height: 2.2 * root.unit;
+                                        width: 1.25 * root.unit;
+                                        height: 1.25 * root.unit;
                                         source: item.is-series ? @image-url("../assets/images/icons/series.svg") : @image-url("../assets/images/icons/movies.svg");
                                         colorize: Theme.text-secondary;
                                         image-fit: contain;
@@ -444,189 +555,162 @@ export component DownloadsPage inherits Rectangle {
                                 }
                             }
 
-                            // Meta info column
+                            // Title, one quiet detail line and the progress bar
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                alignment: space-between;
-                                spacing: 0.5 * root.unit;
+                                min-width: 0px;
+                                alignment: center;
+                                spacing: 0.375 * root.unit;
 
-                                // Line 1: Title and Type Badge
                                 HorizontalLayout {
-                                    height: 2.2 * root.unit;
-                                    spacing: 0.8 * root.unit;
+                                    height: 1.75 * root.unit;
+                                    spacing: 0.625 * root.unit;
                                     alignment: start;
+                                    cross-axis-alignment: center;
 
                                     Text {
                                         horizontal-stretch: 1;
                                         text: item.title;
                                         color: Theme.text-primary;
-                                        font-size: 1.35 * root.unit;
-                                        font-weight: 750;
+                                        font-size: 1.0625 * root.unit;
+                                        font-weight: 600;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
 
-                                    // Type text (sin recuadro/squircle ni bordes, alineado al mismo renglón, grisáceo e itálica)
                                     Text {
                                         horizontal-stretch: 0;
-                                        text: item.is-series ? "Serie" : "Película";
+                                        text: item.is-series ? @tr("SERIES" => "Serie") : @tr("MOVIE" => "Película");
                                         color: Theme.text-muted;
-                                        font-size: 0.92 * root.unit;
-                                        font-italic: true;
+                                        font-size: 0.75 * root.unit;
                                         font-weight: 500;
                                         vertical-alignment: center;
                                     }
-                                }
 
-                                // Fallback line 2 if movie or no downloaded season items yet:
-                                if (!item.is-series || item.downloaded-seasons.length == 0) : HorizontalLayout {
-                                    height: 2.2 * root.unit;
-                                    spacing: 0.6 * root.unit;
-                                    alignment: start;
+                                    if (item.is-series) : Rectangle {
+                                        horizontal-stretch: 0;
+                                        height: 1.5 * root.unit;
+                                        border-radius: 5px;
+                                        background: card.is-expanded ? dl-surface-hover : dl-surface-raised;
+                                        border-width: 1px;
+                                        border-color: dl-hairline;
 
-                                    if (item.coverage != "") : VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            height: 1.9 * root.unit;
-                                            border-radius: 4px;
-                                            background: Theme.control-background;
+                                        HorizontalLayout {
+                                            padding-left: 0.5 * root.unit;
+                                            padding-right: 0.375 * root.unit;
+                                            spacing: 0.25 * root.unit;
+                                            alignment: center;
+                                            cross-axis-alignment: center;
 
-                                            HorizontalLayout {
-                                                padding-left: 0.6 * root.unit;
-                                                padding-right: 0.6 * root.unit;
-                                                Text {
-                                                    text: item.coverage;
-                                                    color: Theme.text-secondary;
-                                                    font-size: 0.85 * root.unit;
-                                                    font-weight: 600;
-                                                    vertical-alignment: center;
-                                                }
+                                            Text {
+                                                text: card.is-expanded ? @tr("HIDE_CHAPTERS" => "Ocultar") : @tr("SHOW_CHAPTERS" => "Ver capítulos");
+                                                color: Theme.text-secondary;
+                                                font-size: 0.75 * root.unit;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Image {
+                                                width: 0.75 * root.unit;
+                                                height: 0.75 * root.unit;
+                                                source: card.is-expanded
+                                                    ? @image-url("../assets/images/icons/chevron-up.svg")
+                                                    : @image-url("../assets/images/icons/chevron-down.svg");
+                                                colorize: Theme.text-muted;
+                                                image-fit: contain;
                                             }
                                         }
                                     }
                                 }
 
-                                // Line 3: Status (or Hovered Episode Info), Subtitles Badge
                                 HorizontalLayout {
-                                    height: 1.8 * root.unit;
-                                    spacing: 1.0 * root.unit;
+                                    height: 1.375 * root.unit;
+                                    spacing: 0.5 * root.unit;
                                     alignment: start;
+                                    cross-axis-alignment: center;
 
-                                    if (item.watched) : VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            height: 1.7 * root.unit;
-                                            border-radius: 4px;
-                                            background: Theme.primary-accent.with-alpha(0.22);
-
-                                            HorizontalLayout {
-                                                height: 100%;
-                                                padding-left: 0.45 * root.unit;
-                                                padding-right: 0.5 * root.unit;
-                                                spacing: 0.3 * root.unit;
-                                                alignment: center;
-
-                                                VerticalLayout {
-                                                    alignment: center;
-                                                    Image {
-                                                        width: 0.8 * root.unit;
-                                                        height: 0.8 * root.unit;
-                                                        source: @image-url("../assets/images/icons/checkmark.svg");
-                                                        colorize: Theme.primary-foreground;
-                                                        image-fit: contain;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    text: "Visto";
-                                                    color: Theme.primary-foreground;
-                                                    font-size: 0.78 * root.unit;
-                                                    font-weight: 650;
-                                                    vertical-alignment: center;
-                                                }
-                                            }
-                                        }
+                                    if (item.watched) : Text {
+                                        horizontal-stretch: 0;
+                                        text: @tr("WATCHED" => "Visto");
+                                        color: Theme.text-secondary;
+                                        font-size: 0.75 * root.unit;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
                                     }
 
-                                    if (!item.is-series && item.watch-progress > 0 && !item.watched) : VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            width: 5 * root.unit;
-                                            height: 0.35 * root.unit;
-                                            border-radius: self.height / 2;
-                                            background: Theme.control-background;
+                                    if (!item.is-series && item.watch-progress > 0 && !item.watched) : Rectangle {
+                                        width: 5 * root.unit;
+                                        height: 0.25 * root.unit;
+                                        border-radius: self.height / 2;
+                                        background: dl-surface-raised;
 
-                                            Rectangle {
-                                                width: parent.width * min(1.0, item.watch-progress);
-                                                height: parent.height;
-                                                border-radius: self.height / 2;
-                                                background: Theme.accent;
-                                            }
+                                        Rectangle {
+                                            width: parent.width * min(1.0, item.watch-progress);
+                                            height: parent.height;
+                                            border-radius: self.height / 2;
+                                            background: Theme.text-secondary;
                                         }
                                     }
 
                                     Text {
                                         horizontal-stretch: 1;
-                                        text: card.hovered-ep-info != "" ? card.hovered-ep-info : item.status;
+                                        text: card.hovered-ep-info != ""
+                                            ? card.hovered-ep-info
+                                            : (item.coverage != "" && item.status != ""
+                                                ? item.coverage + " · " + item.status
+                                                : (item.coverage != "" ? item.coverage : item.status));
                                         color: card.hovered-ep-info != ""
-                                            ? #c4b5fd
-                                            : (item.has-failed ? #fca5a5 : (item.is-paused && !item.is-downloading ? #fde68a : Theme.text-secondary));
-                                        font-size: 0.88 * root.unit;
-                                        font-weight: card.hovered-ep-info != "" ? 650 : 500;
+                                            ? Theme.text-primary
+                                            : (item.has-failed ? dl-error-text : (item.is-paused && !item.is-downloading ? dl-paused : Theme.text-secondary));
+                                        font-size: 0.75 * root.unit;
+                                        font-weight: card.hovered-ep-info != "" ? 500 : 400;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
 
-                                    if (item.has-subtitles) : VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            height: 1.7 * root.unit;
-                                            border-radius: 4px;
-                                            background: Theme.control-background;
-                                            border-width: 1px;
-                                            border-color: Theme.divider;
+                                    if (item.has-subtitles) : Rectangle {
+                                        horizontal-stretch: 0;
+                                        width: 7 * root.unit;
+                                        height: 1.375 * root.unit;
+                                        border-radius: 4px;
+                                        background: dl-surface-raised;
+                                        border-width: 1px;
+                                        border-color: dl-hairline;
 
-                                            HorizontalLayout {
-                                                height: 100%;
-                                                padding-left: 0.5 * root.unit;
-                                                padding-right: 0.5 * root.unit;
-                                                spacing: 0.35 * root.unit;
-                                                alignment: center;
+                                        HorizontalLayout {
+                                            width: 100%;
+                                            height: 100%;
+                                            padding-left: 0.375 * root.unit;
+                                            padding-right: 0.375 * root.unit;
+                                            spacing: 0.25 * root.unit;
+                                            alignment: center;
+                                            cross-axis-alignment: center;
 
-                                                Rectangle {
-                                                    width: 0.9 * root.unit;
-                                                    height: parent.height;
-                                                    background: transparent;
+                                            Image {
+                                                width: 0.875 * root.unit;
+                                                height: 0.875 * root.unit;
+                                                source: @image-url("../assets/images/icons/subtitles.svg");
+                                                colorize: Theme.text-secondary;
+                                                image-fit: contain;
+                                            }
 
-                                                    Image {
-                                                        x: 0px;
-                                                        y: (parent.height - self.height) / 2;
-                                                        width: 0.9 * root.unit;
-                                                        height: 0.9 * root.unit;
-                                                        source: @image-url("../assets/images/icons/subtitles.svg");
-                                                        colorize: Theme.text-secondary;
-                                                        image-fit: contain;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    height: parent.height;
-                                                    text: item.subtitles-info;
-                                                    color: Theme.text-secondary;
-                                                    font-size: 0.8 * root.unit;
-                                                    font-weight: 600;
-                                                    vertical-alignment: center;
-                                                }
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: item.subtitles-info;
+                                                color: Theme.text-secondary;
+                                                font-size: 0.6875 * root.unit;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                                overflow: elide;
                                             }
                                         }
                                     }
                                 }
 
-                                // Line 4: Progress Bar
-                                Rectangle {
-                                    height: 4px;
+                                if (item.progress > 0 || item.is-downloading || item.is-paused) : Rectangle {
+                                    height: 3px;
                                     border-radius: 2px;
-                                    background: Theme.overlay-color;
+                                    background: dl-surface-raised;
                                     clip: true;
 
                                     Rectangle {
@@ -637,114 +721,120 @@ export component DownloadsPage inherits Rectangle {
                                         border-radius: parent.border-radius;
                                         background: item.has-failed && !item.is-downloading
                                             ? Theme.danger
-                                            : (item.is-paused && !item.is-downloading ? #f59e0b : Theme.accent);
+                                            : (item.is-paused && !item.is-downloading
+                                                ? dl-paused
+                                                : (item.is-downloading ? Theme.accent : Theme.text-secondary));
                                     }
                                 }
                             }
 
-                            // Actions
-                            VerticalLayout {
-                                alignment: center;
-                                horizontal-stretch: 0;
-                                spacing: 0.45 * root.unit;
+                            // One primary action plus the overflow menu, centered
+                            HorizontalLayout {
+                                alignment: end;
+                                spacing: 0.5 * root.unit;
+                                cross-axis-alignment: center;
 
-                                HorizontalLayout {
-                                    alignment: end;
-                                    spacing: 0.6 * root.unit;
+                                if (item.can-play || item.can-pause || item.can-resume) : ButtonSurface {
+                                    width: 8.25 * root.unit;
+                                    height: 2.25 * root.unit;
+                                    border-radius: 7px;
+                                    background: dl-primary;
+                                    border-width: self.has-focus ? Theme.focus-outline-size : 1px;
+                                    border-color: self.has-focus ? Theme.primary-accent : dl-primary;
+                                    accessible-name: item.can-play
+                                        ? @tr("CTX_PLAY" => "Reproducir")
+                                        : (item.can-pause
+                                            ? @tr("PAUSE" => "Pausar")
+                                            : (item.has-failed && !item.is-paused
+                                                ? @tr("RETRY" => "Reintentar")
+                                                : @tr("RESUME" => "Reanudar")));
 
-                                    if (item.can-play) : PillButton {
-                                        width: 9.4 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: @tr("CTX_PLAY" => "Reproducir");
-                                        label-font-size: 0.86 * root.unit;
-                                        primary: true;
-                                        clicked => { root.play(item.id); }
-                                    }
-                                    if (item.can-pause) : PillButton {
-                                        width: 7.6 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: @tr("PAUSE" => "Pausar");
-                                        label-font-size: 0.86 * root.unit;
-                                        clicked => { root.pause(item.id); }
-                                    }
-                                    if (item.can-resume) : PillButton {
-                                        width: 8.8 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: item.has-failed && !item.is-paused ? @tr("RETRY" => "Reintentar") : @tr("RESUME" => "Reanudar");
-                                        label-font-size: 0.86 * root.unit;
-                                        clicked => { root.resume(item.id); }
-                                    }
-                                    if (item.is-series) : PillButton {
-                                        width: 9.6 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: card.is-expanded ? @tr("COLLAPSE" => "Ocultar ▲") : @tr("EXPAND" => "Capítulos ▼");
-                                        label-font-size: 0.86 * root.unit;
-                                        clicked => {
-                                            if (root.expanded-id == item.id) {
-                                                root.expanded-id = "";
-                                            } else {
-                                                root.expanded-id = item.id;
-                                            }
+                                    HorizontalLayout {
+                                        width: 100%;
+                                        height: 100%;
+                                        spacing: 0.4375 * root.unit;
+                                        alignment: center;
+                                        cross-axis-alignment: center;
+
+                                        Image {
+                                            width: 0.875 * root.unit;
+                                            height: 0.875 * root.unit;
+                                            source: item.can-play
+                                                ? @image-url("../assets/images/icons/play.svg")
+                                                : (item.can-pause
+                                                    ? @image-url("../assets/images/icons/pause.svg")
+                                                    : (item.has-failed
+                                                        ? @image-url("../assets/images/icons/replay.svg")
+                                                        : @image-url("../assets/images/icons/play.svg")));
+                                            colorize: dl-primary-ink;
+                                            image-fit: contain;
+                                        }
+
+                                        Text {
+                                            vertical-alignment: center;
+                                            text: item.can-play
+                                                ? @tr("CTX_PLAY" => "Reproducir")
+                                                : (item.can-pause
+                                                    ? @tr("PAUSE" => "Pausar")
+                                                    : (item.has-failed && !item.is-paused
+                                                        ? @tr("RETRY" => "Reintentar")
+                                                        : @tr("RESUME" => "Reanudar")));
+                                            color: dl-primary-ink;
+                                            font-size: 0.8125 * root.unit;
+                                            font-weight: 600;
                                         }
                                     }
-                                    if (item.can-delete && !item.can-change-source && !item.can-cancel) : PillButton {
-                                        width: 7.8 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: @tr("DELETE" => "Eliminar");
-                                        label-font-size: 0.86 * root.unit;
-                                        outlined: true;
-                                        hover-color: Theme.danger.with-alpha(0.2);
-                                        hover-outline-color: Theme.danger;
-                                        clicked => { root.delete-item(item.id); }
+
+                                    clicked => {
+                                        root.menu-open = false;
+                                        if (item.can-play) {
+                                            root.play(item.id);
+                                        } else if (item.can-pause) {
+                                            root.pause(item.id);
+                                        } else {
+                                            root.resume(item.id);
+                                        }
                                     }
                                 }
 
-                                if (item.can-change-source || item.can-cancel) : HorizontalLayout {
-                                    alignment: end;
-                                    spacing: 0.6 * root.unit;
+                                ButtonSurface {
+                                    width: 2.25 * root.unit;
+                                    height: 2.25 * root.unit;
+                                    border-radius: 7px;
+                                    border-width: 1px;
+                                    border-color: root.menu-open && root.menu-target == item.id ? dl-hairline-strong : dl-hairline;
+                                    background: root.menu-open && root.menu-target == item.id ? dl-surface-hover : transparent;
+                                    accessible-name: @tr("MORE_ACTIONS" => "Más acciones");
 
-                                    if (item.can-change-source) : PillButton {
-                                        width: 10.5 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: "Cambiar fuente";
-                                        label-font-size: 0.84 * root.unit;
-                                        outlined: true;
-                                        clicked => {
-                                            root.request-download-episode(
-                                                item.meta-id,
-                                                item.is-series ? -2 : -1,
-                                                -1,
-                                                true
-                                            );
+                                    pointer-down => {
+                                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
+                                        root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
+                                    }
+
+                                    clicked => {
+                                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
+                                        root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
+                                        if (root.menu-open && root.menu-target == item.id) {
+                                            root.menu-open = false;
+                                        } else {
+                                            root.menu-target = item.id;
+                                            root.menu-meta-id = item.meta-id;
+                                            root.menu-is-series = item.is-series;
+                                            root.menu-change-source = item.can-change-source;
+                                            root.menu-cancel = item.can-cancel || item.is-paused;
+                                            root.menu-delete = item.can-delete;
+                                            root.menu-open = true;
                                         }
                                     }
-                                    if (item.can-cancel) : PillButton {
-                                        width: 7.8 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: @tr("CANCEL" => "Cancelar");
-                                        label-font-size: 0.86 * root.unit;
-                                        outlined: true;
-                                        hover-color: Theme.danger.with-alpha(0.2);
-                                        hover-outline-color: Theme.danger;
-                                        clicked => { root.cancel(item.id); }
-                                    }
-                                    if (item.can-delete && (!item.can-cancel || item.can-play || item.has-failed)) : PillButton {
-                                        width: 7.8 * root.unit;
-                                        height: 2.8 * root.unit;
-                                        unit: root.unit;
-                                        label: @tr("DELETE" => "Eliminar");
-                                        label-font-size: 0.86 * root.unit;
-                                        outlined: true;
-                                        hover-color: Theme.danger.with-alpha(0.2);
-                                        hover-outline-color: Theme.danger;
-                                        clicked => { root.delete-item(item.id); }
+
+                                    Image {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 1 * root.unit;
+                                        height: 1 * root.unit;
+                                        source: @image-url("../assets/images/icons/more-horizontal.svg");
+                                        colorize: Theme.text-secondary;
+                                        image-fit: contain;
                                     }
                                 }
                             }
@@ -753,116 +843,105 @@ export component DownloadsPage inherits Rectangle {
                         if (item.error-message != "") : Rectangle {
                             height: card-error-layout.preferred-height;
                             border-radius: 6px;
-                            background: Theme.danger.with-alpha(0.14);
+                            background: Theme.danger.with-alpha(0.10);
                             border-width: 1px;
-                            border-color: Theme.danger.with-alpha(0.38);
+                            border-color: Theme.danger.with-alpha(0.25);
 
                             card-error-layout := HorizontalLayout {
-                                padding-left: 0.9 * root.unit;
-                                padding-right: 0.9 * root.unit;
-                                padding-top: 0.6 * root.unit;
-                                padding-bottom: 0.6 * root.unit;
-                                spacing: 0.6 * root.unit;
+                                padding-left: 1 * root.unit;
+                                padding-right: 1 * root.unit;
+                                padding-top: 0.5 * root.unit;
+                                padding-bottom: 0.5 * root.unit;
+                                spacing: 0.5 * root.unit;
 
                                 Text {
                                     horizontal-stretch: 1;
                                     text: item.error-message;
-                                    color: #fecaca;
-                                    font-size: 0.84 * root.unit;
+                                    color: dl-error-text;
+                                    font-size: 0.8125 * root.unit;
                                     wrap: word-wrap;
                                 }
                             }
                         }
 
-                        // Single chapter list: collapsed shows seasons that have at
-                        // least one download; expanded shows every season.
-                        if (item.is-series) : VerticalLayout {
-                            spacing: 0.8 * root.unit;
-                            padding-top: 0.6 * root.unit;
+                        // The chapter list only takes space when the series card is
+                        // expanded, so a long season does not hide the other titles.
+                        if (item.is-series && card.is-expanded) : VerticalLayout {
+                            spacing: 0.75 * root.unit;
+                            padding-top: 0.5 * root.unit;
 
                             Rectangle {
                                 height: 1px;
-                                background: Theme.divider;
+                                background: dl-hairline;
                             }
 
                             if (card.is-expanded) : HorizontalLayout {
                                 alignment: space-between;
-                                spacing: 1.0 * root.unit;
-                                padding-top: 0.2 * root.unit;
-                                padding-bottom: 0.2 * root.unit;
+                                spacing: 1 * root.unit;
+                                padding-top: 0.25 * root.unit;
+                                padding-bottom: 0.25 * root.unit;
 
                                 Text {
                                     horizontal-stretch: 0;
                                     text: @tr("ALL_CHAPTERS" => "Todos los capítulos");
                                     color: Theme.text-primary;
-                                    font-size: 0.95 * root.unit;
-                                    font-weight: 700;
+                                    font-size: 0.875 * root.unit;
+                                    font-weight: 600;
                                 }
 
                                 Text {
                                     horizontal-stretch: 1;
                                     horizontal-alignment: right;
-                                    text: card.hovered-ep-info != "" ? card.hovered-ep-info : @tr("CHAPTER_HINT" => "Iluminados: descargados · Click en capítulo o temporada para gestionar");
-                                    color: card.hovered-ep-info != "" ? #c4b5fd : Theme.text-muted;
-                                    font-size: 0.82 * root.unit;
-                                    font-weight: card.hovered-ep-info != "" ? 650 : 450;
+                                    text: card.hovered-ep-info != "" ? card.hovered-ep-info : @tr("CHAPTER_HINT" => "Descargados · Elegí un capítulo o temporada para gestionar");
+                                    color: card.hovered-ep-info != "" ? Theme.text-primary : Theme.text-muted;
+                                    font-size: 0.8125 * root.unit;
+                                    font-weight: card.hovered-ep-info != "" ? 500 : 400;
                                     overflow: elide;
                                 }
                             }
 
                             if (item.all-seasons.length == 0) : Text {
-                                text: @tr("NO_SEASONS_AVAILABLE" => "No hay información de capítulos disponible para esta serie.");
+                                text: @tr("NO_SEASONS_AVAILABLE" => "Sin datos de capítulos.");
                                 color: Theme.text-secondary;
-                                font-size: 0.88 * root.unit;
+                                font-size: 0.875 * root.unit;
                                 wrap: word-wrap;
                             }
 
-                            for s in item.all-seasons : Rectangle {
-                                property <bool> season-visible: card.is-expanded || s.has-downloaded || s.has-active || s.has-paused || s.has-failed;
-                                visible: self.season-visible;
-                                height: self.season-visible ? 3.1 * root.unit : 0px;
+                            for s in item.all-seasons : season-row := Rectangle {
+                                property <bool> season-visible: true;
+                                visible: true;
+                                width: 100%;
+                                height: 3.5 * root.unit;
                                 clip: true;
                                 background: transparent;
 
                                 HorizontalLayout {
-                                    width: 100%;
-                                    height: 3.1 * root.unit;
-                                    spacing: 0.8 * root.unit;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    spacing: 0.75 * root.unit;
 
-                                // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Clickable!) - squircle sin borde
+                                // Season Pill on left: "T1 · 2017", "T2 · 2022", etc. (Tocable) - squircle sin borde
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 0;
                                     Rectangle {
-                                        width: s.season-year != "" ? 7.0 * root.unit : 3.8 * root.unit;
-                                        height: 2.8 * root.unit;
+                                        width: s.season-year != "" ? 7 * root.unit : 3.75 * root.unit;
+                                        height: 2.75 * root.unit;
                                         border-radius: 6px;
-                                        background: season-pill-touch.has-hover ? #28263d : Theme.control-background;
+                                        background: season-pill-touch.has-hover ? dl-surface-hover : dl-surface-raised;
 
                                         season-pill-touch := TouchArea {
                                             mouse-cursor: MouseCursor.pointer;
                                             moved => {
-                                                card.hovered-ep-info = s.season-label + (s.season-year != "" ? " (" + s.season-year + ")" : "") + (s.has-active || s.has-paused ? " — Click para pausar, cancelar o cambiar fuente" : (s.has-downloaded ? " — Click para descargar o eliminar temporada" : " — Click para buscar y descargar temporada"));
+                                                card.hovered-ep-info = s.season-label + (s.season-year != "" ? " (" + s.season-year + ")" : "") + (s.has-active || s.has-paused ? " · Elegí para pausar, cancelar o cambiar fuente" : (s.has-downloaded ? " · Elegí para descargar o eliminar temporada" : " · Elegí para buscar y descargar temporada"));
                                             }
                                             clicked => {
-                                                root.prompt-download-meta-id = item.meta-id;
-                                                root.prompt-download-title = item.title;
-                                                root.prompt-download-season = s.season;
-                                                root.prompt-download-episode = 0;
-                                                root.prompt-download-ep-title = "";
-                                                root.prompt-download-job-id = "";
-                                                root.prompt-download-is-downloaded = false;
-                                                root.prompt-download-is-downloading = false;
-                                                root.prompt-download-is-paused = false;
-                                                root.prompt-download-is-failed = false;
-                                                root.prompt-download-progress = 0.0;
-                                                root.prompt-download-error = "";
-                                                root.prompt-download-season-has-dl = s.has-downloaded;
-                                                root.prompt-download-season-has-active = s.has-active;
-                                                root.prompt-download-season-has-paused = s.has-paused;
-                                                root.prompt-download-season-label = s.season-label;
-                                                root.prompt-download-season-year = s.season-year;
-                                                root.prompt-download-open = true;
+                                                root.open-season-prompt(item, s);
+                                            }
+                                            pointer-event(event) => {
+                                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                                    root.open-season-prompt(item, s);
+                                                }
                                             }
                                         }
 
@@ -870,9 +949,9 @@ export component DownloadsPage inherits Rectangle {
                                             width: 100%;
                                             height: 100%;
                                             text: s.season-year != "" ? (s.season-label + " · " + s.season-year) : s.season-label;
-                                            color: season-pill-touch.has-hover ? #c4b5fd : Theme.text-primary;
-                                            font-size: 0.86 * root.unit;
-                                            font-weight: 750;
+                                            color: Theme.text-primary;
+                                            font-size: 0.875 * root.unit;
+                                            font-weight: 600;
                                             horizontal-alignment: center;
                                             vertical-alignment: center;
                                         }
@@ -880,65 +959,78 @@ export component DownloadsPage inherits Rectangle {
                                 }
 
                                 // Horizontal strip of episodes: E1 E2 E3 ... EN (scrollable so long seasons never clip)
-                                ep-scroll := ScrollView {
+                                ep-viewport := Rectangle {
                                     horizontal-stretch: 1;
-                                    height: 3.1 * root.unit;
-                                    viewport-width: max(self.visible-width, ep-strip.preferred-width);
-                                    viewport-height: self.visible-height;
-                                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-                                    horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
+                                    min-width: 0px;
+                                    height: parent.height;
+                                    background: transparent;
+                                    clip: true;
 
-                                    ep-strip := HorizontalLayout {
-                                        spacing: 0.45 * root.unit;
-                                        alignment: start;
+                                    ep-scroll := ScrollView {
+                                        x: 0px;
+                                        y: 0px;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        viewport-width: max(parent.width, ep-strip.preferred-width);
+                                        viewport-height: parent.height;
+                                        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                                        horizontal-scrollbar-policy: ScrollBarPolicy.as-needed;
+                                        mouse-drag-pan-enabled: true;
 
-                                        for ep in s.episodes : VerticalLayout {
-                                            alignment: center;
-                                            horizontal-stretch: 0;
-                                            Rectangle {
-                                                width: ep-grid-touch.has-hover && ep.title != ""
-                                                    ? min(22 * root.unit, 4.0 * root.unit + ep-title-measure.preferred-width + 1.4 * root.unit)
-                                                    : 4.0 * root.unit;
-                                                height: 2.8 * root.unit;
-                                                border-radius: 6px;
-                                                border-width: ep.is-failed || ep.is-downloading || ep.is-paused ? 1px : 0px;
-                                                border-color: ep.is-failed
-                                                    ? Theme.danger.with-alpha(0.65)
-                                                    : (ep.is-downloading
-                                                        ? #38bdf8.with-alpha(0.55)
-                                                        : (ep.is-paused ? #f59e0b.with-alpha(0.65) : transparent));
-                                                clip: true;
-                                                animate width { duration: Theme.motion-panel; easing: ease-out; }
-                                                background: ep.is-downloaded
-                                                    ? (ep-grid-touch.has-hover ? #8b5cf6 : Theme.primary-accent.with-alpha(0.35))
-                                                    : (ep.is-downloading
-                                                        ? (ep-grid-touch.has-hover ? #0284c7.with-alpha(0.45) : #0ea5e9.with-alpha(0.24))
-                                                        : (ep.is-paused
-                                                            ? (ep-grid-touch.has-hover ? #f59e0b.with-alpha(0.40) : #f59e0b.with-alpha(0.24))
-                                                            : (ep.is-failed
-                                                                ? (ep-grid-touch.has-hover ? Theme.danger.with-alpha(0.42) : Theme.danger.with-alpha(0.24))
-                                                                : (ep-grid-touch.has-hover ? #28283c : #181824))));
+                                        ep-strip := HorizontalLayout {
+                                            x: 0px;
+                                            y: (ep-viewport.height - self.height) / 2;
+                                            height: 2.75 * root.unit;
+                                            spacing: 0.5 * root.unit;
+                                            alignment: start;
 
-                                                ep-title-measure := Text {
-                                                    visible: false;
-                                                    text: ep.title;
-                                                    font-size: 0.78 * root.unit;
-                                                }
+                                            for ep in s.episodes : VerticalLayout {
+                                                alignment: center;
+                                                horizontal-stretch: 0;
+                                                Rectangle {
+                                                    width: ep-grid-touch.has-hover && ep.title != ""
+                                                        ? min(22 * root.unit, 4.5 * root.unit + ep-title-measure.preferred-width + 1.5 * root.unit)
+                                                        : 4.5 * root.unit;
+                                                    height: 2.75 * root.unit;
+                                                    border-radius: 6px;
+                                                    border-width: ep.is-failed || ep.is-downloading || ep.is-paused ? 1px : 0px;
+                                                    border-color: ep.is-failed
+                                                        ? Theme.danger.with-alpha(0.35)
+                                                        : (ep.is-downloading
+                                                            ? Theme.primary-accent.with-alpha(0.35)
+                                                            : (ep.is-paused ? dl-paused.with-alpha(0.35) : transparent));
+                                                    clip: true;
+                                                    animate width { duration: Theme.motion-panel; easing: ease-out; }
+                                                    background: ep.is-downloaded
+                                                        ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
+                                                        : (ep.is-downloading
+                                                            ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
+                                                            : (ep.is-paused
+                                                                ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
+                                                                : (ep.is-failed
+                                                                    ? (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface-raised)
+                                                                    : (ep-grid-touch.has-hover ? dl-surface-hover : dl-surface))));
 
-                                                if (ep.is-downloading) : Rectangle {
-                                                    x: 0px;
-                                                    y: parent.height - 3px;
-                                                    width: parent.width * max(0.08, min(1.0, ep.progress));
-                                                    height: 3px;
-                                                    background: #38bdf8;
-                                                }
+                                                    ep-title-measure := Text {
+                                                        visible: false;
+                                                        text: ep.title;
+                                                        font-size: 0.75 * root.unit;
+                                                    }
+
+                                                    if (ep.is-downloading) : Rectangle {
+                                                        x: 0px;
+                                                        y: parent.height - 3px;
+                                                        width: parent.width * max(0.08, min(1.0, ep.progress));
+                                                        height: 3px;
+                                                        background: Theme.accent;
+                                                    }
 
                                                 if (ep.is-paused) : Rectangle {
                                                     x: 0px;
                                                     y: parent.height - 3px;
                                                     width: parent.width * max(0.08, min(1.0, ep.progress));
                                                     height: 3px;
-                                                    background: #f59e0b;
+                                                    background: dl-paused;
                                                 }
 
                                                 if (!ep.is-downloading && !ep.is-paused && ep.watch-progress > 0) : Rectangle {
@@ -946,7 +1038,7 @@ export component DownloadsPage inherits Rectangle {
                                                     y: parent.height - 3px;
                                                     width: parent.width * min(1.0, ep.watch-progress);
                                                     height: 3px;
-                                                    background: Theme.accent;
+                                                    background: Theme.text-secondary;
                                                 }
 
                                                 ep-grid-touch := TouchArea {
@@ -955,14 +1047,14 @@ export component DownloadsPage inherits Rectangle {
                                                         card.hovered-ep-info = s.season-label + " · E" + ep.episode-num
                                                             + (ep.title != "" ? ": " + ep.title : "")
                                                             + (ep.is-downloaded
-                                                                ? " (Descargado — click para reproducir, click derecho para opciones)"
+                                                                ? " (Descargado · Elegí para reproducir, clic derecho para opciones)"
                                                                 : (ep.is-downloading
-                                                                    ? " (Descargando " + Math.round(ep.progress * 100) + "% — click para pausar, cancelar o cambiar fuente)"
+                                                                    ? " (Descargando " + Math.round(ep.progress * 100) + "% · Elegí para pausar, cancelar o cambiar fuente)"
                                                                     : (ep.is-paused
-                                                                        ? " (Pausado " + Math.round(ep.progress * 100) + "% — click para reanudar, cancelar o cambiar fuente)"
+                                                                        ? " (Pausado " + Math.round(ep.progress * 100) + "% · Elegí para reanudar, cancelar o cambiar fuente)"
                                                                         : (ep.is-failed
                                                                             ? " (Error: " + ep.error-message + ")"
-                                                                            : " (No descargado — click para descargar)"))));
+                                                                            : " (No descargado · Elegí para descargar)"))));
                                                     }
                                                     clicked => {
                                                         if (ep.is-downloaded) {
@@ -1013,68 +1105,70 @@ export component DownloadsPage inherits Rectangle {
                                                 }
 
                                                 if (ep.watched) : Image {
-                                                    x: parent.width - 0.95 * root.unit;
-                                                    y: 0.2 * root.unit;
-                                                    width: 0.65 * root.unit;
-                                                    height: 0.65 * root.unit;
+                                                    x: parent.width - 1 * root.unit;
+                                                    y: 0.25 * root.unit;
+                                                    width: 1 * root.unit;
+                                                    height: 1 * root.unit;
                                                     source: @image-url("../assets/images/icons/checkmark.svg");
-                                                    colorize: Theme.primary-foreground;
+                                                    colorize: Theme.text-secondary;
                                                     image-fit: contain;
                                                 }
 
                                                 HorizontalLayout {
                                                     width: 100%;
                                                     height: 100%;
+                                                    padding-left: 0.5 * root.unit;
+                                                    padding-right: 0.5 * root.unit;
                                                     alignment: center;
-                                                    spacing: 0.3 * root.unit;
+                                                    spacing: 0.25 * root.unit;
 
                                                     if (ep.is-downloaded) : Rectangle {
-                                                        width: 0.85 * root.unit;
+                                                        width: 1 * root.unit;
                                                         height: parent.height;
                                                         background: transparent;
 
                                                         Image {
                                                             x: 0px;
                                                             y: (parent.height - self.height) / 2;
-                                                            width: 0.85 * root.unit;
-                                                            height: 0.85 * root.unit;
+                                                            width: 1 * root.unit;
+                                                            height: 1 * root.unit;
                                                             source: @image-url("../assets/images/icons/play.svg");
-                                                            colorize: Theme.primary-foreground;
+                                                            colorize: Theme.text-primary;
                                                             image-fit: contain;
                                                         }
                                                     }
 
                                                     if (ep.is-paused) : Rectangle {
-                                                        width: 0.85 * root.unit;
+                                                        width: 1 * root.unit;
                                                         height: parent.height;
                                                         background: transparent;
 
                                                         Image {
                                                             x: 0px;
                                                             y: (parent.height - self.height) / 2;
-                                                            width: 0.85 * root.unit;
-                                                            height: 0.85 * root.unit;
+                                                            width: 1 * root.unit;
+                                                            height: 1 * root.unit;
                                                             source: @image-url("../assets/images/icons/pause.svg");
-                                                            colorize: #fde68a;
+                                                            colorize: dl-paused;
                                                             image-fit: contain;
                                                         }
                                                     }
 
                                                     if (!ep.is-downloaded && !ep.is-paused) : Rectangle {
-                                                        width: 0.85 * root.unit;
+                                                        width: 1 * root.unit;
                                                         height: parent.height;
                                                         background: transparent;
 
                                                         Image {
                                                             x: 0px;
                                                             y: (parent.height - self.height) / 2;
-                                                            width: 0.85 * root.unit;
-                                                            height: 0.85 * root.unit;
+                                                            width: 1 * root.unit;
+                                                            height: 1 * root.unit;
                                                             source: @image-url("../assets/images/icons/download.svg");
                                                             colorize: ep.is-failed
-                                                                ? #fecaca
+                                                                ? dl-error-text
                                                                 : (ep.is-downloading
-                                                                    ? #7dd3fc
+                                                                    ? Theme.text-primary
                                                                     : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted));
                                                             image-fit: contain;
                                                         }
@@ -1084,16 +1178,16 @@ export component DownloadsPage inherits Rectangle {
                                                         height: parent.height;
                                                         text: "E" + ep.episode-num;
                                                         color: ep.is-downloaded
-                                                            ? Theme.primary-foreground
+                                                            ? Theme.text-primary
                                                             : (ep.is-failed
-                                                                ? #fecaca
+                                                                ? dl-error-text
                                                                 : (ep.is-downloading
-                                                                    ? #bae6fd
+                                                                    ? Theme.text-primary
                                                                     : (ep.is-paused
-                                                                        ? #fef3c7
+                                                                        ? dl-paused
                                                                         : (ep-grid-touch.has-hover ? Theme.text-primary : Theme.text-muted))));
-                                                        font-size: 0.88 * root.unit;
-                                                        font-weight: ep.is-downloaded || ep.is-downloading || ep.is-paused || ep.is-failed ? 750 : 550;
+                                                        font-size: 0.875 * root.unit;
+                                                        font-weight: 500;
                                                         vertical-alignment: center;
                                                     }
 
@@ -1101,14 +1195,15 @@ export component DownloadsPage inherits Rectangle {
                                                         horizontal-stretch: 1;
                                                         height: parent.height;
                                                         text: ep.title;
-                                                        color: ep.is-downloaded ? Theme.primary-foreground : Theme.text-primary;
-                                                        font-size: 0.76 * root.unit;
+                                                        color: Theme.text-primary;
+                                                        font-size: 0.75 * root.unit;
                                                         font-weight: 500;
                                                         vertical-alignment: center;
                                                         overflow: elide;
                                                     }
                                                 }
                                             }
+                                        }
                                         }
                                     }
                                 }
@@ -1119,7 +1214,32 @@ export component DownloadsPage inherits Rectangle {
                 }
             }
         }
-    }
+
+        if (root.disk-usage-text != "") : Rectangle {
+            x: root.dl-pad;
+            y: root.height - root.dl-pad - root.dl-footer-height;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-footer-height;
+            background: transparent;
+
+            Rectangle {
+                y: 0px;
+                width: 100%;
+                height: 1px;
+                background: dl-hairline;
+            }
+
+            Text {
+                y: 1px + 0.75 * root.unit;
+                width: 100%;
+                height: root.dl-footer-height - 1px - 0.75 * root.unit;
+                text: root.disk-usage-text;
+                color: Theme.text-muted;
+                font-size: 0.75 * root.unit;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
 
     // ModalDialog for Episode / Season Actions (Play, Pause, Resume, Cancel, Change source, Download, Delete)
     ModalDialog {
@@ -1143,26 +1263,26 @@ export component DownloadsPage inherits Rectangle {
 
         VerticalLayout {
             padding: 0px;
-            spacing: 1.2 * root.unit;
+            spacing: 1.25 * root.unit;
 
             Rectangle {
-                height: 5.0 * root.unit;
+                height: 5 * root.unit;
                 border-radius: Theme.border-radius;
-                background: Theme.control-background;
+                background: dl-surface-raised;
                 border-width: 1px;
-                border-color: Theme.divider;
+                border-color: dl-hairline;
 
                 VerticalLayout {
-                    padding-left: 1.2 * root.unit;
-                    padding-right: 1.2 * root.unit;
+                    padding-left: 1.25 * root.unit;
+                    padding-right: 1.25 * root.unit;
                     alignment: center;
-                    spacing: 0.35 * root.unit;
+                    spacing: 0.25 * root.unit;
 
                     Text {
                         text: root.prompt-download-title;
                         color: Theme.text-primary;
-                        font-size: 1.1 * root.unit;
-                        font-weight: 700;
+                        font-size: 1.25 * root.unit;
+                        font-weight: 600;
                         overflow: elide;
                     }
 
@@ -1170,9 +1290,9 @@ export component DownloadsPage inherits Rectangle {
                         text: root.prompt-download-episode == 0
                             ? ((root.prompt-download-season-label != "" ? root.prompt-download-season-label : ("Temporada " + root.prompt-download-season)) + (root.prompt-download-season-year != "" ? (" · " + root.prompt-download-season-year) : ""))
                             : ((root.prompt-download-season-label != "" ? root.prompt-download-season-label : ("Temporada " + root.prompt-download-season)) + " · Episodio " + root.prompt-download-episode + (root.prompt-download-ep-title != "" ? (": " + root.prompt-download-ep-title) : ""));
-                        color: Theme.accent;
-                        font-size: 0.92 * root.unit;
-                        font-weight: 650;
+                        color: Theme.text-secondary;
+                        font-size: 0.8125 * root.unit;
+                        font-weight: 500;
                         overflow: elide;
                     }
                 }
@@ -1181,18 +1301,18 @@ export component DownloadsPage inherits Rectangle {
             if (root.prompt-download-is-failed && root.prompt-download-error != "") : Rectangle {
                 height: prompt-error-box.preferred-height;
                 border-radius: Theme.border-radius;
-                background: Theme.danger.with-alpha(0.16);
+                background: Theme.danger.with-alpha(0.10);
                 border-width: 1px;
-                border-color: Theme.danger.with-alpha(0.45);
+                border-color: Theme.danger.with-alpha(0.25);
 
                 prompt-error-box := HorizontalLayout {
-                    padding: 0.85 * root.unit;
+                    padding: 0.75 * root.unit;
 
                     Text {
                         horizontal-stretch: 1;
                         text: root.prompt-download-error;
-                        color: #fecaca;
-                        font-size: 0.88 * root.unit;
+                        color: dl-error-text;
+                        font-size: 0.875 * root.unit;
                         wrap: word-wrap;
                     }
                 }
@@ -1201,261 +1321,293 @@ export component DownloadsPage inherits Rectangle {
             if (!root.prompt-download-is-failed) : Text {
                 text: root.prompt-download-episode == 0
                     ? (root.prompt-download-season-has-active
-                        ? "Esta temporada tiene capítulos descargándose. Podés pausarlos, cancelar los pendientes o elegir una fuente diferente."
+                        ? "Hay capítulos descargándose. Podés pausarlos, cancelar los pendientes o cambiar de fuente."
                         : (root.prompt-download-season-has-paused
-                            ? "Esta temporada tiene descargas pausadas. Podés reanudarlas, cancelarlas o cambiar la fuente."
+                            ? "Hay descargas pausadas. Podés reanudarlas, cancelarlas o cambiar de fuente."
                             : (root.prompt-download-season-has-dl
-                                ? "Podés buscar fuentes para descargar la temporada completa o eliminar los capítulos ya descargados de esta temporada."
-                                : "¿Deseás buscar fuentes para descargar esta temporada?")))
+                                ? "Podés descargar la temporada completa o eliminar los capítulos ya descargados."
+                                : "¿Buscar fuentes para descargar esta temporada?")))
                     : (root.prompt-download-is-downloaded
-                        ? "Este capítulo ya está descargado en tu equipo. ¿Deseás reproducirlo o eliminarlo del disco?"
+                        ? "Ya está en tu equipo. Podés reproducirlo o eliminarlo."
                         : (root.prompt-download-is-downloading
-                            ? ("Este capítulo se está descargando (" + Math.round(root.prompt-download-progress * 100) + "%). Podés pausar, cancelar o elegir otra fuente.")
+                            ? ("Se está descargando (" + Math.round(root.prompt-download-progress * 100) + "%). Podés pausar, cancelar o cambiar de fuente.")
                             : (root.prompt-download-is-paused
-                                ? ("La descarga de este capítulo está pausada (" + Math.round(root.prompt-download-progress * 100) + "%). Podés reanudarla, cancelarla o cambiar de fuente.")
-                                : "Este capítulo no está descargado aún. Podés buscar fuentes para descargar solo este capítulo o toda la temporada.")));
+                                ? ("Pausado (" + Math.round(root.prompt-download-progress * 100) + "%). Podés reanudar, cancelar o cambiar de fuente.")
+                                : "No está descargado. Podés bajar solo este capítulo o la temporada completa.")));
                 color: Theme.text-secondary;
-                font-size: 0.9 * root.unit;
+                font-size: 0.875 * root.unit;
                 wrap: word-wrap;
             }
 
             HorizontalLayout {
-                spacing: 0.65 * root.unit;
+                spacing: 0.5 * root.unit;
                 alignment: end;
                 padding-top: 0.5 * root.unit;
 
-                PillButton {
-                    width: 6.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("CLOSE" => "Cerrar");
-                    outlined: true;
+                ButtonSurface {
+                    height: 2.5 * root.unit;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: dl-hairline-strong;
+                    background: self.has-hover || self.has-focus ? dl-surface-hover : transparent;
+                    accessible-name: @tr("CLOSE" => "Cerrar");
+
+                    HorizontalLayout {
+                        padding-left: 1.25 * root.unit;
+                        padding-right: 1.25 * root.unit;
+                        alignment: center;
+
+                        Text {
+                            text: @tr("CLOSE" => "Cerrar");
+                            color: Theme.text-primary;
+                            font-size: 0.875 * root.unit;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+                    }
+
                     clicked => { root.prompt-download-open = false; }
                 }
 
-                // Case 1: Season pill clicked (episode == 0)
-                if (root.prompt-download-episode == 0 && root.prompt-download-season-has-dl) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label: "Eliminar temporada";
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.delete-item("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode == 0 && (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)) : PillButton {
-                    width: 7.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("CANCEL" => "Cancelar");
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.cancel("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode == 0 && root.prompt-download-season-has-active) : PillButton {
-                    width: 7.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("PAUSE" => "Pausar");
-                    outlined: true;
-                    clicked => {
-                        root.pause("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode == 0 && !root.prompt-download-season-has-active && root.prompt-download-season-has-paused) : PillButton {
-                    width: 8.2 * root.unit;
-                    unit: root.unit;
-                    label: @tr("RESUME" => "Reanudar");
-                    outlined: true;
-                    clicked => {
-                        root.resume("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode == 0 && (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)) : PillButton {
-                    width: 10.5 * root.unit;
-                    unit: root.unit;
-                    label: "Cambiar fuente";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, true);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode == 0 && !root.prompt-download-season-has-active && !root.prompt-download-season-has-paused) : PillButton {
+                ButtonSurface {
                     width: 12.5 * root.unit;
-                    unit: root.unit;
-                    label: "Descargar temporada";
-                    primary: true;
+                    height: 2.5 * root.unit;
+                    border-radius: 8px;
+                    background: dl-primary;
+                    border-width: self.has-focus ? Theme.focus-outline-size : 1px;
+                    border-color: self.has-focus ? Theme.primary-accent : dl-primary;
+                    accessible-name: root.prompt-download-episode == 0
+                        ? (root.prompt-download-season-has-active
+                            ? @tr("PAUSE" => "Pausar")
+                            : (root.prompt-download-season-has-paused
+                                ? @tr("RESUME" => "Reanudar")
+                                : "Descargar temporada"))
+                        : (root.prompt-download-is-downloaded
+                            ? @tr("CTX_PLAY" => "Reproducir")
+                            : (root.prompt-download-is-downloading
+                                ? @tr("PAUSE" => "Pausar")
+                                : (root.prompt-download-is-paused
+                                    ? @tr("RESUME" => "Reanudar")
+                                    : (root.prompt-download-is-failed
+                                        ? @tr("RETRY" => "Reintentar")
+                                        : "Buscar y descargar"))));
+
+                    HorizontalLayout {
+                        width: 100%;
+                        height: 100%;
+                        padding-left: 1.25 * root.unit;
+                        padding-right: 1.25 * root.unit;
+                        spacing: 0.5 * root.unit;
+                        alignment: center;
+
+                        Image {
+                            width: 1 * root.unit;
+                            height: 1 * root.unit;
+                            source: root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active
+                                    ? @image-url("../assets/images/icons/pause.svg")
+                                    : (root.prompt-download-season-has-paused
+                                        ? @image-url("../assets/images/icons/play.svg")
+                                        : @image-url("../assets/images/icons/download.svg")))
+                                : (root.prompt-download-is-downloaded
+                                    ? @image-url("../assets/images/icons/play.svg")
+                                    : (root.prompt-download-is-downloading
+                                        ? @image-url("../assets/images/icons/pause.svg")
+                                        : (root.prompt-download-is-paused
+                                            ? @image-url("../assets/images/icons/play.svg")
+                                            : (root.prompt-download-is-failed
+                                                ? @image-url("../assets/images/icons/replay.svg")
+                                                : @image-url("../assets/images/icons/download.svg")))));
+                            colorize: dl-primary-ink;
+                            image-fit: contain;
+                        }
+
+                        Text {
+                            text: root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active
+                                    ? @tr("PAUSE" => "Pausar")
+                                    : (root.prompt-download-season-has-paused
+                                        ? @tr("RESUME" => "Reanudar")
+                                        : "Descargar temporada"))
+                                : (root.prompt-download-is-downloaded
+                                    ? @tr("CTX_PLAY" => "Reproducir")
+                                    : (root.prompt-download-is-downloading
+                                        ? @tr("PAUSE" => "Pausar")
+                                        : (root.prompt-download-is-paused
+                                            ? @tr("RESUME" => "Reanudar")
+                                            : (root.prompt-download-is-failed
+                                                ? @tr("RETRY" => "Reintentar")
+                                                : "Buscar y descargar"))));
+                            color: dl-primary-ink;
+                            font-size: 0.875 * root.unit;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+                    }
+
                     clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, false);
+                        root.menu-open = false;
+                        if (root.prompt-download-episode == 0) {
+                            if (root.prompt-download-season-has-active) {
+                                root.pause("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                            } else if (root.prompt-download-season-has-paused) {
+                                root.resume("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                            } else {
+                                root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, false);
+                            }
+                        } else if (root.prompt-download-is-downloaded) {
+                            root.play(root.prompt-download-job-id);
+                        } else if (root.prompt-download-is-downloading) {
+                            root.pause(root.prompt-download-job-id);
+                        } else if (root.prompt-download-is-paused) {
+                            root.resume(root.prompt-download-job-id);
+                        } else if (root.prompt-download-is-failed) {
+                            root.resume(root.prompt-download-job-id);
+                        } else {
+                            root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, false);
+                        }
                         root.prompt-download-open = false;
                     }
                 }
 
-                // Case 2: Downloaded episode clicked (episode > 0 && is-downloaded)
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloaded) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label: "Eliminar capítulo";
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
+                if (root.prompt-download-episode == 0
+                    ? (root.prompt-download-season-has-dl || root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                    : (root.prompt-download-is-downloaded || root.prompt-download-is-downloading || root.prompt-download-is-paused || root.prompt-download-is-failed)) : ButtonSurface {
+                    width: 2.5 * root.unit;
+                    height: 2.5 * root.unit;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: root.menu-open && root.menu-target == "prompt" ? dl-hairline-strong : dl-hairline;
+                    background: root.menu-open && root.menu-target == "prompt" ? dl-surface-hover : transparent;
+                    accessible-name: @tr("MORE_ACTIONS" => "Más acciones");
+
+                    pointer-down => {
+                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
+                        root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
+                    }
+
                     clicked => {
-                        root.delete-item(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
+                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
+                        root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
+                        if (root.menu-open && root.menu-target == "prompt") {
+                            root.menu-open = false;
+                        } else {
+                            root.menu-target = "prompt";
+                            root.menu-change-source = root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                                : (root.prompt-download-is-downloading || root.prompt-download-is-paused || root.prompt-download-is-failed);
+                            root.menu-cancel = root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                                : (root.prompt-download-is-downloading || root.prompt-download-is-paused);
+                            root.menu-delete = root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-dl || root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                                : (root.prompt-download-is-downloaded || root.prompt-download-is-downloading || root.prompt-download-is-paused || root.prompt-download-is-failed);
+                            root.menu-open = true;
+                        }
+                    }
+
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 1 * root.unit;
+                        height: 1 * root.unit;
+                        source: @image-url("../assets/images/icons/more-horizontal.svg");
+                        colorize: Theme.text-secondary;
+                        image-fit: contain;
                     }
                 }
+            }
+        }
+    }
 
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloaded) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label: "Reproducir";
-                    primary: true;
-                    clicked => {
-                        root.play(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
+    // One anchored menu for the card and modal overflow actions. It lives at
+    // page level so the list ScrollView can never clip it.
+    ContextMenuSurface {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        z: 100000;
+        unit: root.unit;
+        open: root.menu-open;
+        requested-x: root.menu-x;
+        requested-y: root.menu-y;
+        menu-width: 14.5 * root.unit;
+        menu-height: menu-content.preferred-height + 2px;
+        surface-color: dl-surface-raised;
+        menu-border-color: dl-hairline-strong;
+        close-requested => { root.menu-open = false; }
+
+        menu-content := VerticalLayout {
+            padding: 0.375 * root.unit;
+            spacing: 0.25 * root.unit;
+
+            if (root.menu-change-source) : DownloadMenuRow {
+                unit: root.unit;
+                hover-color: dl-surface-hover;
+                label: "Cambiar fuente";
+                icon-source: @image-url("../assets/images/icons/link.svg");
+                clicked => {
+                    root.menu-open = false;
+                    if (root.menu-target == "prompt") {
+                        root.request-download-episode(
+                            root.prompt-download-meta-id,
+                            root.prompt-download-season,
+                            root.prompt-download-episode == 0 ? 0 : root.prompt-download-episode,
+                            true
+                        );
+                    } else {
+                        root.request-download-episode(
+                            root.menu-meta-id,
+                            root.menu-is-series ? -2 : -1,
+                            -1,
+                            true
+                        );
                     }
                 }
+            }
 
-                // Case 3: Downloading episode clicked
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
-                    width: 8.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("CANCEL" => "Cancelar");
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.cancel(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
+            if (root.menu-cancel) : DownloadMenuRow {
+                unit: root.unit;
+                hover-color: dl-surface-hover;
+                label: "Cancelar descarga";
+                icon-source: @image-url("../assets/images/icons/close.svg");
+                clicked => {
+                    root.menu-open = false;
+                    if (root.menu-target == "prompt") {
+                        if (root.prompt-download-episode == 0) {
+                            root.cancel("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                        } else {
+                            root.cancel(root.prompt-download-job-id);
+                        }
+                    } else {
+                        root.cancel(root.menu-target);
                     }
                 }
+            }
 
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
-                    width: 8.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("PAUSE" => "Pausar");
-                    outlined: true;
-                    clicked => {
-                        root.pause(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
+            if (root.menu-change-source || root.menu-cancel) : Rectangle {
+                height: 1px;
+                background: dl-hairline;
+            }
 
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label: "Cambiar fuente";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, true);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 4: Paused episode clicked
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
-                    width: 8.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("CANCEL" => "Cancelar");
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.cancel(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label: "Cambiar fuente";
-                    outlined: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, true);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
-                    width: 9.5 * root.unit;
-                    unit: root.unit;
-                    label: @tr("RESUME" => "Reanudar");
-                    primary: true;
-                    clicked => {
-                        root.resume(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 5: Failed episode clicked (episode > 0 && is-failed)
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 8.0 * root.unit;
-                    unit: root.unit;
-                    label: "Eliminar";
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.delete-item(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 9.0 * root.unit;
-                    unit: root.unit;
-                    label: "Reintentar";
-                    outlined: true;
-                    clicked => {
-                        root.resume(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label: "Cambiar fuente";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, true);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 6: Un-downloaded episode clicked
-                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
-                    width: 13.0 * root.unit;
-                    unit: root.unit;
-                    label: "Descargar temporada";
-                    outlined: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, false);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
-                    width: 13.0 * root.unit;
-                    unit: root.unit;
-                    label: "Buscar y descargar";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, false);
-                        root.prompt-download-open = false;
+            if (root.menu-delete) : DownloadMenuRow {
+                unit: root.unit;
+                hover-color: Theme.danger.with-alpha(0.14);
+                label: "Eliminar";
+                icon-source: @image-url("../assets/images/icons/delete.svg");
+                destructive: true;
+                destructive-color: dl-error-text;
+                clicked => {
+                    root.menu-open = false;
+                    if (root.menu-target == "prompt") {
+                        if (root.prompt-download-episode == 0) {
+                            root.delete-item("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                        } else {
+                            root.delete-item(root.prompt-download-job-id);
+                        }
+                    } else {
+                        root.delete-item(root.menu-target);
                     }
                 }
             }

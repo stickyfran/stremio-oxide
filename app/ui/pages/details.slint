@@ -674,24 +674,24 @@ export component DetailsPage inherits Rectangle {
                 spacing: 1.5 * root.unit;
                 padding: 2 * root.unit;
 
-                // Animación de pulso continuo autónoma basada en animation-tick()
                 HorizontalLayout {
                     alignment: center;
                     Rectangle {
-                        width: 4 * root.unit;
-                        height: 4 * root.unit;
-                        border-radius: 2 * root.unit;
-                        background: Theme.accent.with-alpha(0.15);
+                        width: 3.6 * root.unit;
+                        height: 3.6 * root.unit;
+                        border-radius: self.height / 2;
+                        background: Theme.control-background;
+                        border-width: 1px;
+                        border-color: Theme.divider;
 
-                        Rectangle {
+                        Image {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            width: 2.2 * root.unit;
-                            height: 2.2 * root.unit;
-                            border-radius: 1.1 * root.unit;
-                            background: Theme.accent;
-                            // Pulso continuo suave entre 0.25 y 1.0 sin timers externos
-                            opacity: 0.25 + 0.75 * abs(sin(animation-tick() / 800ms * 180deg));
+                            width: 1.6 * root.unit;
+                            height: 1.6 * root.unit;
+                            source: @image-url("../assets/images/icons/hourglass.svg");
+                            colorize: Theme.text-secondary;
+                            image-fit: contain;
                         }
                     }
                 }
@@ -866,15 +866,19 @@ export component DetailsPage inherits Rectangle {
                     spacing: 0.75 * root.unit;
                     alignment: center;
 
-                    // Indicador circular con centrado vertical explícito y pulso dinámico
-                    VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 8px;
-                            height: 8px;
-                            border-radius: 4px;
-                            background: Theme.accent;
-                            opacity: 0.35 + 0.65 * abs(sin(animation-tick() / 700ms * 180deg));
+                    Rectangle {
+                        width: 1.0 * root.unit;
+                        height: parent.height;
+                        background: transparent;
+
+                        Image {
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            width: 1.0 * root.unit;
+                            height: 1.0 * root.unit;
+                            source: @image-url("../assets/images/icons/hourglass.svg");
+                            colorize: Theme.text-secondary;
+                            image-fit: contain;
                         }
                     }
 
