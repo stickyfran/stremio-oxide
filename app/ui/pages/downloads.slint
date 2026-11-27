@@ -86,8 +86,8 @@ component DownloadMenuRow inherits ButtonSurface {
     in property <brush> hover-color: Theme.overlay-hover;
     in property <color> destructive-color: Theme.danger;
 
-    height: 2.25 * root.unit;
-    border-radius: 6px;
+    height: 2.5 * root.unit;
+    border-radius: 8px;
     background: self.has-hover || self.has-focus ? root.hover-color : transparent;
     accessible-name: root.label;
 
@@ -98,10 +98,11 @@ component DownloadMenuRow inherits ButtonSurface {
         padding-right: 0.75 * root.unit;
         spacing: 0.625 * root.unit;
         alignment: start;
+        cross-axis-alignment: center;
 
         Image {
-            width: 1 * root.unit;
-            height: 1 * root.unit;
+            width: 1.0625 * root.unit;
+            height: 1.0625 * root.unit;
             source: root.icon-source;
             colorize: root.destructive ? root.destructive-color : Theme.text-secondary;
             image-fit: contain;
@@ -111,7 +112,7 @@ component DownloadMenuRow inherits ButtonSurface {
             horizontal-stretch: 1;
             text: root.label;
             color: root.destructive ? root.destructive-color : Theme.text-primary;
-            font-size: 0.8125 * root.unit;
+            font-size: 0.875 * root.unit;
             font-weight: 500;
             vertical-alignment: center;
             overflow: elide;
@@ -191,6 +192,21 @@ export component DownloadsPage inherits Rectangle {
     private property <bool> content-fade-in-pending: false;
     private property <int> has-items-state: root.items.length > 0 ? 1 : 0;
 
+    // Explicit page geometry. The list must always take the whole band between
+    // the title and the disk footer; relying on nested stretch layouts collapsed
+    // the viewport to the height of the first couple of rows.
+    private property <length> dl-pad: 2 * root.unit;
+    private property <length> dl-header-height: 3.25 * root.unit;
+    private property <length> dl-gap: 1.5 * root.unit;
+    private property <length> dl-footer-height: 2.25 * root.unit;
+    private property <length> dl-banner-height: root.error == "" ? 0px : 5.25 * root.unit;
+    private property <length> dl-list-top: root.dl-pad + root.dl-header-height + root.dl-gap
+        + (root.error == "" ? 0px : root.dl-banner-height + root.dl-gap);
+    private property <length> dl-list-height: max(
+        0px,
+        root.height - root.dl-list-top - root.dl-pad - root.dl-footer-height - root.dl-gap
+    );
+
     function trigger-content-fade() {
         root.content-fade-opacity = 0.0;
         root.content-fade-in-pending = true;
@@ -251,18 +267,12 @@ export component DownloadsPage inherits Rectangle {
         easing: ease-out;
     }
 
-    VerticalLayout {
-        width: parent.width;
-        height: parent.height;
-        padding-left: 2 * root.unit;
-        padding-right: 2 * root.unit;
-        padding-top: 2 * root.unit;
-        padding-bottom: 2 * root.unit;
+    HorizontalLayout {
+        x: root.dl-pad;
+        y: root.dl-pad;
+        width: root.width - 2 * root.dl-pad;
+        height: root.dl-header-height;
         spacing: 1.5 * root.unit;
-
-        HorizontalLayout {
-            height: 3.25 * root.unit;
-            spacing: 1.5 * root.unit;
 
             Text {
                 horizontal-stretch: 1;
@@ -353,7 +363,10 @@ export component DownloadsPage inherits Rectangle {
         }
 
         if (root.error != "") : Rectangle {
-            height: error-banner-row.preferred-height;
+            x: root.dl-pad;
+            y: root.dl-pad + root.dl-header-height + root.dl-gap;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-banner-height;
             border-radius: Theme.border-radius;
             background: Theme.danger.with-alpha(0.10);
             border-width: 1px;
@@ -412,7 +425,10 @@ export component DownloadsPage inherits Rectangle {
         }
 
         if (!root.loading && root.items.length == 0 && root.error == "") : EmptyState {
-            vertical-stretch: 1;
+            x: root.dl-pad;
+            y: root.dl-list-top;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-list-height;
             unit: root.unit;
             icon-source: @image-url("../assets/images/icons/download.svg");
             title: @tr("DOWNLOADS_EMPTY" => "No hay descargas aún");
@@ -420,7 +436,10 @@ export component DownloadsPage inherits Rectangle {
         }
 
         if (root.loading) : Text {
-            vertical-stretch: 1;
+            x: root.dl-pad;
+            y: root.dl-list-top;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-list-height;
             text: @tr("LOADING" => "Cargando…");
             color: Theme.text-secondary;
             font-size: 0.875 * root.unit;
@@ -428,22 +447,20 @@ export component DownloadsPage inherits Rectangle {
             vertical-alignment: center;
         }
 
-        if (!root.loading && root.items.length > 0) : VerticalLayout {
-            width: 100%;
-            vertical-stretch: 1;
-
-            downloads-scroll := ScrollView {
-                width: 100%;
-                height: 100%;
-                viewport-width: self.visible-width;
+        if (!root.loading && root.items.length > 0) : ScrollView {
+            x: root.dl-pad;
+            y: root.dl-list-top;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-list-height;
+            viewport-width: self.visible-width;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
             changed viewport-y => { root.menu-open = false; }
 
-            items-layout := VerticalLayout {
+            VerticalLayout {
                 width: 100%;
                 alignment: start;
-                spacing: 1.5 * root.unit;
-                padding-bottom: 2 * root.unit;
+                spacing: 1 * root.unit;
+                padding-bottom: 1 * root.unit;
 
                 for item in root.items : card := Rectangle {
                     width: 100%;
@@ -498,23 +515,24 @@ export component DownloadsPage inherits Rectangle {
                         x: 0px;
                         y: 0px;
                         width: 100%;
-                        padding-left: 1.5 * root.unit;
-                        padding-right: 1.5 * root.unit;
-                        padding-top: 1.5 * root.unit;
-                        padding-bottom: 1.5 * root.unit;
-                        spacing: 1.25 * root.unit;
+                        padding-left: 1.25 * root.unit;
+                        padding-right: 1.25 * root.unit;
+                        padding-top: 1 * root.unit;
+                        padding-bottom: 1 * root.unit;
+                        spacing: 0.75 * root.unit;
                         alignment: start;
 
-                        // Main Header Row (Poster, Meta Column, Actions)
+                        // Compact main row: poster, meta and actions. Keeping this
+                        // row short is what lets four or more downloads fit at once.
                         HorizontalLayout {
-                            height: 9 * root.unit;
-                            spacing: 1.5 * root.unit;
+                            height: 4.5 * root.unit;
+                            spacing: 1 * root.unit;
 
                             // Poster
                             poster-container := Rectangle {
-                                width: 6 * root.unit;
-                                height: 9 * root.unit;
-                                border-radius: 8px;
+                                width: 3 * root.unit;
+                                height: 4.5 * root.unit;
+                                border-radius: 6px;
                                 background: dl-surface-raised;
                                 border-width: 1px;
                                 border-color: dl-hairline;
@@ -528,8 +546,8 @@ export component DownloadsPage inherits Rectangle {
                                     Image {
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
-                                        width: 2 * root.unit;
-                                        height: 2 * root.unit;
+                                        width: 1.25 * root.unit;
+                                        height: 1.25 * root.unit;
                                         source: item.is-series ? @image-url("../assets/images/icons/series.svg") : @image-url("../assets/images/icons/movies.svg");
                                         colorize: Theme.text-secondary;
                                         image-fit: contain;
@@ -537,194 +555,160 @@ export component DownloadsPage inherits Rectangle {
                                 }
                             }
 
-                            // Meta info column
+                            // Title, one quiet detail line and the progress bar
                             VerticalLayout {
                                 horizontal-stretch: 1;
-                                alignment: space-between;
-                                spacing: 0.5 * root.unit;
+                                min-width: 0px;
+                                alignment: center;
+                                spacing: 0.375 * root.unit;
 
-                                // Line 1: Title and Type Badge
                                 HorizontalLayout {
-                                    height: 2.25 * root.unit;
-                                    spacing: 0.75 * root.unit;
+                                    height: 1.75 * root.unit;
+                                    spacing: 0.625 * root.unit;
                                     alignment: start;
+                                    cross-axis-alignment: center;
 
                                     Text {
                                         horizontal-stretch: 1;
                                         text: item.title;
                                         color: Theme.text-primary;
-                                        font-size: 1.25 * root.unit;
+                                        font-size: 1.0625 * root.unit;
                                         font-weight: 600;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
 
-                                    // Type caption: quiet text on the same line
                                     Text {
                                         horizontal-stretch: 0;
-                                        text: item.is-series ? "Serie" : "Película";
-                                        color: Theme.text-muted;
-                                        font-size: 0.8125 * root.unit;
-                                        font-weight: 500;
-                                        vertical-alignment: center;
-                                    }
-
-                                    if (item.is-series) : Text {
-                                        text: card.is-expanded ? "Ocultar" : "Ver capítulos";
+                                        text: item.is-series ? @tr("SERIES" => "Serie") : @tr("MOVIE" => "Película");
                                         color: Theme.text-muted;
                                         font-size: 0.75 * root.unit;
                                         font-weight: 500;
                                         vertical-alignment: center;
                                     }
+
+                                    if (item.is-series) : Rectangle {
+                                        horizontal-stretch: 0;
+                                        height: 1.5 * root.unit;
+                                        border-radius: 5px;
+                                        background: card.is-expanded ? dl-surface-hover : dl-surface-raised;
+                                        border-width: 1px;
+                                        border-color: dl-hairline;
+
+                                        HorizontalLayout {
+                                            padding-left: 0.5 * root.unit;
+                                            padding-right: 0.375 * root.unit;
+                                            spacing: 0.25 * root.unit;
+                                            alignment: center;
+                                            cross-axis-alignment: center;
+
+                                            Text {
+                                                text: card.is-expanded ? @tr("HIDE_CHAPTERS" => "Ocultar") : @tr("SHOW_CHAPTERS" => "Ver capítulos");
+                                                color: Theme.text-secondary;
+                                                font-size: 0.75 * root.unit;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Image {
+                                                width: 0.75 * root.unit;
+                                                height: 0.75 * root.unit;
+                                                source: card.is-expanded
+                                                    ? @image-url("../assets/images/icons/chevron-up.svg")
+                                                    : @image-url("../assets/images/icons/chevron-down.svg");
+                                                colorize: Theme.text-muted;
+                                                image-fit: contain;
+                                            }
+                                        }
+                                    }
                                 }
 
-                                // Fallback line 2 if movie or no downloaded season items yet:
-                                if (!item.is-series || item.downloaded-seasons.length == 0) : HorizontalLayout {
-                                    height: 2.25 * root.unit;
+                                HorizontalLayout {
+                                    height: 1.375 * root.unit;
                                     spacing: 0.5 * root.unit;
                                     alignment: start;
+                                    cross-axis-alignment: center;
 
-                                    if (item.coverage != "") : VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            height: 2 * root.unit;
-                                            border-radius: 4px;
-                                            background: dl-surface-raised;
-
-                                            HorizontalLayout {
-                                                padding-left: 0.5 * root.unit;
-                                                padding-right: 0.5 * root.unit;
-                                                Text {
-                                                    text: item.coverage;
-                                                    color: Theme.text-secondary;
-                                                    font-size: 0.8125 * root.unit;
-                                                    font-weight: 500;
-                                                    vertical-alignment: center;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Line 3: Status (or Hovered Episode Info), Subtitles Badge
-                                HorizontalLayout {
-                                    height: 1.75 * root.unit;
-                                    spacing: 1 * root.unit;
-                                    alignment: start;
-
-                                    if (item.watched) : VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            height: 1.75 * root.unit;
-                                            border-radius: 4px;
-                                            background: transparent;
-
-                                            HorizontalLayout {
-                                                height: 100%;
-                                                padding-left: 0.5 * root.unit;
-                                                padding-right: 0.5 * root.unit;
-                                                spacing: 0.25 * root.unit;
-                                                alignment: center;
-
-                                                VerticalLayout {
-                                                    alignment: center;
-                                                    Image {
-                                                        width: 1 * root.unit;
-                                                        height: 1 * root.unit;
-                                                        source: @image-url("../assets/images/icons/checkmark.svg");
-                                                        colorize: Theme.text-secondary;
-                                                        image-fit: contain;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    text: "Visto";
-                                                    color: Theme.text-secondary;
-                                                    font-size: 0.75 * root.unit;
-                                                    font-weight: 500;
-                                                    vertical-alignment: center;
-                                                }
-                                            }
-                                        }
+                                    if (item.watched) : Text {
+                                        horizontal-stretch: 0;
+                                        text: @tr("WATCHED" => "Visto");
+                                        color: Theme.text-secondary;
+                                        font-size: 0.75 * root.unit;
+                                        font-weight: 500;
+                                        vertical-alignment: center;
                                     }
 
-                                    if (!item.is-series && item.watch-progress > 0 && !item.watched) : VerticalLayout {
-                                        alignment: center;
+                                    if (!item.is-series && item.watch-progress > 0 && !item.watched) : Rectangle {
+                                        width: 5 * root.unit;
+                                        height: 0.25 * root.unit;
+                                        border-radius: self.height / 2;
+                                        background: dl-surface-raised;
+
                                         Rectangle {
-                                            width: 5 * root.unit;
-                                            height: 0.25 * root.unit;
+                                            width: parent.width * min(1.0, item.watch-progress);
+                                            height: parent.height;
                                             border-radius: self.height / 2;
-                                            background: dl-surface-raised;
-
-                                            Rectangle {
-                                                width: parent.width * min(1.0, item.watch-progress);
-                                                height: parent.height;
-                                                border-radius: self.height / 2;
-                                                background: Theme.text-secondary;
-                                            }
+                                            background: Theme.text-secondary;
                                         }
                                     }
 
                                     Text {
                                         horizontal-stretch: 1;
-                                        text: card.hovered-ep-info != "" ? card.hovered-ep-info : item.status;
+                                        text: card.hovered-ep-info != ""
+                                            ? card.hovered-ep-info
+                                            : (item.coverage != "" && item.status != ""
+                                                ? item.coverage + " · " + item.status
+                                                : (item.coverage != "" ? item.coverage : item.status));
                                         color: card.hovered-ep-info != ""
                                             ? Theme.text-primary
                                             : (item.has-failed ? dl-error-text : (item.is-paused && !item.is-downloading ? dl-paused : Theme.text-secondary));
-                                        font-size: 0.875 * root.unit;
+                                        font-size: 0.75 * root.unit;
                                         font-weight: card.hovered-ep-info != "" ? 500 : 400;
                                         overflow: elide;
                                         vertical-alignment: center;
                                     }
 
-                                    if (item.has-subtitles) : VerticalLayout {
-                                        alignment: center;
-                                        Rectangle {
-                                            height: 1.75 * root.unit;
-                                            border-radius: 4px;
-                                            background: dl-surface-raised;
-                                            border-width: 1px;
-                                            border-color: dl-hairline;
+                                    if (item.has-subtitles) : Rectangle {
+                                        horizontal-stretch: 0;
+                                        width: 7 * root.unit;
+                                        height: 1.375 * root.unit;
+                                        border-radius: 4px;
+                                        background: dl-surface-raised;
+                                        border-width: 1px;
+                                        border-color: dl-hairline;
 
-                                            HorizontalLayout {
-                                                height: 100%;
-                                                padding-left: 0.5 * root.unit;
-                                                padding-right: 0.5 * root.unit;
-                                                spacing: 0.25 * root.unit;
-                                                alignment: center;
+                                        HorizontalLayout {
+                                            width: 100%;
+                                            height: 100%;
+                                            padding-left: 0.375 * root.unit;
+                                            padding-right: 0.375 * root.unit;
+                                            spacing: 0.25 * root.unit;
+                                            alignment: center;
+                                            cross-axis-alignment: center;
 
-                                                Rectangle {
-                                                    width: 1 * root.unit;
-                                                    height: parent.height;
-                                                    background: transparent;
+                                            Image {
+                                                width: 0.875 * root.unit;
+                                                height: 0.875 * root.unit;
+                                                source: @image-url("../assets/images/icons/subtitles.svg");
+                                                colorize: Theme.text-secondary;
+                                                image-fit: contain;
+                                            }
 
-                                                    Image {
-                                                        x: 0px;
-                                                        y: (parent.height - self.height) / 2;
-                                                        width: 1 * root.unit;
-                                                        height: 1 * root.unit;
-                                                        source: @image-url("../assets/images/icons/subtitles.svg");
-                                                        colorize: Theme.text-secondary;
-                                                        image-fit: contain;
-                                                    }
-                                                }
-
-                                                Text {
-                                                    height: parent.height;
-                                                    text: item.subtitles-info;
-                                                    color: Theme.text-secondary;
-                                                    font-size: 0.75 * root.unit;
-                                                    font-weight: 500;
-                                                    vertical-alignment: center;
-                                                }
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: item.subtitles-info;
+                                                color: Theme.text-secondary;
+                                                font-size: 0.6875 * root.unit;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                                overflow: elide;
                                             }
                                         }
                                     }
                                 }
 
-                                // Line 4: Progress Bar
-                                Rectangle {
-                                    height: 4px;
+                                if (item.progress > 0 || item.is-downloading || item.is-paused) : Rectangle {
+                                    height: 3px;
                                     border-radius: 2px;
                                     background: dl-surface-raised;
                                     clip: true;
@@ -744,15 +728,16 @@ export component DownloadsPage inherits Rectangle {
                                 }
                             }
 
-                            // Actions: one primary + overflow menu
+                            // One primary action plus the overflow menu, centered
                             HorizontalLayout {
                                 alignment: end;
                                 spacing: 0.5 * root.unit;
+                                cross-axis-alignment: center;
 
                                 if (item.can-play || item.can-pause || item.can-resume) : ButtonSurface {
-                                    width: 9.5 * root.unit;
-                                    height: 2.5 * root.unit;
-                                    border-radius: 8px;
+                                    width: 8.25 * root.unit;
+                                    height: 2.25 * root.unit;
+                                    border-radius: 7px;
                                     background: dl-primary;
                                     border-width: self.has-focus ? Theme.focus-outline-size : 1px;
                                     border-color: self.has-focus ? Theme.primary-accent : dl-primary;
@@ -767,14 +752,13 @@ export component DownloadsPage inherits Rectangle {
                                     HorizontalLayout {
                                         width: 100%;
                                         height: 100%;
-                                        padding-left: 1.25 * root.unit;
-                                        padding-right: 1.25 * root.unit;
-                                        spacing: 0.5 * root.unit;
+                                        spacing: 0.4375 * root.unit;
                                         alignment: center;
+                                        cross-axis-alignment: center;
 
                                         Image {
-                                            width: 1 * root.unit;
-                                            height: 1 * root.unit;
+                                            width: 0.875 * root.unit;
+                                            height: 0.875 * root.unit;
                                             source: item.can-play
                                                 ? @image-url("../assets/images/icons/play.svg")
                                                 : (item.can-pause
@@ -787,6 +771,7 @@ export component DownloadsPage inherits Rectangle {
                                         }
 
                                         Text {
+                                            vertical-alignment: center;
                                             text: item.can-play
                                                 ? @tr("CTX_PLAY" => "Reproducir")
                                                 : (item.can-pause
@@ -795,9 +780,8 @@ export component DownloadsPage inherits Rectangle {
                                                         ? @tr("RETRY" => "Reintentar")
                                                         : @tr("RESUME" => "Reanudar")));
                                             color: dl-primary-ink;
-                                            font-size: 0.875 * root.unit;
-                                            font-weight: 500;
-                                            vertical-alignment: center;
+                                            font-size: 0.8125 * root.unit;
+                                            font-weight: 600;
                                         }
                                     }
 
@@ -814,21 +798,21 @@ export component DownloadsPage inherits Rectangle {
                                 }
 
                                 ButtonSurface {
-                                    width: 2.5 * root.unit;
-                                    height: 2.5 * root.unit;
-                                    border-radius: 8px;
+                                    width: 2.25 * root.unit;
+                                    height: 2.25 * root.unit;
+                                    border-radius: 7px;
                                     border-width: 1px;
                                     border-color: root.menu-open && root.menu-target == item.id ? dl-hairline-strong : dl-hairline;
                                     background: root.menu-open && root.menu-target == item.id ? dl-surface-hover : transparent;
                                     accessible-name: @tr("MORE_ACTIONS" => "Más acciones");
 
                                     pointer-down => {
-                                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 13.25 * root.unit;
+                                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
                                         root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
                                     }
 
                                     clicked => {
-                                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 13.25 * root.unit;
+                                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
                                         root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
                                         if (root.menu-open && root.menu-target == item.id) {
                                             root.menu-open = false;
@@ -1230,17 +1214,25 @@ export component DownloadsPage inherits Rectangle {
                 }
             }
         }
-        }
 
-        if (root.disk-usage-text != "") : VerticalLayout {
-            spacing: 0.75 * root.unit;
+        if (root.disk-usage-text != "") : Rectangle {
+            x: root.dl-pad;
+            y: root.height - root.dl-pad - root.dl-footer-height;
+            width: root.width - 2 * root.dl-pad;
+            height: root.dl-footer-height;
+            background: transparent;
 
             Rectangle {
+                y: 0px;
+                width: 100%;
                 height: 1px;
                 background: dl-hairline;
             }
 
             Text {
+                y: 1px + 0.75 * root.unit;
+                width: 100%;
+                height: root.dl-footer-height - 1px - 0.75 * root.unit;
                 text: root.disk-usage-text;
                 color: Theme.text-muted;
                 font-size: 0.75 * root.unit;
@@ -1248,7 +1240,6 @@ export component DownloadsPage inherits Rectangle {
                 overflow: elide;
             }
         }
-    }
 
     // ModalDialog for Episode / Season Actions (Play, Pause, Resume, Cancel, Change source, Download, Delete)
     ModalDialog {
@@ -1491,12 +1482,12 @@ export component DownloadsPage inherits Rectangle {
                     accessible-name: @tr("MORE_ACTIONS" => "Más acciones");
 
                     pointer-down => {
-                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 13.25 * root.unit;
+                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
                         root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
                     }
 
                     clicked => {
-                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 13.25 * root.unit;
+                        root.menu-x = self.absolute-position.x - root.absolute-position.x + self.width - 14.5 * root.unit;
                         root.menu-y = self.absolute-position.y - root.absolute-position.y + self.height + 0.375 * root.unit;
                         if (root.menu-open && root.menu-target == "prompt") {
                             root.menu-open = false;
@@ -1541,18 +1532,19 @@ export component DownloadsPage inherits Rectangle {
         open: root.menu-open;
         requested-x: root.menu-x;
         requested-y: root.menu-y;
-        menu-width: 13.25 * root.unit;
+        menu-width: 14.5 * root.unit;
         menu-height: menu-content.preferred-height + 2px;
         surface-color: dl-surface-raised;
         menu-border-color: dl-hairline-strong;
         close-requested => { root.menu-open = false; }
 
         menu-content := VerticalLayout {
-            padding: 0.25 * root.unit;
-            spacing: 0.125 * root.unit;
+            padding: 0.375 * root.unit;
+            spacing: 0.25 * root.unit;
 
             if (root.menu-change-source) : DownloadMenuRow {
                 unit: root.unit;
+                hover-color: dl-surface-hover;
                 label: "Cambiar fuente";
                 icon-source: @image-url("../assets/images/icons/link.svg");
                 clicked => {
@@ -1577,6 +1569,7 @@ export component DownloadsPage inherits Rectangle {
 
             if (root.menu-cancel) : DownloadMenuRow {
                 unit: root.unit;
+                hover-color: dl-surface-hover;
                 label: "Cancelar descarga";
                 icon-source: @image-url("../assets/images/icons/close.svg");
                 clicked => {
@@ -1600,6 +1593,7 @@ export component DownloadsPage inherits Rectangle {
 
             if (root.menu-delete) : DownloadMenuRow {
                 unit: root.unit;
+                hover-color: Theme.danger.with-alpha(0.14);
                 label: "Eliminar";
                 icon-source: @image-url("../assets/images/icons/delete.svg");
                 destructive: true;
