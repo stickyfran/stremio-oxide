@@ -430,6 +430,8 @@ export component ContextMenuSurface inherits Rectangle {
     in property <length> menu-width: 16 * root.unit;
     in property <length> menu-height: 20 * root.unit;
     in property <bool> auto-close: true;
+    in property <brush> surface-color: Theme.modal-background;
+    in property <brush> menu-border-color: transparent;
     callback close-requested;
     callback content-clicked;
 
@@ -480,7 +482,9 @@ export component ContextMenuSurface inherits Rectangle {
         width: root.menu-width;
         height: root.menu-height;
         border-radius: Theme.border-radius;
-        background: Theme.modal-background;
+        background: root.surface-color;
+        border-width: 1px;
+        border-color: root.menu-border-color;
         drop-shadow-offset-y: 1.35 * root.unit;
         drop-shadow-blur: 2.7 * root.unit;
         drop-shadow-color: Theme.background-dark-40;

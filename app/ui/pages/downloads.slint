@@ -3,7 +3,7 @@ import { Theme } from "../theme.slint";
 import { ButtonSurface, PillButton } from "../components/button.slint";
 import { EmptyState } from "../components/feedback.slint";
 import { FallbackImage } from "../components/fallback_image.slint";
-import { ModalDialog } from "../components/overlays.slint";
+import { ContextMenuSurface, ModalDialog } from "../components/overlays.slint";
 
 export struct DownloadEpisodeChip {
     id: string,
@@ -78,6 +78,47 @@ export struct DownloadItem {
     episodes: [DownloadEpisodeItem],
 }
 
+component DownloadMenuRow inherits ButtonSurface {
+    in property <length> unit: Theme.root-font-size;
+    in property <string> label;
+    in property <image> icon-source;
+    in property <bool> destructive: false;
+    in property <brush> hover-color: Theme.overlay-hover;
+    in property <color> destructive-color: Theme.danger;
+
+    height: 2.25 * root.unit;
+    border-radius: 6px;
+    background: self.has-hover || self.has-focus ? root.hover-color : transparent;
+    accessible-name: root.label;
+
+    HorizontalLayout {
+        width: 100%;
+        height: 100%;
+        padding-left: 0.75 * root.unit;
+        padding-right: 0.75 * root.unit;
+        spacing: 0.625 * root.unit;
+        alignment: start;
+
+        Image {
+            width: 1 * root.unit;
+            height: 1 * root.unit;
+            source: root.icon-source;
+            colorize: root.destructive ? root.destructive-color : Theme.text-secondary;
+            image-fit: contain;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.label;
+            color: root.destructive ? root.destructive-color : Theme.text-primary;
+            font-size: 0.8125 * root.unit;
+            font-weight: 500;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
 export component DownloadsPage inherits Rectangle {
     in property <length> unit: Theme.root-font-size;
     in property <[DownloadItem]> items: [];
@@ -132,6 +173,18 @@ export component DownloadsPage inherits Rectangle {
     private property <color> dl-hairline-strong: #ffffff26;
     private property <color> dl-paused: #d6a13a;
     private property <color> dl-error-text: #f0a8a8;
+    private property <color> dl-primary: #ededed;
+    private property <color> dl-primary-ink: #141416;
+
+    private property <bool> menu-open: false;
+    private property <length> menu-x: 0px;
+    private property <length> menu-y: 0px;
+    private property <string> menu-target: "";
+    private property <string> menu-meta-id: "";
+    private property <bool> menu-is-series: false;
+    private property <bool> menu-change-source: false;
+    private property <bool> menu-cancel: false;
+    private property <bool> menu-delete: false;
 
     private property <float> content-fade-opacity: 1.0;
     private property <bool> content-fade-in-pending: false;
@@ -154,6 +207,12 @@ export component DownloadsPage inherits Rectangle {
         root.trigger-content-fade();
     }
 
+    changed prompt-download-open => {
+        if (root.prompt-download-open) {
+            root.menu-open = false;
+        }
+    }
+
     Timer {
         interval: 16ms;
         running: root.content-fade-in-pending;
@@ -171,6 +230,8 @@ export component DownloadsPage inherits Rectangle {
     }
 
     VerticalLayout {
+        width: parent.width;
+        height: parent.height;
         padding-left: 2 * root.unit;
         padding-right: 2 * root.unit;
         padding-top: 2 * root.unit;
@@ -190,138 +251,80 @@ export component DownloadsPage inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            if (root.active-count > 0) : VerticalLayout {
-                alignment: center;
+            HorizontalLayout {
                 horizontal-stretch: 0;
+                alignment: end;
+                spacing: 1 * root.unit;
 
-                Rectangle {
-                    height: 2.75 * root.unit;
-                    max-width: 28 * root.unit;
-                    clip: true;
-                    border-radius: Theme.border-radius;
-                    background: dl-surface;
-                    border-width: 1px;
-                    border-color: dl-hairline;
+                if (root.active-count > 0) : HorizontalLayout {
+                    alignment: center;
+                    spacing: 0.5 * root.unit;
 
-                    HorizontalLayout {
-                        height: 100%;
-                        padding-left: 1 * root.unit;
-                        padding-right: 1 * root.unit;
-                        spacing: 0.75 * root.unit;
-                        alignment: center;
+                    Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.primary-accent;
+                    }
 
-                        Rectangle {
-                            width: 1.25 * root.unit;
-                            height: parent.height;
-                            background: transparent;
+                    Text {
+                        text: "Descargando " + root.active-count;
+                        color: Theme.text-primary;
+                        font-size: 0.8125 * root.unit;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
 
-                            Image {
-                                x: 0px;
-                                y: (parent.height - self.height) / 2;
-                                width: 1 * root.unit;
-                                height: 1 * root.unit;
-                                source: @image-url("../assets/images/icons/download.svg");
-                                colorize: Theme.text-secondary;
-                                image-fit: contain;
-                            }
-                        }
+                    if (root.speed-text != "") : Text {
+                        text: "· " + root.speed-text;
+                        color: Theme.text-secondary;
+                        font-size: 0.8125 * root.unit;
+                        vertical-alignment: center;
+                    }
 
-                        if (root.current-text == "") : Text {
-                            height: parent.height;
-                            text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
-                                + (root.eta-text != "" ? " · " + root.eta-text : "");
-                            color: Theme.text-primary;
-                            font-size: 0.875 * root.unit;
-                            font-weight: 500;
-                            vertical-alignment: center;
-                            overflow: elide;
-                        }
-
-                        if (root.current-text != "") : VerticalLayout {
-                            alignment: center;
-                            spacing: 0.125 * root.unit;
-
-                            Text {
-                                text: (root.speed-text != "" ? "Descargando " + root.active-count + " · " + root.speed-text : "Preparando descarga…")
-                                    + (root.eta-text != "" ? " · " + root.eta-text : "");
-                                color: Theme.text-primary;
-                                font-size: 0.8125 * root.unit;
-                                font-weight: 500;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            Text {
-                                text: root.current-text;
-                                color: Theme.text-secondary;
-                                font-size: 0.75 * root.unit;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-                        }
+                    if (root.eta-text != "") : Text {
+                        text: "· " + root.eta-text;
+                        color: Theme.text-secondary;
+                        font-size: 0.8125 * root.unit;
+                        vertical-alignment: center;
                     }
                 }
-            }
 
-            if (root.disk-usage-text != "") : VerticalLayout {
-                alignment: center;
-                horizontal-stretch: 0;
+                if (root.active-count > 0) : Rectangle {
+                    width: 1px;
+                    height: 1 * root.unit;
+                    background: dl-hairline;
+                }
 
-                Rectangle {
-                    height: 2.75 * root.unit;
-                    max-width: 24 * root.unit;
-                    clip: true;
-                    border-radius: Theme.border-radius;
-                    background: dl-surface;
-                    border-width: 1px;
-                    border-color: dl-hairline;
+                ButtonSurface {
+                    height: 2 * root.unit;
+                    accessible-name: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
+                    border-radius: 6px;
+                    background: self.has-hover || self.has-focus ? dl-surface-hover : transparent;
 
                     HorizontalLayout {
-                        height: 100%;
-                        padding-left: 1 * root.unit;
-                        padding-right: 1 * root.unit;
-                        spacing: 0.75 * root.unit;
+                        padding-left: 0.5 * root.unit;
+                        padding-right: 0.5 * root.unit;
+                        spacing: 0.5 * root.unit;
                         alignment: center;
 
-                        Rectangle {
-                            width: 1.25 * root.unit;
-                            height: parent.height;
-                            background: transparent;
-
-                            Image {
-                                x: 0px;
-                                y: (parent.height - self.height) / 2;
-                                width: 1 * root.unit;
-                                height: 1 * root.unit;
-                                source: @image-url("../assets/images/icons/download.svg");
-                                colorize: Theme.text-secondary;
-                                image-fit: contain;
-                            }
+                        Image {
+                            width: 1 * root.unit;
+                            height: 1 * root.unit;
+                            source: @image-url("../assets/images/icons/open-in-browser.svg");
+                            colorize: Theme.text-secondary;
+                            image-fit: contain;
                         }
 
                         Text {
-                            height: parent.height;
-                            text: root.disk-usage-text;
+                            text: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
                             color: Theme.text-secondary;
-                            font-size: 0.875 * root.unit;
+                            font-size: 0.8125 * root.unit;
+                            font-weight: 500;
                             vertical-alignment: center;
-                            overflow: elide;
                         }
                     }
-                }
-            }
 
-            VerticalLayout {
-                alignment: center;
-                horizontal-stretch: 0;
-
-                PillButton {
-                    width: 10.5 * root.unit;
-                    height: 2.75 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label: @tr("SETTINGS_OPEN_FOLDER" => "Abrir carpeta");
-                    label-font-size: 0.875 * root.unit;
                     clicked => { root.open-downloads-folder(); }
                 }
             }
@@ -403,17 +406,20 @@ export component DownloadsPage inherits Rectangle {
             vertical-alignment: center;
         }
 
-        if (!root.loading && root.items.length > 0) : ScrollView {
+        if (!root.loading && root.items.length > 0) : downloads-scroll := ScrollView {
             vertical-stretch: 1;
             viewport-width: self.visible-width;
             horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            changed viewport-y => { root.menu-open = false; }
 
             items-layout := VerticalLayout {
+                width: 100%;
                 alignment: start;
                 spacing: 1 * root.unit;
                 padding-bottom: 2 * root.unit;
 
                 for item in root.items : card := Rectangle {
+                    width: 100%;
                     property <bool> is-expanded: root.expanded-id == item.id;
                     property <string> hovered-ep-info: "";
                     // Auto-size to the real content: collapsed/expanded lists and
@@ -435,6 +441,7 @@ export component DownloadsPage inherits Rectangle {
                     row-area := TouchArea {
                         mouse-cursor: MouseCursor.pointer;
                         clicked => {
+                            root.menu-open = false;
                             if (item.is-series) {
                                 if (root.expanded-id == item.id) {
                                     root.expanded-id = "";
@@ -689,120 +696,112 @@ export component DownloadsPage inherits Rectangle {
                                 }
                             }
 
-                            // Actions
-                            VerticalLayout {
-                                alignment: center;
-                                horizontal-stretch: 0;
+                            // Actions: one primary + overflow menu
+                            HorizontalLayout {
+                                alignment: end;
                                 spacing: 0.5 * root.unit;
 
-                                HorizontalLayout {
-                                    alignment: end;
-                                    spacing: 0.5 * root.unit;
+                                if (item.can-play || item.can-pause || item.can-resume) : ButtonSurface {
+                                    height: 2.5 * root.unit;
+                                    border-radius: 8px;
+                                    background: dl-primary;
+                                    border-width: self.has-focus ? Theme.focus-outline-size : 1px;
+                                    border-color: self.has-focus ? Theme.primary-accent : dl-primary;
+                                    accessible-name: item.can-play
+                                        ? @tr("CTX_PLAY" => "Reproducir")
+                                        : (item.can-pause
+                                            ? @tr("PAUSE" => "Pausar")
+                                            : (item.has-failed && !item.is-paused
+                                                ? @tr("RETRY" => "Reintentar")
+                                                : @tr("RESUME" => "Reanudar")));
 
-                                    if (item.can-play) : PillButton {
-                                        width: 9.5 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: @tr("CTX_PLAY" => "Reproducir");
-                                        label-font-size: 0.875 * root.unit;
-                                        primary: true;
-                                        clicked => { root.play(item.id); }
-                                    }
-                                    if (item.can-pause) : PillButton {
-                                        width: 7.5 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: @tr("PAUSE" => "Pausar");
-                                        label-font-size: 0.875 * root.unit;
-                                        clicked => { root.pause(item.id); }
-                                    }
-                                    if (item.can-resume) : PillButton {
-                                        width: 8.75 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: item.has-failed && !item.is-paused ? @tr("RETRY" => "Reintentar") : @tr("RESUME" => "Reanudar");
-                                        label-font-size: 0.875 * root.unit;
-                                        clicked => { root.resume(item.id); }
-                                    }
-                                    if (item.is-series) : PillButton {
-                                        width: 9.5 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: card.is-expanded ? @tr("COLLAPSE" => "Ocultar") : @tr("EXPAND" => "Capítulos");
-                                        label-font-size: 0.875 * root.unit;
-                                        icon-source: card.is-expanded ? @image-url("../assets/images/icons/chevron-up.svg") : @image-url("../assets/images/icons/chevron-down.svg");
-                                        show-icon: true;
-                                        icon-size: 1 * root.unit;
-                                        clicked => {
-                                            if (root.expanded-id == item.id) {
-                                                root.expanded-id = "";
-                                            } else {
-                                                root.expanded-id = item.id;
-                                            }
+                                    HorizontalLayout {
+                                        width: 100%;
+                                        height: 100%;
+                                        padding-left: 1.25 * root.unit;
+                                        padding-right: 1.25 * root.unit;
+                                        spacing: 0.5 * root.unit;
+                                        alignment: center;
+
+                                        Image {
+                                            width: 1 * root.unit;
+                                            height: 1 * root.unit;
+                                            source: item.can-play
+                                                ? @image-url("../assets/images/icons/play.svg")
+                                                : (item.can-pause
+                                                    ? @image-url("../assets/images/icons/pause.svg")
+                                                    : (item.has-failed
+                                                        ? @image-url("../assets/images/icons/replay.svg")
+                                                        : @image-url("../assets/images/icons/play.svg")));
+                                            colorize: dl-primary-ink;
+                                            image-fit: contain;
+                                        }
+
+                                        Text {
+                                            text: item.can-play
+                                                ? @tr("CTX_PLAY" => "Reproducir")
+                                                : (item.can-pause
+                                                    ? @tr("PAUSE" => "Pausar")
+                                                    : (item.has-failed && !item.is-paused
+                                                        ? @tr("RETRY" => "Reintentar")
+                                                        : @tr("RESUME" => "Reanudar")));
+                                            color: dl-primary-ink;
+                                            font-size: 0.875 * root.unit;
+                                            font-weight: 500;
+                                            vertical-alignment: center;
                                         }
                                     }
-                                    if (item.can-delete && !item.can-change-source && !item.can-cancel) : PillButton {
-                                        width: 7.75 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: @tr("DELETE" => "Eliminar");
-                                        label-font-size: 0.875 * root.unit;
-                                        outlined: true;
-                                        hover-color: Theme.danger.with-alpha(0.2);
-                                        hover-outline-color: Theme.danger;
-                                        clicked => { root.delete-item(item.id); }
+
+                                    clicked => {
+                                        root.menu-open = false;
+                                        if (item.can-play) {
+                                            root.play(item.id);
+                                        } else if (item.can-pause) {
+                                            root.pause(item.id);
+                                        } else {
+                                            root.resume(item.id);
+                                        }
                                     }
                                 }
 
-                                if (item.can-change-source || item.can-cancel) : HorizontalLayout {
-                                    alignment: end;
-                                    spacing: 0.5 * root.unit;
+                                ButtonSurface {
+                                    width: 2.5 * root.unit;
+                                    height: 2.5 * root.unit;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: root.menu-open && root.menu-target == item.id ? dl-hairline-strong : dl-hairline;
+                                    background: root.menu-open && root.menu-target == item.id ? dl-surface-hover : transparent;
+                                    accessible-name: @tr("MORE_ACTIONS" => "Más acciones");
 
-                                    if (item.can-change-source) : PillButton {
-                                        width: 10.5 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: "Cambiar fuente";
-                                        label-font-size: 0.8125 * root.unit;
-                                        outlined: true;
-                                        clicked => {
-                                            root.request-download-episode(
-                                                item.meta-id,
-                                                item.is-series ? -2 : -1,
-                                                -1,
-                                                true
-                                            );
+                                    pointer-down => {
+                                        root.menu-x = self.absolute-position.x + self.width - 13.25 * root.unit;
+                                        root.menu-y = self.absolute-position.y + self.height + 0.375 * root.unit;
+                                    }
+
+                                    clicked => {
+                                        root.menu-x = self.absolute-position.x + self.width - 13.25 * root.unit;
+                                        root.menu-y = self.absolute-position.y + self.height + 0.375 * root.unit;
+                                        if (root.menu-open && root.menu-target == item.id) {
+                                            root.menu-open = false;
+                                        } else {
+                                            root.menu-target = item.id;
+                                            root.menu-meta-id = item.meta-id;
+                                            root.menu-is-series = item.is-series;
+                                            root.menu-change-source = item.can-change-source;
+                                            root.menu-cancel = item.can-cancel || item.is-paused;
+                                            root.menu-delete = item.can-delete;
+                                            root.menu-open = true;
                                         }
                                     }
-                                    if (item.can-cancel) : PillButton {
-                                        width: 7.75 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: @tr("CANCEL" => "Cancelar");
-                                        label-font-size: 0.875 * root.unit;
-                                        outlined: true;
-                                        hover-color: Theme.danger.with-alpha(0.2);
-                                        hover-outline-color: Theme.danger;
-                                        clicked => { root.cancel(item.id); }
-                                    }
-                                    if (item.can-delete && (!item.can-cancel || item.can-play || item.has-failed)) : PillButton {
-                                        width: 7.75 * root.unit;
-                                        height: 2.75 * root.unit;
-                                        unit: root.unit;
-                                        label-font-weight: 500;
-                                        label: @tr("DELETE" => "Eliminar");
-                                        label-font-size: 0.875 * root.unit;
-                                        outlined: true;
-                                        hover-color: Theme.danger.with-alpha(0.2);
-                                        hover-outline-color: Theme.danger;
-                                        clicked => { root.delete-item(item.id); }
+
+                                    Image {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 1 * root.unit;
+                                        height: 1 * root.unit;
+                                        source: @image-url("../assets/images/icons/more-horizontal.svg");
+                                        colorize: Theme.text-secondary;
+                                        image-fit: contain;
                                     }
                                 }
                             }
@@ -1194,6 +1193,23 @@ export component DownloadsPage inherits Rectangle {
                 }
             }
         }
+
+        if (root.disk-usage-text != "") : VerticalLayout {
+            spacing: 0.75 * root.unit;
+
+            Rectangle {
+                height: 1px;
+                background: dl-hairline;
+            }
+
+            Text {
+                text: root.disk-usage-text;
+                color: Theme.text-muted;
+                font-size: 0.75 * root.unit;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
     }
 
     // ModalDialog for Episode / Season Actions (Play, Pause, Resume, Cancel, Change source, Download, Delete)
@@ -1295,282 +1311,270 @@ export component DownloadsPage inherits Rectangle {
             }
 
             HorizontalLayout {
-                spacing: 0.75 * root.unit;
+                spacing: 0.5 * root.unit;
                 alignment: end;
                 padding-top: 0.5 * root.unit;
 
-                PillButton {
-                    width: 6.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("CLOSE" => "Cerrar");
-                    outlined: true;
+                ButtonSurface {
+                    height: 2.5 * root.unit;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: dl-hairline-strong;
+                    background: self.has-hover || self.has-focus ? dl-surface-hover : transparent;
+                    accessible-name: @tr("CLOSE" => "Cerrar");
+
+                    HorizontalLayout {
+                        padding-left: 1.25 * root.unit;
+                        padding-right: 1.25 * root.unit;
+                        alignment: center;
+
+                        Text {
+                            text: @tr("CLOSE" => "Cerrar");
+                            color: Theme.text-primary;
+                            font-size: 0.875 * root.unit;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+                    }
+
                     clicked => { root.prompt-download-open = false; }
                 }
 
-                // Case 1: Season pill clicked (episode == 0)
-                if (root.prompt-download-episode == 0 && root.prompt-download-season-has-dl) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Eliminar temporada";
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
+                ButtonSurface {
+                    height: 2.5 * root.unit;
+                    border-radius: 8px;
+                    background: dl-primary;
+                    border-width: self.has-focus ? Theme.focus-outline-size : 1px;
+                    border-color: self.has-focus ? Theme.primary-accent : dl-primary;
+                    accessible-name: root.prompt-download-episode == 0
+                        ? (root.prompt-download-season-has-active
+                            ? @tr("PAUSE" => "Pausar")
+                            : (root.prompt-download-season-has-paused
+                                ? @tr("RESUME" => "Reanudar")
+                                : "Descargar temporada"))
+                        : (root.prompt-download-is-downloaded
+                            ? @tr("CTX_PLAY" => "Reproducir")
+                            : (root.prompt-download-is-downloading
+                                ? @tr("PAUSE" => "Pausar")
+                                : (root.prompt-download-is-paused
+                                    ? @tr("RESUME" => "Reanudar")
+                                    : (root.prompt-download-is-failed
+                                        ? @tr("RETRY" => "Reintentar")
+                                        : "Buscar y descargar"))));
+
+                    HorizontalLayout {
+                        width: 100%;
+                        height: 100%;
+                        padding-left: 1.25 * root.unit;
+                        padding-right: 1.25 * root.unit;
+                        spacing: 0.5 * root.unit;
+                        alignment: center;
+
+                        Image {
+                            width: 1 * root.unit;
+                            height: 1 * root.unit;
+                            source: root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active
+                                    ? @image-url("../assets/images/icons/pause.svg")
+                                    : (root.prompt-download-season-has-paused
+                                        ? @image-url("../assets/images/icons/play.svg")
+                                        : @image-url("../assets/images/icons/download.svg")))
+                                : (root.prompt-download-is-downloaded
+                                    ? @image-url("../assets/images/icons/play.svg")
+                                    : (root.prompt-download-is-downloading
+                                        ? @image-url("../assets/images/icons/pause.svg")
+                                        : (root.prompt-download-is-paused
+                                            ? @image-url("../assets/images/icons/play.svg")
+                                            : (root.prompt-download-is-failed
+                                                ? @image-url("../assets/images/icons/replay.svg")
+                                                : @image-url("../assets/images/icons/download.svg")))));
+                            colorize: dl-primary-ink;
+                            image-fit: contain;
+                        }
+
+                        Text {
+                            text: root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active
+                                    ? @tr("PAUSE" => "Pausar")
+                                    : (root.prompt-download-season-has-paused
+                                        ? @tr("RESUME" => "Reanudar")
+                                        : "Descargar temporada"))
+                                : (root.prompt-download-is-downloaded
+                                    ? @tr("CTX_PLAY" => "Reproducir")
+                                    : (root.prompt-download-is-downloading
+                                        ? @tr("PAUSE" => "Pausar")
+                                        : (root.prompt-download-is-paused
+                                            ? @tr("RESUME" => "Reanudar")
+                                            : (root.prompt-download-is-failed
+                                                ? @tr("RETRY" => "Reintentar")
+                                                : "Buscar y descargar"))));
+                            color: dl-primary-ink;
+                            font-size: 0.875 * root.unit;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+                    }
+
                     clicked => {
-                        root.delete-item("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                        root.menu-open = false;
+                        if (root.prompt-download-episode == 0) {
+                            if (root.prompt-download-season-has-active) {
+                                root.pause("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                            } else if (root.prompt-download-season-has-paused) {
+                                root.resume("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                            } else {
+                                root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, false);
+                            }
+                        } else if (root.prompt-download-is-downloaded) {
+                            root.play(root.prompt-download-job-id);
+                        } else if (root.prompt-download-is-downloading) {
+                            root.pause(root.prompt-download-job-id);
+                        } else if (root.prompt-download-is-paused) {
+                            root.resume(root.prompt-download-job-id);
+                        } else if (root.prompt-download-is-failed) {
+                            root.resume(root.prompt-download-job-id);
+                        } else {
+                            root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, false);
+                        }
                         root.prompt-download-open = false;
                     }
                 }
 
-                if (root.prompt-download-episode == 0 && (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)) : PillButton {
-                    width: 7.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("CANCEL" => "Cancelar");
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
+                if (root.prompt-download-episode == 0
+                    ? (root.prompt-download-season-has-dl || root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                    : (root.prompt-download-is-downloaded || root.prompt-download-is-downloading || root.prompt-download-is-paused || root.prompt-download-is-failed)) : ButtonSurface {
+                    width: 2.5 * root.unit;
+                    height: 2.5 * root.unit;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: root.menu-open && root.menu-target == "prompt" ? dl-hairline-strong : dl-hairline;
+                    background: root.menu-open && root.menu-target == "prompt" ? dl-surface-hover : transparent;
+                    accessible-name: @tr("MORE_ACTIONS" => "Más acciones");
+
+                    pointer-down => {
+                        root.menu-x = self.absolute-position.x + self.width - 13.25 * root.unit;
+                        root.menu-y = self.absolute-position.y + self.height + 0.375 * root.unit;
+                    }
+
                     clicked => {
-                        root.cancel("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
-                        root.prompt-download-open = false;
+                        root.menu-x = self.absolute-position.x + self.width - 13.25 * root.unit;
+                        root.menu-y = self.absolute-position.y + self.height + 0.375 * root.unit;
+                        if (root.menu-open && root.menu-target == "prompt") {
+                            root.menu-open = false;
+                        } else {
+                            root.menu-target = "prompt";
+                            root.menu-change-source = root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                                : (root.prompt-download-is-downloading || root.prompt-download-is-paused || root.prompt-download-is-failed);
+                            root.menu-cancel = root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                                : (root.prompt-download-is-downloading || root.prompt-download-is-paused);
+                            root.menu-delete = root.prompt-download-episode == 0
+                                ? (root.prompt-download-season-has-dl || root.prompt-download-season-has-active || root.prompt-download-season-has-paused)
+                                : (root.prompt-download-is-downloaded || root.prompt-download-is-downloading || root.prompt-download-is-paused || root.prompt-download-is-failed);
+                            root.menu-open = true;
+                        }
+                    }
+
+                    Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: 1 * root.unit;
+                        height: 1 * root.unit;
+                        source: @image-url("../assets/images/icons/more-horizontal.svg");
+                        colorize: Theme.text-secondary;
+                        image-fit: contain;
                     }
                 }
+            }
+        }
+    }
 
-                if (root.prompt-download-episode == 0 && root.prompt-download-season-has-active) : PillButton {
-                    width: 7.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("PAUSE" => "Pausar");
-                    outlined: true;
-                    clicked => {
-                        root.pause("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
-                        root.prompt-download-open = false;
+    // One anchored menu for the card and modal overflow actions. It lives at
+    // page level so the list ScrollView can never clip it.
+    ContextMenuSurface {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        z: 100000;
+        unit: root.unit;
+        open: root.menu-open;
+        requested-x: root.menu-x;
+        requested-y: root.menu-y;
+        menu-width: 13.25 * root.unit;
+        menu-height: menu-content.preferred-height + 2px;
+        surface-color: dl-surface-raised;
+        menu-border-color: dl-hairline-strong;
+        close-requested => { root.menu-open = false; }
+
+        menu-content := VerticalLayout {
+            padding: 0.25 * root.unit;
+            spacing: 0.125 * root.unit;
+
+            if (root.menu-change-source) : DownloadMenuRow {
+                unit: root.unit;
+                label: "Cambiar fuente";
+                icon-source: @image-url("../assets/images/icons/link.svg");
+                clicked => {
+                    root.menu-open = false;
+                    if (root.menu-target == "prompt") {
+                        root.request-download-episode(
+                            root.prompt-download-meta-id,
+                            root.prompt-download-season,
+                            root.prompt-download-episode == 0 ? 0 : root.prompt-download-episode,
+                            true
+                        );
+                    } else {
+                        root.request-download-episode(
+                            root.menu-meta-id,
+                            root.menu-is-series ? -2 : -1,
+                            -1,
+                            true
+                        );
                     }
                 }
+            }
 
-                if (root.prompt-download-episode == 0 && !root.prompt-download-season-has-active && root.prompt-download-season-has-paused) : PillButton {
-                    width: 8.25 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("RESUME" => "Reanudar");
-                    outlined: true;
-                    clicked => {
-                        root.resume("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
-                        root.prompt-download-open = false;
+            if (root.menu-cancel) : DownloadMenuRow {
+                unit: root.unit;
+                label: "Cancelar descarga";
+                icon-source: @image-url("../assets/images/icons/close.svg");
+                clicked => {
+                    root.menu-open = false;
+                    if (root.menu-target == "prompt") {
+                        if (root.prompt-download-episode == 0) {
+                            root.cancel("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                        } else {
+                            root.cancel(root.prompt-download-job-id);
+                        }
+                    } else {
+                        root.cancel(root.menu-target);
                     }
                 }
+            }
 
-                if (root.prompt-download-episode == 0 && (root.prompt-download-season-has-active || root.prompt-download-season-has-paused)) : PillButton {
-                    width: 10.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Cambiar fuente";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, true);
-                        root.prompt-download-open = false;
-                    }
-                }
+            if (root.menu-change-source || root.menu-cancel) : Rectangle {
+                height: 1px;
+                background: dl-hairline;
+            }
 
-                if (root.prompt-download-episode == 0 && !root.prompt-download-season-has-active && !root.prompt-download-season-has-paused) : PillButton {
-                    width: 12.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Descargar temporada";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, false);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 2: Downloaded episode clicked (episode > 0 && is-downloaded)
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloaded) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Eliminar capítulo";
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.delete-item(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloaded) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Reproducir";
-                    primary: true;
-                    clicked => {
-                        root.play(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 3: Downloading episode clicked
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
-                    width: 8.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("CANCEL" => "Cancelar");
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.cancel(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
-                    width: 8.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("PAUSE" => "Pausar");
-                    outlined: true;
-                    clicked => {
-                        root.pause(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-downloading) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Cambiar fuente";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, true);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 4: Paused episode clicked
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
-                    width: 8.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("CANCEL" => "Cancelar");
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.cancel(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Cambiar fuente";
-                    outlined: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, true);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-paused) : PillButton {
-                    width: 9.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: @tr("RESUME" => "Reanudar");
-                    primary: true;
-                    clicked => {
-                        root.resume(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 5: Failed episode clicked (episode > 0 && is-failed)
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 8 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Eliminar";
-                    outlined: true;
-                    hover-color: Theme.danger.with-alpha(0.2);
-                    hover-outline-color: Theme.danger;
-                    clicked => {
-                        root.delete-item(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 9 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Reintentar";
-                    outlined: true;
-                    clicked => {
-                        root.resume(root.prompt-download-job-id);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && root.prompt-download-is-failed) : PillButton {
-                    width: 11.5 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Cambiar fuente";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, true);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                // Case 6: Un-downloaded episode clicked
-                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
-                    width: 13 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Descargar temporada";
-                    outlined: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, 0, false);
-                        root.prompt-download-open = false;
-                    }
-                }
-
-                if (root.prompt-download-episode > 0 && !root.prompt-download-is-downloaded && !root.prompt-download-is-downloading && !root.prompt-download-is-paused && !root.prompt-download-is-failed) : PillButton {
-                    width: 13 * root.unit;
-                    unit: root.unit;
-                    label-font-weight: 500;
-                    label-font-size: 0.875 * root.unit;
-                    label: "Buscar y descargar";
-                    primary: true;
-                    clicked => {
-                        root.request-download-episode(root.prompt-download-meta-id, root.prompt-download-season, root.prompt-download-episode, false);
-                        root.prompt-download-open = false;
+            if (root.menu-delete) : DownloadMenuRow {
+                unit: root.unit;
+                label: "Eliminar";
+                icon-source: @image-url("../assets/images/icons/delete.svg");
+                destructive: true;
+                destructive-color: dl-error-text;
+                clicked => {
+                    root.menu-open = false;
+                    if (root.menu-target == "prompt") {
+                        if (root.prompt-download-episode == 0) {
+                            root.delete-item("season:" + root.prompt-download-meta-id + ":" + root.prompt-download-season);
+                        } else {
+                            root.delete-item(root.prompt-download-job-id);
+                        }
+                    } else {
+                        root.delete-item(root.menu-target);
                     }
                 }
             }
